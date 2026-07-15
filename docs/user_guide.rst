@@ -56,10 +56,11 @@ variables, so credentials stay out of source. It reads, in order: ``EASYVISTA_UR
 
 .. code-block:: python
 
-   from easyvista_python_client import EasyvistaClient
+   from easyvista_python_client import EasyvistaClient, ev_equals_filter
 
    with EasyvistaClient.from_env() as client:
-       results = client.search_tickets(search="STATUS_EN~Open", max_rows=50)
+       search = ev_equals_filter("STATUS_EN", "Open")
+       results = client.search_tickets(search=search, max_rows=50)
 
 .. _sync-vs-async:
 
@@ -73,12 +74,13 @@ asynchronous client inside an event loop (FastAPI, aiohttp) or for concurrent fa
 .. code-block:: python
 
    import asyncio
-   from easyvista_python_client import AsyncEasyvistaClient, EasyvistaConfig
+   from easyvista_python_client import AsyncEasyvistaClient, EasyvistaConfig, ev_equals_filter
 
    async def main():
        async with AsyncEasyvistaClient(EasyvistaConfig.from_env()) as client:
            ticket = await client.get_ticket("I240101_0001")
-           async for t in client.iter_tickets(search="STATUS_EN~Open", page_size=100):
+           search = ev_equals_filter("STATUS_EN", "Open")
+           async for t in client.iter_tickets(search=search, page_size=100):
                print(t.rfc_number)
 
    asyncio.run(main())
@@ -174,11 +176,11 @@ Assets
 
 .. code-block:: python
 
-   from easyvista_python_client import PostAsset
+   from easyvista_python_client import PostAsset, ev_equals_filter
 
    asset = client.create_asset(PostAsset(catalog_id=3153, asset_tag="LAPTOP-001"))
    one = client.get_asset(str(asset.asset_id))
-   found = client.search_assets(search="ASSET_TAG~LAPTOP", max_rows=50)
+   found = client.search_assets(search=ev_equals_filter("ASSET_TAG", "LAPTOP-001"), max_rows=50)
 
 Documents
 ---------
@@ -222,12 +224,45 @@ Searching and pagination
 -------------------------
 
 ``search_*`` methods accept a ``search`` string, ``fields``, ``sort``, ``max_rows`` (page size), and
-``offset``. The ``search`` operators are ``~`` (contains), ``!~`` (not contains), ``!`` (exclude),
-``is_null``, and ``is_not_null``.
+``offset``.
+
+The verified search grammar is:
+
+- ``FIELD:"value"`` — exact match. ``~`` is a synonym: despite its appearance it is **exact match**,
+  not "contains" — identical to ``:``. No substring operator has been identified; ``%`` inside a
+  value is a literal character, not a wildcard.
+- ``,`` — combines conditions: **OR** when every condition names the same field, **AND** across
+  different fields. ``;`` is *not* a combinator.
+
+.. warning::
+
+   EasyVista does **not** reject a ``search`` expression it cannot parse — it ignores the filter and
+   returns **every** record. And because ``,`` combines conditions, an unescaped value can silently
+   widen a result set rather than fail. Build filters with the helpers, not f-strings:
 
 .. code-block:: python
 
-   result = client.search_tickets(search="STATUS_EN~Open", max_rows=50)
+   from easyvista_python_client import ev_equals_filter, ev_in_filter
+
+   search = ev_equals_filter("DEPARTMENT_CODE", user_supplied)   # DEPARTMENT_CODE:"ACME"
+   if search is not None:                    # None when the value is blank
+       result = client.search_departments(search=search)
+
+   # "code is one of these" - ',' is OR within a single field
+   client.search_departments(search=ev_in_filter("DEPARTMENT_CODE", ["ACME", "GLOBEX"]))
+
+A value that cannot be expressed in the grammar raises ``ValueError``; use
+:func:`~easyvista_python_client.is_safe_ev_value` to check first when you would rather skip the
+filter than fail.
+
+Not every returned field is searchable: some (e.g. ``CATALOG_GUID``) are silently ignored as search
+conditions, so a filter on them matches everything. Verify a field filters before relying on it.
+
+.. code-block:: python
+
+   from easyvista_python_client import ev_equals_filter
+
+   result = client.search_tickets(search=ev_equals_filter("STATUS_EN", "Open"), max_rows=50)
    print(result.record_count, "of", result.total_record_count)
    for ticket in result.records:
        print(ticket.rfc_number)
@@ -241,18 +276,26 @@ follow the API's offset pagination until ``@next`` is exhausted or ``max_records
 
 .. code-block:: python
 
-   for ticket in client.iter_tickets(search="STATUS_EN~Open", page_size=100, max_records=1000):
+   from easyvista_python_client import ev_equals_filter
+
+   status_open = ev_equals_filter("STATUS_EN", "Open")
+   for ticket in client.iter_tickets(search=status_open, page_size=100, max_records=1000):
        print(ticket.rfc_number)
 
    # Assets paginate the same way.
-   for asset in client.iter_assets(search="ASSET_TAG~LAPTOP", page_size=100):
+   tag_filter = ev_equals_filter("ASSET_TAG", "LAPTOP-001")
+   for asset in client.iter_assets(search=tag_filter, page_size=100):
        print(asset.asset_tag)
 
 The async client paginates with ``async for``:
 
 .. code-block:: python
 
-   async for ticket in client.iter_tickets(search="STATUS_EN~Open", page_size=100):
+   from easyvista_python_client import ev_equals_filter
+
+   async for ticket in client.iter_tickets(
+       search=ev_equals_filter("STATUS_EN", "Open"), page_size=100
+   ):
        print(ticket.rfc_number)
 
 Counting and statistics
@@ -264,7 +307,9 @@ records).
 
 .. code-block:: python
 
-   open_count = client.count_tickets(search="STATUS_EN~Open")
+   from easyvista_python_client import ev_equals_filter
+
+   open_count = client.count_tickets(search=ev_equals_filter("STATUS_EN", "Open"))
 
 :meth:`~easyvista_python_client.EasyvistaClient.ticket_statistics` aggregates matching tickets into a
 :class:`~easyvista_python_client.TicketStatistics` — a ``total`` plus per-dimension ``breakdowns``
@@ -275,8 +320,10 @@ ones give human labels (``STATUS``, ``DEPARTMENT``, ``CATALOG_REQUEST``), and id
 
 .. code-block:: python
 
+   from easyvista_python_client import ev_equals_filter
+
    stats = client.ticket_statistics(
-       search="STATUS_EN~Open",
+       search=ev_equals_filter("STATUS_EN", "Open"),
        dimensions=["STATUS", "DEPARTMENT"],   # omit to compute the defaults
        created_since="2025-01-01T00:00:00+00:00",
    )

@@ -584,8 +584,10 @@ def test_find_departments_empty_needle_returns_empty_not_everything(config):
         assert client.find_departments("-") == []
         assert client.find_departments("   ") == []
     # The guard short-circuits after the fast-path miss, before iter_departments
-    # ever issues its fuzzy-scan request.
-    assert route.call_count == 2
+    # ever issues its fuzzy-scan request. "-" still trips one fast-path call
+    # (it survives .strip()); "   " is blank after stripping, so ev_equals_filter
+    # returns None and no request is sent for it at all — hence 1, not 2.
+    assert route.call_count == 1
 
 
 @respx.mock
@@ -823,3 +825,88 @@ def test_get_department_context_trim_flags_skip_related_calls(config):
     # The untrimmed parts still assemble normally.
     assert ctx.employees[0].employee_id == 1
     assert ctx.ticket_count == 1
+
+
+@respx.mock
+def test_get_department_context_rejects_unsafe_department_id(config):
+    """department_id feeds ``DEPARTMENT_ID:"<id>"`` search filters for the
+    employees/tickets/assets lookups. get_department_context has no fallback
+    scan (unlike find_departments), so an unsafe department_id must raise
+    rather than silently proceed with a malformed search.
+
+    get_department runs first and is mocked to SUCCEED here, so execution
+    actually reaches the search-building line instead of stopping early on a
+    404 — otherwise this test would pass for the wrong reason.
+    """
+    department_id = 'ALPHA",DEPARTMENT_ID:"999'
+    respx.get(f"{ROOT}/departments/{department_id}").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    employees_route = respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    requests_route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"records": [], "total_record_count": 0})
+    )
+    assets_route = respx.get(f"{ROOT}/assets").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    comment_route = respx.get(
+        f"{ROOT}/departments/{department_id}/comment_department"
+    ).mock(return_value=httpx.Response(200, json={"COMMENT_DEPARTMENT": ""}))
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError):
+            client.get_department_context(department_id)
+    # The raise must happen before any related lookup, not be swallowed by the
+    # try/except that degrades those lookups to empty lists.
+    assert employees_route.call_count == 0
+    assert requests_route.call_count == 0
+    assert assets_route.call_count == 0
+    assert comment_route.call_count == 0
+
+
+@respx.mock
+def test_get_department_context_rejects_blank_department_id(config):
+    """A blank department_id must raise too — ``search=None`` reaching
+    iter_employees would list every employee, not just this department's.
+    """
+    department_id = "   "
+    respx.get(f"{ROOT}/departments/{department_id}").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    employees_route = respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="department_id is required"):
+            client.get_department_context(department_id)
+    assert employees_route.call_count == 0
+
+
+@respx.mock
+def test_find_departments_rejects_comma_injection(config):
+    """A ',' injection must not silently widen the result set.
+
+    ',' is a live EasyVista combinator (OR within one field), so
+    find_departments('A",DEPARTMENT_CODE:"B') would emit
+    DEPARTMENT_CODE:"A",DEPARTMENT_CODE:"B" and return BOTH departments.
+    Verified live: returns 2 instead of 1, with no error.
+    """
+    route = respx.get(f"{ROOT}/departments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"DEPARTMENT_ID": 1, "DEPARTMENT_CODE": "ALPHA"},
+                    {"DEPARTMENT_ID": 2, "DEPARTMENT_CODE": "BETA"},
+                ]
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        found = client.find_departments('ALPHA",DEPARTMENT_CODE:"BETA')
+    # The injected name matches no real department, so nothing should come back.
+    assert found == []
+    # The unsafe value must never reach the server as a filter.
+    for call in route.calls:
+        assert '"' not in (call.request.url.params.get("search") or "")

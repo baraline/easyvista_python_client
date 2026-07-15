@@ -110,7 +110,7 @@ def test_post_request_to_api_uses_known_fields():
 
 def test_post_request_to_api_includes_documented_create_fields():
     payload = PostRequest(
-        catalog_code="EAZ_INC_044",
+        catalog_code="SAMPLE_CATALOG",
         title="Printer down",
         description="It is broken",
         origin=7,
@@ -121,7 +121,7 @@ def test_post_request_to_api_includes_documented_create_fields():
         external_reference="REF-1",
     )
     assert payload.to_api() == {
-        "catalog_code": "EAZ_INC_044",
+        "catalog_code": "SAMPLE_CATALOG",
         "title": "Printer down",
         "description": "It is broken",
         "origin": 7,

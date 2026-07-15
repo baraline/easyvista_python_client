@@ -57,6 +57,21 @@ Reporting
 
 .. autofunction:: easyvista_python_client.reporting.aggregate_tickets
 
+Filters
+-------
+
+Build ``search`` expressions with these rather than f-strings: EasyVista ignores a filter it cannot
+parse and returns every record, and ``,`` combines conditions — so an unescaped value fails silently
+or widens the result rather than raising.
+
+.. autofunction:: easyvista_python_client.filters.ev_equals_filter
+
+.. autofunction:: easyvista_python_client.filters.ev_in_filter
+
+.. autofunction:: easyvista_python_client.filters.escape_ev_value
+
+.. autofunction:: easyvista_python_client.filters.is_safe_ev_value
+
 References
 ----------
 

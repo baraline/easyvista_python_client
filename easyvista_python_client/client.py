@@ -16,6 +16,7 @@ from .directory import (
 )
 from .exceptions import EasyvistaAuthError, EasyvistaNotFound
 from .field_model import parse_memo
+from .filters import ev_equals_filter, is_safe_ev_value
 from .models.action import Action, PostAction
 from .models.asset import Asset, PostAsset
 from .models.department import Department, DepartmentUpdate, PostDepartment
@@ -335,11 +336,23 @@ class EasyvistaClient:
         fallback: scan every department and match ``name`` — normalized so
         ``"Acme Corp" == "ACME-CORP" == "acmecorp"`` — as a substring of any
         string field. ``limit`` caps the result count. Returns ``[]`` on no match.
+
+        A ``name`` that cannot be expressed in EasyVista's search grammar (see
+        :func:`~easyvista_python_client.is_safe_ev_value`) skips the server fast
+        path and falls back directly to the client-side scan, so this method
+        returns correct results rather than raising.
         """
+        # The server fast path is only an optimization, and a name that cannot be
+        # expressed server-side would otherwise be interpolated raw — where a ','
+        # silently widens the result set. Such names skip straight to the local
+        # scan below, which handles any characters.
         field = "DEPARTMENT_ID" if name.isdigit() else "DEPARTMENT_CODE"
-        fast = self.search_departments(search=f'{field}:"{name}"')
-        if fast.records:
-            return fast.records if limit is None else fast.records[:limit]
+        if is_safe_ev_value(name):
+            search = ev_equals_filter(field, name)
+            if search is not None:
+                fast = self.search_departments(search=search)
+                if fast.records:
+                    return fast.records if limit is None else fast.records[:limit]
         needle = _normalize_name(name)
         if not needle:
             return []
@@ -493,7 +506,9 @@ class EasyvistaClient:
         API's default order otherwise.
         """
         department = self.get_department(department_id)
-        search = f'DEPARTMENT_ID:"{department_id}"'
+        search = ev_equals_filter("DEPARTMENT_ID", department_id)
+        if search is None:
+            raise ValueError("department_id is required to build a department context")
 
         try:
             employees = list(self.iter_employees(search=search))

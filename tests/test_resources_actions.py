@@ -1,3 +1,5 @@
+import pytest
+
 from easyvista_python_client.models.action import Action, PostAction
 from easyvista_python_client.resources import actions as a
 
@@ -38,3 +40,29 @@ def test_build_list_actions_uses_top_level_filtered_endpoint():
     assert spec.params == {"search": 'REQUEST.RFC_NUMBER:"I1"'}
     parsed = parser({"records": [{"ACTION_ID": 1}, {"ACTION_ID": 2}]})
     assert [x.action_id for x in parsed] == [1, 2]
+
+
+def test_build_list_actions_rejects_unsafe_rfc():
+    """An RFC number with a quote is a caller bug; there is no sensible fallback.
+
+    Left raw it could append a ',' condition and list another ticket's actions.
+    """
+    with pytest.raises(ValueError):
+        a.build_list_actions('I240101_0001",REQUEST.RFC_NUMBER:"I240101_0002')
+
+
+@pytest.mark.parametrize("rfc", ["", "   "])
+def test_build_list_actions_rejects_blank_rfc(rfc):
+    """A blank rfc_number must not degrade into an unfiltered list.
+
+    ev_equals_filter returns None for blank input, and passing search=None to
+    build_search would list EVERY ticket's actions — the same class of failure
+    this fix exists to prevent, arriving by a different route.
+    """
+    with pytest.raises(ValueError):
+        a.build_list_actions(rfc)
+
+
+def test_build_list_actions_filters_by_rfc():
+    spec, _ = a.build_list_actions("I240101_0001")
+    assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'

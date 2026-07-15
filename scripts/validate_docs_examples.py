@@ -240,7 +240,7 @@ def run_offline(r: Results) -> None:
     # 5. "Working with tickets": full PostRequest field set from the example.
     def post_request_full() -> None:
         body = PostRequest(
-            catalog_code="EAZ_INC_044",
+            catalog_code="SAMPLE_CATALOG",
             title="Printer down",
             description="The 3rd-floor printer is offline",
             origin=7,
@@ -441,6 +441,11 @@ def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
     return None
 
 
+def _resolve_int(env_names: tuple[str, ...], filename: str) -> int | None:
+    value = _resolve(env_names, filename)
+    return int(value) if value is not None else None
+
+
 def resolve_live_config():
     from easyvista_python_client import EasyvistaConfig
 
@@ -469,7 +474,7 @@ def resolve_live_config():
 # --------------------------------------------------------------------------- #
 # live read-only checks
 # --------------------------------------------------------------------------- #
-def run_live_readonly(r: Results, config) -> None:
+def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
     print("\n== Live read-only (real instance) ==")
     from easyvista_python_client import (
         Action,
@@ -580,18 +585,29 @@ def run_live_readonly(r: Results, config) -> None:
         def rejected_create() -> None:
             # The error-handling example: missing mandatory title is rejected
             # server-side (HTTP 590) -- no ticket is created, so this is safe.
+            # catalog_code must be *valid* on this instance so the missing title
+            # is the payload's only defect -- an unknown catalog would also 590,
+            # and the assertion below couldn't tell the two failures apart.
             try:
-                client.create_ticket(PostRequest(catalog_code="EAZ_INC_044"))
+                client.create_ticket(PostRequest(catalog_code=catalog_code))
             except EasyvistaValidationError as exc:
                 assert exc.status_code == 590, f"expected 590, got {exc.status_code}"
             else:
                 raise AssertionError("expected EasyvistaValidationError, none raised")
 
-        r.check(
-            "create_ticket(missing title) -> EasyvistaValidationError(590)"
-            "  [Error handling]",
-            rejected_create,
-        )
+        if catalog_code:
+            r.check(
+                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "  [Error handling]",
+                rejected_create,
+            )
+        else:
+            r.skip(
+                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "  [Error handling]",
+                "no EASYVISTA_TEST_CATALOG_CODE"
+                " (or secrets/easyvista_test_catalog_code)",
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -792,22 +808,34 @@ def main() -> int:
     )
     parser.add_argument(
         "--catalog-code",
-        default="EAZ_INC_044",
-        help="catalog_code for the write create",
+        default=_resolve(
+            ("EASYVISTA_TEST_CATALOG_CODE",), "easyvista_test_catalog_code"
+        ),
+        help=(
+            "catalog_code for the write create (env EASYVISTA_TEST_CATALOG_CODE,"
+            " or secrets/easyvista_test_catalog_code)"
+        ),
     )
     parser.add_argument(
         "--status-guid",
-        default="{C3D9DFA7-7A21-46C2-B3A3-8BC50C9FF4F3}",
+        default=_resolve(
+            ("EASYVISTA_TEST_STATUS_GUID",), "easyvista_test_status_guid"
+        ),
         help=(
-            "closed status GUID for close_ticket"
-            " (default: the confirmed value from docs/API_Info.md)"
+            "closed status GUID for close_ticket (env EASYVISTA_TEST_STATUS_GUID,"
+            " or secrets/easyvista_test_status_guid)"
         ),
     )
     parser.add_argument(
         "--asset-catalog-id",
         type=int,
-        default=3153,
-        help="catalog_id for create_asset",
+        default=_resolve_int(
+            ("EASYVISTA_TEST_ASSET_CATALOG_ID",), "easyvista_test_asset_catalog_id"
+        ),
+        help=(
+            "catalog_id for create_asset (env EASYVISTA_TEST_ASSET_CATALOG_ID,"
+            " or secrets/easyvista_test_asset_catalog_id)"
+        ),
     )
     parser.add_argument(
         "--no-autoclose",
@@ -840,16 +868,34 @@ def main() -> int:
             if args.writes:
                 r.skip("live writes tier", "no credentials")
         else:
-            run_live_readonly(r, config)
+            run_live_readonly(r, config, args.catalog_code)
             if args.writes:
-                run_live_writes(
-                    r,
-                    config,
-                    args.catalog_code,
-                    args.status_guid,
-                    args.asset_catalog_id,
-                    autoclose=not args.no_autoclose,
-                )
+                missing = []
+                if not args.catalog_code:
+                    missing.append(
+                        "EASYVISTA_TEST_CATALOG_CODE"
+                        " (or secrets/easyvista_test_catalog_code)"
+                    )
+                if not args.asset_catalog_id:
+                    missing.append(
+                        "EASYVISTA_TEST_ASSET_CATALOG_ID"
+                        " (or secrets/easyvista_test_asset_catalog_id)"
+                    )
+                if missing:
+                    print("\n== Live writes tier SKIPPED ==")
+                    print("  Missing required config:")
+                    for item in missing:
+                        print(f"    - {item}")
+                    r.skip("live writes tier", "missing instance-specific config")
+                else:
+                    run_live_writes(
+                        r,
+                        config,
+                        args.catalog_code,
+                        args.status_guid,
+                        args.asset_catalog_id,
+                        autoclose=not args.no_autoclose,
+                    )
             else:
                 print(
                     "\n  (write examples skipped; pass --writes to create real records)"

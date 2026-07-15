@@ -15,6 +15,12 @@ from .exceptions import (
     EasyvistaValidationError,
 )
 from .field_model import FieldClassification
+from .filters import (
+    escape_ev_value,
+    ev_equals_filter,
+    ev_in_filter,
+    is_safe_ev_value,
+)
 from .models.action import Action, PostAction
 from .models.asset import Asset, PostAsset
 from .models.department import Department, DepartmentUpdate, PostDepartment
@@ -60,4 +66,8 @@ __all__ = [
     "TicketStatistics",
     "__version__",
     "aggregate_tickets",
+    "escape_ev_value",
+    "ev_equals_filter",
+    "ev_in_filter",
+    "is_safe_ev_value",
 ]

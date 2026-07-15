@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 import respx
 
 from easyvista_python_client.async_client import AsyncEasyvistaClient
@@ -364,8 +365,10 @@ async def test_find_departments_empty_needle_returns_empty_not_everything_async(
         assert await client.find_departments("-") == []
         assert await client.find_departments("   ") == []
     # The guard short-circuits after the fast-path miss, before iter_departments
-    # ever issues its fuzzy-scan request.
-    assert route.call_count == 2
+    # ever issues its fuzzy-scan request. "-" still trips one fast-path call
+    # (it survives .strip()); "   " is blank after stripping, so ev_equals_filter
+    # returns None and no request is sent for it at all — hence 1, not 2.
+    assert route.call_count == 1
 
 
 @respx.mock
@@ -491,3 +494,75 @@ async def test_get_department_context_async(config):
     assert ctx.department.department_id == 60
     assert ctx.note == ""
     assert ctx.ticket_statistics is None
+
+
+@respx.mock
+async def test_get_department_context_rejects_unsafe_department_id(config):
+    """Async twin of the sync rejection test in test_client_sync.py.
+
+    get_department_context has no fallback scan, so an unsafe department_id
+    must raise rather than silently proceed with a malformed search.
+    get_department is mocked to SUCCEED so execution actually reaches the
+    search-building line instead of stopping early on a 404.
+    """
+    department_id = 'ALPHA",DEPARTMENT_ID:"999'
+    respx.get(f"{ROOT}/departments/{department_id}").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    employees_route = respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    requests_route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"records": [], "total_record_count": 0})
+    )
+    assets_route = respx.get(f"{ROOT}/assets").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    comment_route = respx.get(
+        f"{ROOT}/departments/{department_id}/comment_department"
+    ).mock(return_value=httpx.Response(200, json={"COMMENT_DEPARTMENT": ""}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError):
+            await client.get_department_context(department_id)
+    assert employees_route.call_count == 0
+    assert requests_route.call_count == 0
+    assert assets_route.call_count == 0
+    assert comment_route.call_count == 0
+
+
+@respx.mock
+async def test_get_department_context_rejects_blank_department_id(config):
+    """Async twin: a blank department_id must raise too — ``search=None``
+    reaching iter_employees would list every employee.
+    """
+    department_id = "   "
+    respx.get(f"{ROOT}/departments/{department_id}").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    employees_route = respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="department_id is required"):
+            await client.get_department_context(department_id)
+    assert employees_route.call_count == 0
+
+
+@respx.mock
+async def test_find_departments_rejects_comma_injection(config):
+    route = respx.get(f"{ROOT}/departments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"DEPARTMENT_ID": 1, "DEPARTMENT_CODE": "ALPHA"},
+                    {"DEPARTMENT_ID": 2, "DEPARTMENT_CODE": "BETA"},
+                ]
+            },
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        found = await client.find_departments('ALPHA",DEPARTMENT_CODE:"BETA')
+    assert found == []
+    for call in route.calls:
+        assert '"' not in (call.request.url.params.get("search") or "")
