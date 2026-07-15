@@ -364,8 +364,10 @@ async def test_find_departments_empty_needle_returns_empty_not_everything_async(
         assert await client.find_departments("-") == []
         assert await client.find_departments("   ") == []
     # The guard short-circuits after the fast-path miss, before iter_departments
-    # ever issues its fuzzy-scan request.
-    assert route.call_count == 2
+    # ever issues its fuzzy-scan request. "-" still trips one fast-path call
+    # (it survives .strip()); "   " is blank after stripping, so ev_equals_filter
+    # returns None and no request is sent for it at all — hence 1, not 2.
+    assert route.call_count == 1
 
 
 @respx.mock
@@ -491,3 +493,23 @@ async def test_get_department_context_async(config):
     assert ctx.department.department_id == 60
     assert ctx.note == ""
     assert ctx.ticket_statistics is None
+
+
+@respx.mock
+async def test_find_departments_rejects_comma_injection(config):
+    route = respx.get(f"{ROOT}/departments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"DEPARTMENT_ID": 1, "DEPARTMENT_CODE": "ALPHA"},
+                    {"DEPARTMENT_ID": 2, "DEPARTMENT_CODE": "BETA"},
+                ]
+            },
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        found = await client.find_departments('ALPHA",DEPARTMENT_CODE:"BETA')
+    assert found == []
+    for call in route.calls:
+        assert '"' not in (call.request.url.params.get("search") or "")

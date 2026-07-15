@@ -584,8 +584,10 @@ def test_find_departments_empty_needle_returns_empty_not_everything(config):
         assert client.find_departments("-") == []
         assert client.find_departments("   ") == []
     # The guard short-circuits after the fast-path miss, before iter_departments
-    # ever issues its fuzzy-scan request.
-    assert route.call_count == 2
+    # ever issues its fuzzy-scan request. "-" still trips one fast-path call
+    # (it survives .strip()); "   " is blank after stripping, so ev_equals_filter
+    # returns None and no request is sent for it at all — hence 1, not 2.
+    assert route.call_count == 1
 
 
 @respx.mock
@@ -823,3 +825,32 @@ def test_get_department_context_trim_flags_skip_related_calls(config):
     # The untrimmed parts still assemble normally.
     assert ctx.employees[0].employee_id == 1
     assert ctx.ticket_count == 1
+
+
+@respx.mock
+def test_find_departments_rejects_comma_injection(config):
+    """A ',' injection must not silently widen the result set.
+
+    ',' is a live EasyVista combinator (OR within one field), so
+    find_departments('A",DEPARTMENT_CODE:"B') would emit
+    DEPARTMENT_CODE:"A",DEPARTMENT_CODE:"B" and return BOTH departments.
+    Verified live: returns 2 instead of 1, with no error.
+    """
+    route = respx.get(f"{ROOT}/departments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"DEPARTMENT_ID": 1, "DEPARTMENT_CODE": "ALPHA"},
+                    {"DEPARTMENT_ID": 2, "DEPARTMENT_CODE": "BETA"},
+                ]
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        found = client.find_departments('ALPHA",DEPARTMENT_CODE:"BETA')
+    # The injected name matches no real department, so nothing should come back.
+    assert found == []
+    # The unsafe value must never reach the server as a filter.
+    for call in route.calls:
+        assert '"' not in (call.request.url.params.get("search") or "")
