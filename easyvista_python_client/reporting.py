@@ -1,0 +1,143 @@
+"""Pure, offline ticket statistics — counts and per-dimension breakdowns.
+
+Network-free by design: it consumes already-fetched :class:`Request` objects so it
+can be unit-tested without a client. The sync/async clients fetch records and
+delegate to :func:`aggregate_tickets`.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from .models.request import Request
+from .references import resolve_reference
+
+_FRACTION_RE = re.compile(r"\.(\d+)")
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse an EasyVista timestamp to a timezone-aware ``datetime``, or ``None``.
+
+    Accepts a ``datetime`` (returned as-is, naive made UTC) or an ISO-8601 string.
+    Normalizes for Python 3.10's stricter ``fromisoformat``: maps a trailing ``Z``
+    to ``+00:00`` and pads/truncates fractional seconds to 6 digits. A naive result
+    is treated as UTC. Unparseable input returns ``None``.
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    match = _FRACTION_RE.search(text)
+    if match:
+        frac6 = (match.group(1) + "000000")[:6]
+        text = text[: match.start()] + "." + frac6 + text[match.end() :]
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+DEFAULT_DIMENSIONS: tuple[str, ...] = (
+    "STATUS",
+    "DEPARTMENT",
+    "CATALOG_REQUEST",
+    "URGENCY",
+    "IMPACT",
+)
+
+_UNKNOWN = "(unknown)"
+
+
+@dataclass
+class TicketStatistics:
+    """A ticket count plus per-dimension breakdowns.
+
+    ``total`` is the number of tickets aggregated (after any date window).
+    ``breakdowns`` maps each requested dimension name to ``{label: count}``; for
+    every dimension ``sum(breakdowns[dim].values()) == total``.
+    """
+
+    total: int
+    breakdowns: dict[str, dict[str, int]]
+
+
+def _dimension_value(data: dict[str, Any], name: str) -> str:
+    """Group key for one ticket on one dimension: label, else id, else unknown."""
+    return resolve_reference(data, name).display or _UNKNOWN
+
+
+def fields_for_references(
+    names: Sequence[str], *, include_creation_date: bool
+) -> list[str]:
+    """Search-projection field list covering every reference in ``names``.
+
+    Requests each reference's nested object and its id fields so both label and id
+    are available when aggregating over search results; over-requesting a
+    non-existent field is ignored by the API.
+    """
+    fields: list[str] = ["RFC_NUMBER"]
+    for name in names:
+        for field in (name, f"{name}_ID", f"{name}_GUID"):
+            if field not in fields:
+                fields.append(field)
+    if include_creation_date and "CREATION_DATE_UT" not in fields:
+        fields.append("CREATION_DATE_UT")
+    return fields
+
+
+def _bound(value: datetime | str | None, name: str) -> datetime | None:
+    """Parse a window bound; raise ValueError on a malformed string."""
+    if value is None:
+        return None
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        raise ValueError(f"{name} is not a valid datetime: {value!r}")
+    return parsed
+
+
+def aggregate_tickets(
+    tickets: Iterable[Request],
+    *,
+    dimensions: Sequence[str] = DEFAULT_DIMENSIONS,
+    created_since: datetime | str | None = None,
+    created_until: datetime | str | None = None,
+) -> TicketStatistics:
+    """Aggregate tickets into a total plus per-dimension breakdowns.
+
+    ``dimensions`` selects which breakdowns to compute (default: all of
+    ``DEFAULT_DIMENSIONS``); any field name is valid, including custom ``e_*``.
+    ``created_since`` / ``created_until`` are inclusive bounds on the ticket's
+    ``CREATION_DATE_UT`` (a ``datetime`` or ISO string); a ticket with a
+    missing/unparseable date is excluded when a bound is set. Raises ``ValueError``
+    for a malformed bound string.
+    """
+    since = _bound(created_since, "created_since")
+    until = _bound(created_until, "created_until")
+    filtering = since is not None or until is not None
+
+    total = 0
+    breakdowns: dict[str, dict[str, int]] = {dim: {} for dim in dimensions}
+    for ticket in tickets:
+        data = ticket.model_dump(by_alias=True)
+        if filtering:
+            created = _parse_iso_datetime(data.get("CREATION_DATE_UT"))
+            if created is None:
+                continue
+            if since is not None and created < since:
+                continue
+            if until is not None and created > until:
+                continue
+        total += 1
+        for dim in dimensions:
+            key = _dimension_value(data, dim)
+            counts = breakdowns[dim]
+            counts[key] = counts.get(key, 0) + 1
+    return TicketStatistics(total=total, breakdowns=breakdowns)

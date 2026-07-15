@@ -1,0 +1,43 @@
+secrets/*
+secrets/
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Sphinx build output
+docs/_build/
+
+# Local agent/tooling state. These must be listed in THIS file specifically:
+# hatchling reads only the root .gitignore when assembling the sdist, and
+# ignores both nested .gitignore files and the user's global ignore file.
+.claude/
+.superpowers/
+
+# Internal planning docs. Mirrors the sister package (glpi_python_client
+# gitignores docs/superpowers/* too). Kept on disk for local use; never
+# published, because they narrate the private preprod instance.
+docs/superpowers/
+
+# Instance-specific artifacts generated from, or describing, a private
+# EasyVista instance. Useful locally, not publishable: they carry the
+# instance host/account, the end customer's org structure, and a map of
+# that instance's bespoke customization.
+docs/API_Info.md
+docs/easyvista-test-profile-blocked-operations.md
+docs/easyvista-field-inventory.md
+
+# One-off API-exploration scripts. They hardcode a real client's records and
+# print real employees' names and e-mail addresses. Kept on disk so they stay
+# usable locally; never published.
+scripts/probe_*.py
