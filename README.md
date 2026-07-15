@@ -94,11 +94,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and quality checks.
 
 MIT — see [LICENSE](LICENSE).
 
-## Sponsoring & Professional services
+## Sponsoring
 
 The development of this package is indirectly supported by
 [Novahé](https://www.novahe.fr/) & [Constellation](https://www.constellation.fr/).
-
-If you need professional help or services around EasyVista, we offer consulting
-and engineering services to install, maintain, or upgrade EasyVista instances
-and their integrations.
