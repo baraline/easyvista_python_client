@@ -98,3 +98,14 @@ def sample_department_id(live_client: EasyvistaClient) -> int:
     if not result.records or result.records[0].department_id is None:
         pytest.skip("no departments on the live instance to exercise directory reads")
     return result.records[0].department_id
+
+
+@pytest.fixture(scope="session")
+def sample_department_code(live_client: EasyvistaClient) -> str:
+    """A real DEPARTMENT_CODE from the live instance, for search-syntax probes."""
+    result = live_client.search_departments(max_rows=25)
+    for dept in result.records:
+        code = dept.department_code
+        if code and code.strip() and len(code.strip()) >= 3:
+            return code.strip()
+    pytest.skip("no department with a usable DEPARTMENT_CODE on the live instance")
