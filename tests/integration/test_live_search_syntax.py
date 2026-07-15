@@ -25,8 +25,19 @@ What the live probes established (full tables in ``task-1-report.md``):
 * **``~`` is exact-match, not "contains"** — identical to ``:``, on code-like
   fields (``DEPARTMENT_CODE``, ``ASSET_TAG``) and free-text label fields
   (``DEPARTMENT_FR``) alike. The published docs claiming otherwise are wrong.
+* **No escape for an embedded ``"`` was found.** Raw, backslash-escaped, and
+  doubled-quote renderings of a title containing a literal ``"`` all fail to
+  match a ticket verifiably created with that exact title (full table in
+  ``task-2-report.md``). ``escape_ev_value`` therefore rejects a value
+  containing ``"`` rather than emit a query that silently cannot match.
 
-Read-only. Opt in with ``--run-integration``; skipped without credentials.
+Most tests here are read-only. ``test_embedded_quote_cannot_be_escaped`` is the
+exception: it depends on the ``probe_tickets`` fixture, which creates two
+tickets on the live instance and unconditionally closes both in teardown (see
+``live_write_config`` / ``probe_tickets`` in ``conftest.py``). That fixture
+additionally skips unless the instance-specific write config is present.
+
+Opt in with ``--run-integration``; skipped without credentials.
 """
 
 from __future__ import annotations
@@ -474,3 +485,56 @@ def test_silent_ignore_is_per_condition_not_all_or_nothing(
         live_client, f'RFC_NUMBER:"{rfc}",CATALOG_GUID:"{_BOGUS_GUID}"'
     )
     assert combined == one
+
+
+# --- Phase B: no escape for an embedded `"` exists --------------------------
+
+
+def test_embedded_quote_cannot_be_escaped(live_client, probe_tickets):
+    """No rendering makes a literal ``"`` searchable, so ``escape_ev_value``
+    rejects it rather than emitting a value that silently fails to match.
+
+    Two self-closing probe tickets establish this live, guarded by two
+    preconditions that must hold before the verdict means anything:
+
+    1. A quote-free control (``TITLE:"EVCLI{nonce}A"``) proves ``TITLE`` is
+       searchable and populated on create at all -- without it, a failure to
+       match the quoted ticket would be meaningless.
+    2. Probe B's *stored* title still contains a literal ``"``. If the instance
+       silently stripped the quote on create, all three candidates would return
+       0 and this test would pass for entirely the wrong reason: the true
+       conclusion would be "there was never a quote in the data to match", not
+       "no escape exists". ``escape_ev_value`` rejects ``"`` on the strength of
+       this verdict, so the premise underneath it is asserted, not assumed.
+
+    With both holding, each of the three candidate renderings of the quoted
+    title (raw, backslash-escaped, doubled-quote) for ``EVCLI{nonce}B 22"
+    monitor`` is asserted to return exactly 0, not merely ``!= 1``: a
+    silently-ignored filter also returns something other than 1 (the whole,
+    unfiltered table), so ``!= 1`` cannot tell "no escape exists" apart from
+    "the filter was dropped". Only ``== 0`` -- an honest, targeted no-match --
+    actually refutes "an escape exists".
+
+    ``TITLE`` is not a declared field on :class:`Request`, so it is read via
+    ``model_dump(by_alias=True)`` (``extra="allow"`` preserves it), matching how
+    the other tests here reach undeclared fields.
+    """
+    nonce, _rfc_control, rfc_quoted = probe_tickets
+    assert _count_tickets(live_client, f'TITLE:"EVCLI{nonce}A"') == 1  # control
+
+    probe_b = live_client.get_ticket(rfc_quoted)
+    stored_title = probe_b.model_dump(by_alias=True).get("TITLE")
+    assert stored_title, f"probe B returned no TITLE to check (got {stored_title!r})"
+    assert '"' in stored_title, (
+        "probe B's stored title lost its literal quote "
+        f'({stored_title!r}) -- this instance strips `"` on create, so the '
+        "escape question is unanswerable here and a 0 from every candidate "
+        "below would prove nothing about escaping"
+    )
+
+    for search in (
+        f'TITLE:"EVCLI{nonce}B 22" monitor"',
+        f'TITLE:"EVCLI{nonce}B 22\\" monitor"',
+        f'TITLE:"EVCLI{nonce}B 22"" monitor"',
+    ):
+        assert _count_tickets(live_client, search) == 0

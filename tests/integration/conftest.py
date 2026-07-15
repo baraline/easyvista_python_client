@@ -19,6 +19,7 @@ The secret values are loaded by this test process at runtime and never printed.
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -109,3 +110,81 @@ def sample_department_code(live_client: EasyvistaClient) -> str:
         if code and code.strip() and len(code.strip()) >= 3:
             return code.strip()
     pytest.skip("no department with a usable DEPARTMENT_CODE on the live instance")
+
+
+@pytest.fixture(scope="session")
+def live_write_config() -> dict[str, str]:
+    """Instance-specific fields needed to create and close probe tickets.
+
+    Skips unless every value is configured: these are per-instance and must not
+    be hardcoded into a tracked test.
+    """
+    keys = {
+        "catalog_code": ("EASYVISTA_TEST_CATALOG_CODE", "easyvista_test_catalog_code"),
+        "origin": ("EASYVISTA_TEST_ORIGIN", "easyvista_test_origin"),
+        "department_id": (
+            "EASYVISTA_TEST_DEPARTMENT_ID",
+            "easyvista_test_department_id",
+        ),
+        "urgency_id": ("EASYVISTA_TEST_URGENCY_ID", "easyvista_test_urgency_id"),
+        "impact_id": ("EASYVISTA_TEST_IMPACT_ID", "easyvista_test_impact_id"),
+        "status_guid": ("EASYVISTA_TEST_STATUS_GUID", "easyvista_test_status_guid"),
+    }
+    resolved: dict[str, str] = {}
+    for name, (env, filename) in keys.items():
+        value = _resolve((env,), filename)
+        if not value:
+            pytest.skip(f"write probes need {env} (or secrets/{filename})")
+        resolved[name] = value
+    return resolved
+
+
+@pytest.fixture(scope="session")
+def probe_tickets(live_client, live_write_config) -> Iterator[tuple[str, str, str]]:
+    """Create two probe tickets; always close both.
+
+    Yields (nonce, rfc_control, rfc_quoted):
+      - control ticket title: ``EVCLI{nonce}A``            (quote-free)
+      - quoted  ticket title: ``EVCLI{nonce}B 22" monitor`` (contains a literal ")
+    """
+    from easyvista_python_client import PostRequest
+
+    cfg = live_write_config
+    nonce = uuid.uuid4().hex[:10].upper()
+
+    def _create(title: str) -> str:
+        ticket = live_client.create_ticket(
+            PostRequest(
+                catalog_code=cfg["catalog_code"],
+                title=title,
+                description="search-syntax characterization probe; safe to close",
+                origin=int(cfg["origin"]),
+                department_id=int(cfg["department_id"]),
+                urgency_id=int(cfg["urgency_id"]),
+                impact_id=int(cfg["impact_id"]),
+            )
+        )
+        assert ticket.rfc_number, "create_ticket returned no rfc_number"
+        return ticket.rfc_number
+
+    created: list[str] = []
+    try:
+        rfc_control = _create(f"EVCLI{nonce}A")
+        created.append(rfc_control)
+        rfc_quoted = _create(f'EVCLI{nonce}B 22" monitor')
+        created.append(rfc_quoted)
+        yield nonce, rfc_control, rfc_quoted
+    finally:
+        errors = []
+        for rfc in created:
+            try:
+                live_client.close_ticket(
+                    rfc,
+                    status_guid=cfg["status_guid"],
+                    delete_actions=1,
+                    comment="probe cleanup",
+                )
+            except Exception as exc:  # every ticket must be attempted regardless
+                errors.append((rfc, exc))
+        if errors:
+            raise RuntimeError(f"failed to close probe ticket(s): {errors}")
