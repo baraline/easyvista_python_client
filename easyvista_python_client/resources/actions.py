@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._transport import RequestSpec
+from ..filters import ev_equals_filter
 from ..models.action import Action, PostAction
 from ..pagination import extract_records
 from .descriptor import ResourceDescriptor, build_search
@@ -41,9 +42,14 @@ def build_list_actions(
     # Actions are listed via the TOP-LEVEL /actions resource filtered by the
     # request number, not a nested requests/{rfc}/actions path (which the API
     # rejects as "Unauthorized Method"). Verified against a live instance.
-    spec, parse_search = build_search(
-        ACTIONS, search=f'REQUEST.RFC_NUMBER:"{rfc_number}"'
-    )
+    # An unsafe rfc_number raises rather than degrading: ',' is a live combinator,
+    # so a raw value could append conditions and list another ticket's actions. A
+    # blank one must raise too — ev_equals_filter returns None for blank input, and
+    # search=None would list every action just as surely.
+    search = ev_equals_filter("REQUEST.RFC_NUMBER", rfc_number)
+    if search is None:
+        raise ValueError("rfc_number is required to list a ticket's actions")
+    spec, parse_search = build_search(ACTIONS, search=search)
 
     def parse(data: Any) -> list[Action]:
         return parse_search(data).records
