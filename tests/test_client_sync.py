@@ -828,6 +828,62 @@ def test_get_department_context_trim_flags_skip_related_calls(config):
 
 
 @respx.mock
+def test_get_department_context_rejects_unsafe_department_id(config):
+    """department_id feeds ``DEPARTMENT_ID:"<id>"`` search filters for the
+    employees/tickets/assets lookups. get_department_context has no fallback
+    scan (unlike find_departments), so an unsafe department_id must raise
+    rather than silently proceed with a malformed search.
+
+    get_department runs first and is mocked to SUCCEED here, so execution
+    actually reaches the search-building line instead of stopping early on a
+    404 — otherwise this test would pass for the wrong reason.
+    """
+    department_id = 'ALPHA",DEPARTMENT_ID:"999'
+    respx.get(f"{ROOT}/departments/{department_id}").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    employees_route = respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    requests_route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"records": [], "total_record_count": 0})
+    )
+    assets_route = respx.get(f"{ROOT}/assets").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    comment_route = respx.get(
+        f"{ROOT}/departments/{department_id}/comment_department"
+    ).mock(return_value=httpx.Response(200, json={"COMMENT_DEPARTMENT": ""}))
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError):
+            client.get_department_context(department_id)
+    # The raise must happen before any related lookup, not be swallowed by the
+    # try/except that degrades those lookups to empty lists.
+    assert employees_route.call_count == 0
+    assert requests_route.call_count == 0
+    assert assets_route.call_count == 0
+    assert comment_route.call_count == 0
+
+
+@respx.mock
+def test_get_department_context_rejects_blank_department_id(config):
+    """A blank department_id must raise too — ``search=None`` reaching
+    iter_employees would list every employee, not just this department's.
+    """
+    department_id = "   "
+    respx.get(f"{ROOT}/departments/{department_id}").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    employees_route = respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="department_id is required"):
+            client.get_department_context(department_id)
+    assert employees_route.call_count == 0
+
+
+@respx.mock
 def test_find_departments_rejects_comma_injection(config):
     """A ',' injection must not silently widen the result set.
 

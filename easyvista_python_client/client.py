@@ -501,7 +501,9 @@ class EasyvistaClient:
         API's default order otherwise.
         """
         department = self.get_department(department_id)
-        search = f'DEPARTMENT_ID:"{department_id}"'
+        search = ev_equals_filter("DEPARTMENT_ID", department_id)
+        if search is None:
+            raise ValueError("department_id is required to build a department context")
 
         try:
             employees = list(self.iter_employees(search=search))

@@ -474,7 +474,9 @@ class AsyncEasyvistaClient:
         degrades to the API's default order otherwise.
         """
         department = await self.get_department(department_id)
-        search = f'DEPARTMENT_ID:"{department_id}"'
+        search = ev_equals_filter("DEPARTMENT_ID", department_id)
+        if search is None:
+            raise ValueError("department_id is required to build a department context")
 
         try:
             employees = [e async for e in self.iter_employees(search=search)]
