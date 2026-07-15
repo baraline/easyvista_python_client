@@ -9,6 +9,25 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
+### Added
+
+- Public `filters.py`: `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, and
+  `is_safe_ev_value` for building EasyVista `search` expressions safely.
+
+### Fixed
+
+- `find_departments` and `list_actions` interpolated caller values into a `search` expression
+  unescaped. Because `,` is an EasyVista combinator, a crafted value could silently widen the
+  result set (verified live: a department lookup returned 2 records instead of 1). Both now
+  validate the value.
+
+### Changed
+
+- **Documentation correction:** the `search` operator `~` was documented as "contains". It is
+  **exact match**, identical to `:` — verified against a live instance. Examples implying
+  substring matching (`ASSET_TAG~LAPTOP`) were wrong and have been replaced. The unverified
+  `!~` / `!` / `is_null` / `is_not_null` operators are no longer documented as fact.
+
 ## [0.1.0] - 2026-07-15
 
 Initial public release.

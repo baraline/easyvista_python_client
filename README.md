@@ -19,7 +19,12 @@ pip install easyvista-python-client
 ## Usage (sync)
 
 ```python
-from easyvista_python_client import EasyvistaClient, EasyvistaConfig, PostRequest
+from easyvista_python_client import (
+    EasyvistaClient,
+    EasyvistaConfig,
+    PostRequest,
+    ev_equals_filter,
+)
 
 config = EasyvistaConfig(server="https://my.easyvista.com", account="12345", token="...")
 with EasyvistaClient(config) as client:
@@ -36,10 +41,11 @@ with EasyvistaClient(config) as client:
         )
     )
     fetched = client.get_ticket(ticket.rfc_number)
-    results = client.search_tickets(search="STATUS_EN~Open", max_rows=50)
+    open_status = ev_equals_filter("STATUS_EN", "Open")
+    results = client.search_tickets(search=open_status, max_rows=50)
 
     # page through everything with the iterator (follows the API's offset paging)
-    for t in client.iter_tickets(search="STATUS_EN~Open", page_size=100, max_records=1000):
+    for t in client.iter_tickets(search=open_status, page_size=100, max_records=1000):
         ...  # async: `async for t in client.iter_tickets(...)`
 
     # close it with your instance's "closed" status GUID
@@ -59,11 +65,17 @@ with EasyvistaClient(config) as client:
 
 ```python
 from pathlib import Path
-from easyvista_python_client import EasyvistaClient, EasyvistaConfig, PostAsset
+from easyvista_python_client import (
+    EasyvistaClient,
+    EasyvistaConfig,
+    PostAsset,
+    ev_equals_filter,
+)
 
 with EasyvistaClient(EasyvistaConfig.from_env()) as client:
     asset = client.create_asset(PostAsset(catalog_id=3153, asset_tag="LAPTOP-001"))
-    found = client.search_assets(search="ASSET_TAG~LAPTOP", max_rows=50)
+    tag_filter = ev_equals_filter("ASSET_TAG", "LAPTOP-001")
+    found = client.search_assets(search=tag_filter, max_rows=50)
 
     # attach a file to a ticket (uploaded as base64 inside the JSON body)
     pdf = Path("report.pdf")
