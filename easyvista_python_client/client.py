@@ -336,6 +336,11 @@ class EasyvistaClient:
         fallback: scan every department and match ``name`` — normalized so
         ``"Acme Corp" == "ACME-CORP" == "acmecorp"`` — as a substring of any
         string field. ``limit`` caps the result count. Returns ``[]`` on no match.
+
+        A ``name`` that cannot be expressed in EasyVista's search grammar (see
+        :func:`~easyvista_python_client.is_safe_ev_value`) skips the server fast
+        path and falls back directly to the client-side scan, so this method
+        returns correct results rather than raising.
         """
         # The server fast path is only an optimization, and a name that cannot be
         # expressed server-side would otherwise be interpolated raw — where a ','

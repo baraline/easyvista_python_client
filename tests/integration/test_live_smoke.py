@@ -72,5 +72,5 @@ def test_missing_mandatory_field_raises_validation_error(
     # Creating with a catalog but no title is rejected by EasyVista (no ticket
     # created), so this stays read-only-safe by construction.
     with pytest.raises(EasyvistaValidationError) as ei:
-        live_client.create_ticket(PostRequest(catalog_code="EAZ_INC_044"))
+        live_client.create_ticket(PostRequest(catalog_code="SAMPLE_CATALOG"))
     assert ei.value.status_code == 590

@@ -229,7 +229,8 @@ Searching and pagination
 The verified search grammar is:
 
 - ``FIELD:"value"`` — exact match. ``~`` is a synonym: despite its appearance it is **exact match**,
-  not "contains". EasyVista offers no substring operator.
+  not "contains" — identical to ``:``. No substring operator has been identified; ``%`` inside a
+  value is a literal character, not a wildcard.
 - ``,`` — combines conditions: **OR** when every condition names the same field, **AND** across
   different fields. ``;`` is *not* a combinator.
 

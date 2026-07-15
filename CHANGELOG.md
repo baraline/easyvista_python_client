@@ -27,6 +27,8 @@ a deprecation policy will follow the 1.0 release.
   **exact match**, identical to `:` — verified against a live instance. Examples implying
   substring matching (`ASSET_TAG~LAPTOP`) were wrong and have been replaced. The unverified
   `!~` / `!` / `is_null` / `is_not_null` operators are no longer documented as fact.
+- `get_department_context` now raises `ValueError` for a blank or unrenderable `department_id`
+  rather than building a malformed search (defence in depth; not a demonstrated exploitable path).
 
 ## [0.1.0] - 2026-07-15
 

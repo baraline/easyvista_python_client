@@ -194,6 +194,11 @@ def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
     return None
 
 
+def _resolve_int(env_names: tuple[str, ...], filename: str) -> int | None:
+    value = _resolve(env_names, filename)
+    return int(value) if value is not None else None
+
+
 def _host(url: str) -> str:
     # urlsplit().hostname strips any userinfo/port and lowercases; fall back to
     # the first path segment for a bare host with no netloc.
@@ -701,17 +706,71 @@ def main() -> int:
         action="store_true",
         help="with --tolerance, leave the probe tickets open instead of closing them",
     )
-    parser.add_argument("--catalog-code", default="EAZ_INC_044")
-    parser.add_argument("--origin", type=int, default=7)
-    parser.add_argument("--department", type=int, default=9)
-    parser.add_argument("--urgency", type=int, default=7)
-    parser.add_argument("--impact", type=int, default=21)
-    parser.add_argument("--action-type-id", type=int, default=94)
-    parser.add_argument("--group-id", type=int, default=3)
+    parser.add_argument(
+        "--catalog-code",
+        default=_resolve(
+            ("EASYVISTA_TEST_CATALOG_CODE",), "easyvista_test_catalog_code"
+        ),
+        help="catalog_code for the probe ticket (env EASYVISTA_TEST_CATALOG_CODE,"
+        " or secrets/easyvista_test_catalog_code)",
+    )
+    parser.add_argument(
+        "--origin",
+        type=int,
+        default=_resolve_int(("EASYVISTA_TEST_ORIGIN",), "easyvista_test_origin"),
+        help="origin id for the probe ticket (env EASYVISTA_TEST_ORIGIN,"
+        " or secrets/easyvista_test_origin)",
+    )
+    parser.add_argument(
+        "--department",
+        type=int,
+        default=_resolve_int(
+            ("EASYVISTA_TEST_DEPARTMENT_ID",), "easyvista_test_department_id"
+        ),
+        help="department id for the probe ticket (env EASYVISTA_TEST_DEPARTMENT_ID,"
+        " or secrets/easyvista_test_department_id)",
+    )
+    parser.add_argument(
+        "--urgency",
+        type=int,
+        default=_resolve_int(
+            ("EASYVISTA_TEST_URGENCY_ID",), "easyvista_test_urgency_id"
+        ),
+        help="urgency id for the probe ticket (env EASYVISTA_TEST_URGENCY_ID,"
+        " or secrets/easyvista_test_urgency_id)",
+    )
+    parser.add_argument(
+        "--impact",
+        type=int,
+        default=_resolve_int(
+            ("EASYVISTA_TEST_IMPACT_ID",), "easyvista_test_impact_id"
+        ),
+        help="impact id for the probe ticket (env EASYVISTA_TEST_IMPACT_ID,"
+        " or secrets/easyvista_test_impact_id)",
+    )
+    parser.add_argument(
+        "--action-type-id",
+        type=int,
+        default=_resolve_int(
+            ("EASYVISTA_TEST_ACTION_TYPE_ID",), "easyvista_test_action_type_id"
+        ),
+        help="action_type_id for comment probes (env EASYVISTA_TEST_ACTION_TYPE_ID,"
+        " or secrets/easyvista_test_action_type_id)",
+    )
+    parser.add_argument(
+        "--group-id",
+        type=int,
+        default=_resolve_int(("EASYVISTA_TEST_GROUP_ID",), "easyvista_test_group_id"),
+        help="group_id for comment probes (env EASYVISTA_TEST_GROUP_ID,"
+        " or secrets/easyvista_test_group_id)",
+    )
     parser.add_argument(
         "--status-guid",
-        default="{C3D9DFA7-7A21-46C2-B3A3-8BC50C9FF4F3}",
-        help="closed-status GUID for --close (default: confirmed 'cloturer' GUID)",
+        default=_resolve(
+            ("EASYVISTA_TEST_STATUS_GUID",), "easyvista_test_status_guid"
+        ),
+        help="closed-status GUID for --close (env EASYVISTA_TEST_STATUS_GUID,"
+        " or secrets/easyvista_test_status_guid)",
     )
     args = parser.parse_args()
 
@@ -735,6 +794,56 @@ def main() -> int:
         print("No TEST credentials. Set EASYVISTA_TEST_URL + EASYVISTA_TEST_TOKEN")
         print("or add secrets/easyvista_test_url and secrets/easyvista_test_token.")
         return 2
+
+    # These are per-instance and must not be hardcoded (see
+    # tests/integration/conftest.py's live_write_config): fail clearly instead of
+    # silently falling back to a baked-in value.
+    if args.close:
+        if not args.status_guid:
+            print(
+                "Missing closed-status GUID. Set EASYVISTA_TEST_STATUS_GUID"
+                " (or secrets/easyvista_test_status_guid)."
+            )
+            return 2
+    else:
+        missing = []
+        if not args.catalog_code:
+            missing.append(
+                "EASYVISTA_TEST_CATALOG_CODE (or secrets/easyvista_test_catalog_code)"
+            )
+        if args.origin is None:
+            missing.append("EASYVISTA_TEST_ORIGIN (or secrets/easyvista_test_origin)")
+        if args.department is None:
+            missing.append(
+                "EASYVISTA_TEST_DEPARTMENT_ID"
+                " (or secrets/easyvista_test_department_id)"
+            )
+        if args.urgency is None:
+            missing.append(
+                "EASYVISTA_TEST_URGENCY_ID (or secrets/easyvista_test_urgency_id)"
+            )
+        if args.impact is None:
+            missing.append(
+                "EASYVISTA_TEST_IMPACT_ID (or secrets/easyvista_test_impact_id)"
+            )
+        if args.action_type_id is None:
+            missing.append(
+                "EASYVISTA_TEST_ACTION_TYPE_ID"
+                " (or secrets/easyvista_test_action_type_id)"
+            )
+        if args.group_id is None:
+            missing.append(
+                "EASYVISTA_TEST_GROUP_ID (or secrets/easyvista_test_group_id)"
+            )
+        if args.tolerance and not args.tolerance_keep_open and not args.status_guid:
+            missing.append(
+                "EASYVISTA_TEST_STATUS_GUID (or secrets/easyvista_test_status_guid)"
+            )
+        if missing:
+            print("Missing required instance config:")
+            for item in missing:
+                print(f"  - {item}")
+            return 2
 
     from easyvista_python_client import EasyvistaClient
 
