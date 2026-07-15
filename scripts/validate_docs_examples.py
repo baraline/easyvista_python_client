@@ -474,7 +474,7 @@ def resolve_live_config():
 # --------------------------------------------------------------------------- #
 # live read-only checks
 # --------------------------------------------------------------------------- #
-def run_live_readonly(r: Results, config) -> None:
+def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
     print("\n== Live read-only (real instance) ==")
     from easyvista_python_client import (
         Action,
@@ -585,18 +585,29 @@ def run_live_readonly(r: Results, config) -> None:
         def rejected_create() -> None:
             # The error-handling example: missing mandatory title is rejected
             # server-side (HTTP 590) -- no ticket is created, so this is safe.
+            # catalog_code must be *valid* on this instance so the missing title
+            # is the payload's only defect -- an unknown catalog would also 590,
+            # and the assertion below couldn't tell the two failures apart.
             try:
-                client.create_ticket(PostRequest(catalog_code="SAMPLE_CATALOG"))
+                client.create_ticket(PostRequest(catalog_code=catalog_code))
             except EasyvistaValidationError as exc:
                 assert exc.status_code == 590, f"expected 590, got {exc.status_code}"
             else:
                 raise AssertionError("expected EasyvistaValidationError, none raised")
 
-        r.check(
-            "create_ticket(missing title) -> EasyvistaValidationError(590)"
-            "  [Error handling]",
-            rejected_create,
-        )
+        if catalog_code:
+            r.check(
+                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "  [Error handling]",
+                rejected_create,
+            )
+        else:
+            r.skip(
+                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "  [Error handling]",
+                "no EASYVISTA_TEST_CATALOG_CODE"
+                " (or secrets/easyvista_test_catalog_code)",
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -857,7 +868,7 @@ def main() -> int:
             if args.writes:
                 r.skip("live writes tier", "no credentials")
         else:
-            run_live_readonly(r, config)
+            run_live_readonly(r, config, args.catalog_code)
             if args.writes:
                 missing = []
                 if not args.catalog_code:

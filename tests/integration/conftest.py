@@ -113,6 +113,24 @@ def sample_department_code(live_client: EasyvistaClient) -> str:
 
 
 @pytest.fixture(scope="session")
+def sample_catalog_code() -> str:
+    """A catalog code valid on the live instance.
+
+    Resolved at runtime, never hardcoded: a test that needs a *valid* catalog to
+    isolate a different failure cannot use a made-up one, and the real code must
+    not live in a tracked file.
+    """
+    value = _resolve(
+        ("EASYVISTA_TEST_CATALOG_CODE",), "easyvista_test_catalog_code"
+    )
+    if not value:
+        pytest.skip(
+            "needs EASYVISTA_TEST_CATALOG_CODE (or secrets/easyvista_test_catalog_code)"
+        )
+    return value
+
+
+@pytest.fixture(scope="session")
 def live_write_config() -> dict[str, str]:
     """Instance-specific fields needed to create and close probe tickets.
 
