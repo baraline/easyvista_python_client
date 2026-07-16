@@ -65,7 +65,7 @@ def test_search_tickets(config):
         )
     )
     with EasyvistaClient(config) as client:
-        result = client.search_tickets(search="STATUS_EN~Open", max_rows=10)
+        result = client.search_tickets(search='STATUS_ID:"3"', max_rows=10)
     assert result.total_record_count == 3
     assert result.records[0].rfc_number == "I1"
 
@@ -332,11 +332,11 @@ def test_count_tickets_returns_total_record_count(config):
         )
     )
     with EasyvistaClient(config) as client:
-        total = client.count_tickets(search="STATUS_EN~Open")
+        total = client.count_tickets(search='STATUS_ID:"3"')
     assert total == 42  # the full match count, not the page's record_count
     assert route.call_count == 1
     assert route.calls.last.request.url.params["max_rows"] == "1"
-    assert route.calls.last.request.url.params["search"] == "STATUS_EN~Open"
+    assert route.calls.last.request.url.params["search"] == 'STATUS_ID:"3"'
 
 
 def _stats_responder(request):

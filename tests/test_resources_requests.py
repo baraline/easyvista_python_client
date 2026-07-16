@@ -39,7 +39,7 @@ def test_build_get_ticket():
 
 def test_build_search_tickets_params():
     spec, parser = r.build_search_tickets(
-        search="STATUS_EN~Closed",
+        search='STATUS_ID:"3"',
         fields=["RFC_NUMBER", "HREF"],
         sort="RFC_NUMBER",
         max_rows=50,
@@ -47,7 +47,7 @@ def test_build_search_tickets_params():
     assert spec.method == "GET"
     assert spec.path == "requests"
     assert spec.params == {
-        "search": "STATUS_EN~Closed",
+        "search": 'STATUS_ID:"3"',
         "fields": "RFC_NUMBER,HREF",
         "sort": "RFC_NUMBER",
         "max_rows": 50,

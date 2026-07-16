@@ -59,7 +59,8 @@ variables, so credentials stay out of source. It reads, in order: ``EASYVISTA_UR
    from easyvista_python_client import EasyvistaClient, ev_equals_filter
 
    with EasyvistaClient.from_env() as client:
-       search = ev_equals_filter("STATUS_EN", "Open")
+       # Status ids are instance-specific -- read yours from a ticket's STATUS_ID.
+       search = ev_equals_filter("STATUS_ID", 3)
        results = client.search_tickets(search=search, max_rows=50)
 
 .. _sync-vs-async:
@@ -79,7 +80,7 @@ asynchronous client inside an event loop (FastAPI, aiohttp) or for concurrent fa
    async def main():
        async with AsyncEasyvistaClient(EasyvistaConfig.from_env()) as client:
            ticket = await client.get_ticket("I240101_0001")
-           search = ev_equals_filter("STATUS_EN", "Open")
+           search = ev_equals_filter("STATUS_ID", 3)
            async for t in client.iter_tickets(search=search, page_size=100):
                print(t.rfc_number)
 
@@ -240,6 +241,11 @@ The verified search grammar is:
    returns **every** record. And because ``,`` combines conditions, an unescaped value can silently
    widen a result set rather than fail. Build filters with the helpers, not f-strings:
 
+   A third outcome exists: a value whose **type** does not match the column raises
+   ``EasyvistaValidationError`` (HTTP 590) rather than being ignored — e.g.
+   ``ev_equals_filter("STATUS_ID", "Open")`` sends a status *name* to an integer column and fails
+   loudly. That is the friendlier failure; the silent ones above are the dangerous ones.
+
 .. code-block:: python
 
    from easyvista_python_client import ev_equals_filter, ev_in_filter
@@ -255,14 +261,22 @@ A value that cannot be expressed in the grammar raises ``ValueError``; use
 :func:`~easyvista_python_client.is_safe_ev_value` to check first when you would rather skip the
 filter than fail.
 
-Not every returned field is searchable: some (e.g. ``CATALOG_GUID``) are silently ignored as search
-conditions, so a filter on them matches everything. Verify a field filters before relying on it.
+Only **top-level scalar columns** are searchable. Two kinds of field are returned but are *not*
+searchable, and a filter naming one is silently ignored — so it matches **everything**:
+
+- the denormalized ``*_PATH`` display columns (``SD_CATALOG_PATH``, ``DEPARTMENT_PATH``): searching a
+  real ``SD_CATALOG_PATH`` value returns the whole table, while its ``SD_CATALOG_ID`` sibling filters
+  correctly;
+- the sub-keys of a nested reference object (``STATUS_FR``/``STATUS_EN``, ``STATUS_GUID`` inside
+  ``STATUS``): they are not top-level columns at all. Filter on the top-level ``STATUS_ID`` instead.
+
+Prefer the ``*_ID`` column, and verify a field filters before relying on it.
 
 .. code-block:: python
 
    from easyvista_python_client import ev_equals_filter
 
-   result = client.search_tickets(search=ev_equals_filter("STATUS_EN", "Open"), max_rows=50)
+   result = client.search_tickets(search=ev_equals_filter("STATUS_ID", 3), max_rows=50)
    print(result.record_count, "of", result.total_record_count)
    for ticket in result.records:
        print(ticket.rfc_number)
@@ -278,7 +292,7 @@ follow the API's offset pagination until ``@next`` is exhausted or ``max_records
 
    from easyvista_python_client import ev_equals_filter
 
-   status_open = ev_equals_filter("STATUS_EN", "Open")
+   status_open = ev_equals_filter("STATUS_ID", 3)
    for ticket in client.iter_tickets(search=status_open, page_size=100, max_records=1000):
        print(ticket.rfc_number)
 
@@ -294,7 +308,7 @@ The async client paginates with ``async for``:
    from easyvista_python_client import ev_equals_filter
 
    async for ticket in client.iter_tickets(
-       search=ev_equals_filter("STATUS_EN", "Open"), page_size=100
+       search=ev_equals_filter("STATUS_ID", 3), page_size=100
    ):
        print(ticket.rfc_number)
 
@@ -309,7 +323,7 @@ records).
 
    from easyvista_python_client import ev_equals_filter
 
-   open_count = client.count_tickets(search=ev_equals_filter("STATUS_EN", "Open"))
+   open_count = client.count_tickets(search=ev_equals_filter("STATUS_ID", 3))
 
 :meth:`~easyvista_python_client.EasyvistaClient.ticket_statistics` aggregates matching tickets into a
 :class:`~easyvista_python_client.TicketStatistics` — a ``total`` plus per-dimension ``breakdowns``
@@ -323,7 +337,7 @@ ones give human labels (``STATUS``, ``DEPARTMENT``, ``CATALOG_REQUEST``), and id
    from easyvista_python_client import ev_equals_filter
 
    stats = client.ticket_statistics(
-       search=ev_equals_filter("STATUS_EN", "Open"),
+       search=ev_equals_filter("STATUS_ID", 3),
        dimensions=["STATUS", "DEPARTMENT"],   # omit to compute the defaults
        created_since="2025-01-01T00:00:00+00:00",
    )

@@ -489,11 +489,11 @@ def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
     with EasyvistaClient(config) as client:
 
         def search_tickets() -> None:
-            res = client.search_tickets(search="STATUS_EN~Open", max_rows=5)
+            res = client.search_tickets(search='STATUS_ID:"3"', max_rows=5)
             assert isinstance(res.total_record_count, int)
             assert all(isinstance(x, Request) for x in res.records)
 
-        r.check("search_tickets(search='STATUS_EN~Open', max_rows=5)", search_tickets)
+        r.check('search_tickets(search=\'STATUS_ID:"3"\', max_rows=5)', search_tickets)
 
         # A sample RFC for the ticket sub-resource reads.
         sample_rfc = None
@@ -515,7 +515,7 @@ def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
         def iter_tickets() -> None:
             seen = 0
             for t in client.iter_tickets(
-                search="STATUS_EN~Open", page_size=50, max_records=3
+                search='STATUS_ID:"3"', page_size=50, max_records=3
             ):
                 assert isinstance(t, Request)
                 seen += 1
@@ -570,10 +570,10 @@ def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
             r.skip("get_ticket_context(<rfc>).to_markdown()", "no tickets on instance")
 
         def reporting() -> None:
-            total = client.count_tickets(search="STATUS_EN~Open")
+            total = client.count_tickets(search='STATUS_ID:"3"')
             assert isinstance(total, int) and total >= 0
             stats = client.ticket_statistics(
-                search="STATUS_EN~Open", dimensions=["STATUS"], max_records=5
+                search='STATUS_ID:"3"', dimensions=["STATUS"], max_records=5
             )
             assert isinstance(stats.total, int)
             # Every breakdown reconciles to the (possibly capped) total.
