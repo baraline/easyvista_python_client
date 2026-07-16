@@ -177,7 +177,15 @@ def test_request_declares_title_and_core_scalars():
     assert req.request_id == 4242  # str -> int coercion
     assert req.sd_catalog_id == 5791
     assert req.status_id == 3
+    assert req.urgency_id == 8
+    assert req.impact_id == 28
+    assert req.severity_id == 2
+    assert req.request_origin_id == 7
     assert req.department_id == 9
+    assert req.location_id == 11
+    assert req.requestor_id == 12
+    assert req.recipient_id == 13
+    assert req.owner_id == 14
     assert req.external_reference == "REF-1"
     assert req.submit_date_ut == "2026-01-01 09:00:00"
     assert req.last_update == "2026-01-02 10:30:00"
@@ -200,19 +208,38 @@ def test_request_has_no_catalog_guid_attribute():
 
 
 def test_request_keeps_undeclared_fields_as_extras():
-    """The deliberately-undeclared keys must survive, not be dropped."""
+    """The deliberately-undeclared keys must survive, not be dropped.
+
+    Round-tripping alone doesn't prove these stay *undeclared*:
+    ``model_dump(by_alias=True)`` emits the same output whether a key is a
+    real declared field or an ``extra="allow"`` extra. So this also asserts
+    each family is absent from ``Request.model_fields`` (keyed by python
+    field name, not alias — see ``test_request_has_no_catalog_guid_attribute``),
+    which is the actual binding constraint: none of these may ever be
+    promoted to a declared field.
+    """
     req = Request.model_validate(
         {
             "RFC_NUMBER": "I1",
             "SD_CATALOG_PATH": "Cat/Sub/Leaf",  # returned but unsearchable
+            "DEPARTMENT_PATH": "Dept/Sub",  # returned but unsearchable
+            "LOCATION_PATH": "Site/Building",  # returned but unsearchable
             "E_GTI_ID": "77",  # instance-custom
             "AVAILABLE_FIELD_1": "x",  # available slot
         }
     )
     dumped = req.model_dump(by_alias=True)
     assert dumped["SD_CATALOG_PATH"] == "Cat/Sub/Leaf"
+    assert dumped["DEPARTMENT_PATH"] == "Dept/Sub"
+    assert dumped["LOCATION_PATH"] == "Site/Building"
     assert dumped["E_GTI_ID"] == "77"
     assert dumped["AVAILABLE_FIELD_1"] == "x"
+
+    assert "sd_catalog_path" not in Request.model_fields
+    assert "department_path" not in Request.model_fields
+    assert "location_path" not in Request.model_fields
+    assert "e_gti_id" not in Request.model_fields
+    assert "available_field_1" not in Request.model_fields
 
 
 def test_request_title_absent_is_none_not_error():
