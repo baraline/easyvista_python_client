@@ -11,20 +11,66 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from .common import EasyvistaModel, EasyvistaWriteModel
+from .common import EasyvistaModel, EasyvistaWriteModel, OptionalInt
 
 
 class Request(EasyvistaModel):
-    """A ticket (incident/request) as returned by the API."""
+    """A ticket (incident/request) as returned by the API.
 
+    The declared fields are those verified present on live single-ticket GETs.
+    ``extra="allow"`` preserves everything else, including the deliberately
+    undeclared ones:
+
+    * ``*_PATH`` (``SD_CATALOG_PATH``, ``DEPARTMENT_PATH``, ``LOCATION_PATH``) —
+      returned and populated, but **silently ignored as search conditions**
+      (verified live: a real value returns the whole table while its ``*_ID``
+      sibling filters). Left undeclared so this model never invites filtering
+      on them.
+    * ``E_*`` — instance-specific custom fields; they belong in the custom
+      bucket of :meth:`~EasyvistaModel.classify_fields`, not here.
+    * ``AVAILABLE_FIELD_*`` — the API's spare slots.
+
+    ``TITLE`` is empty on tickets created through the portal/catalog on some
+    instances (the human summary lives in ``DESCRIPTION`` / the catalog path),
+    so ``title`` is legitimately ``None`` for those; it is populated for tickets
+    created through this client with ``PostRequest(title=...)``.
+    """
+
+    # identity
     rfc_number: str | None = Field(default=None, alias="RFC_NUMBER")
+    request_id: OptionalInt = Field(default=None, alias="REQUEST_ID")
     href: str | None = Field(default=None, alias="HREF")
-    status_id: int | None = Field(default=None, alias="STATUS_ID")
-    catalog_guid: str | None = Field(default=None, alias="CATALOG_GUID")
+
+    # content
+    title: str | None = Field(default=None, alias="TITLE")
     # The list view returns DESCRIPTION inline (a string); the single-ticket GET
     # expands it into an HREF reference object (``{"HREF": ".../description"}``).
     # Accept either so both read paths validate (spec open items O1/O4).
     description: str | dict[str, Any] | None = Field(default=None, alias="DESCRIPTION")
+    external_reference: str | None = Field(default=None, alias="EXTERNAL_REFERENCE")
+
+    # classification
+    sd_catalog_id: OptionalInt = Field(default=None, alias="SD_CATALOG_ID")
+    status_id: OptionalInt = Field(default=None, alias="STATUS_ID")
+    urgency_id: OptionalInt = Field(default=None, alias="URGENCY_ID")
+    impact_id: OptionalInt = Field(default=None, alias="IMPACT_ID")
+    severity_id: OptionalInt = Field(default=None, alias="SEVERITY_ID")
+    # Write-side ``PostRequest.origin`` reads back as REQUEST_ORIGIN_ID; ``ORIGIN``
+    # itself is not returned (spec open item O-ORIGIN).
+    request_origin_id: OptionalInt = Field(default=None, alias="REQUEST_ORIGIN_ID")
+
+    # parties and place
+    department_id: OptionalInt = Field(default=None, alias="DEPARTMENT_ID")
+    location_id: OptionalInt = Field(default=None, alias="LOCATION_ID")
+    requestor_id: OptionalInt = Field(default=None, alias="REQUESTOR_ID")
+    recipient_id: OptionalInt = Field(default=None, alias="RECIPIENT_ID")
+    owner_id: OptionalInt = Field(default=None, alias="OWNER_ID")
+
+    # timestamps — verified *returned*; their accepted format is NOT verified
+    # (both a string and an int probe return HTTP 590), so no datetime parsing
+    # is claimed here. See spec open item O-590-DATE.
+    submit_date_ut: str | None = Field(default=None, alias="SUBMIT_DATE_UT")
+    last_update: str | None = Field(default=None, alias="LAST_UPDATE")
 
     @model_validator(mode="after")
     def _derive_rfc_from_href(self) -> Request:

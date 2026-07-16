@@ -146,3 +146,75 @@ def test_post_request_custom_fields_get_e_prefix():
 def test_request_update_to_api_omits_none():
     update = RequestUpdate(status_id=5)
     assert update.to_api() == {"status_id": 5}
+
+
+def test_request_declares_title_and_core_scalars():
+    """A live-shaped single-ticket GET parses into typed attributes."""
+    req = Request.model_validate(
+        {
+            "RFC_NUMBER": "I240101_0001",
+            "REQUEST_ID": "4242",
+            "HREF": "https://ev.test/api/v1/00000/requests/4242",
+            "TITLE": "Printer down",
+            "DESCRIPTION": "The 3rd-floor printer is offline",
+            "EXTERNAL_REFERENCE": "REF-1",
+            "SD_CATALOG_ID": "5791",
+            "STATUS_ID": "3",
+            "URGENCY_ID": "8",
+            "IMPACT_ID": "28",
+            "SEVERITY_ID": "2",
+            "REQUEST_ORIGIN_ID": "7",
+            "DEPARTMENT_ID": "9",
+            "LOCATION_ID": "11",
+            "REQUESTOR_ID": "12",
+            "RECIPIENT_ID": "13",
+            "OWNER_ID": "14",
+            "SUBMIT_DATE_UT": "2026-01-01 09:00:00",
+            "LAST_UPDATE": "2026-01-02 10:30:00",
+        }
+    )
+    assert req.title == "Printer down"
+    assert req.request_id == 4242  # str -> int coercion
+    assert req.sd_catalog_id == 5791
+    assert req.status_id == 3
+    assert req.department_id == 9
+    assert req.external_reference == "REF-1"
+    assert req.submit_date_ut == "2026-01-01 09:00:00"
+    assert req.last_update == "2026-01-02 10:30:00"
+
+
+def test_request_coerces_empty_string_numerics_to_none():
+    """EasyVista returns "" for an absent numeric; a bare int|None would raise."""
+    req = Request.model_validate(
+        {"RFC_NUMBER": "I1", "STATUS_ID": "", "DEPARTMENT_ID": "", "OWNER_ID": ""}
+    )
+    assert req.status_id is None
+    assert req.department_id is None
+    assert req.owner_id is None
+
+
+def test_request_has_no_catalog_guid_attribute():
+    """CATALOG_GUID is not a field on requests: 0/25 live GETs, absent from the
+    vendor docs. Declaring it promised an attribute that could never populate."""
+    assert "catalog_guid" not in Request.model_fields
+
+
+def test_request_keeps_undeclared_fields_as_extras():
+    """The deliberately-undeclared keys must survive, not be dropped."""
+    req = Request.model_validate(
+        {
+            "RFC_NUMBER": "I1",
+            "SD_CATALOG_PATH": "Cat/Sub/Leaf",  # returned but unsearchable
+            "E_GTI_ID": "77",  # instance-custom
+            "AVAILABLE_FIELD_1": "x",  # available slot
+        }
+    )
+    dumped = req.model_dump(by_alias=True)
+    assert dumped["SD_CATALOG_PATH"] == "Cat/Sub/Leaf"
+    assert dumped["E_GTI_ID"] == "77"
+    assert dumped["AVAILABLE_FIELD_1"] == "x"
+
+
+def test_request_title_absent_is_none_not_error():
+    """Portal-created tickets carry no TITLE; that must parse, not raise."""
+    assert Request.model_validate({"RFC_NUMBER": "I1"}).title is None
