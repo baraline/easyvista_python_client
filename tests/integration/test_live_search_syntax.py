@@ -12,7 +12,14 @@ What the live probes established (full tables in ``task-1-report.md``):
   with nothing left to apply returns **every** row. This happens for
   structurally unparseable input (bare SQL-ish ``DEPARTMENT_FR LIKE "%TECH%"``,
   an unknown field, bare garbage) *and* for a well-formed condition on a field
-  that simply is not searchable (``CATALOG_GUID`` on ``requests``).
+  that is returned but not searchable — the ``*_PATH`` display columns
+  (``SD_CATALOG_PATH``, ``DEPARTMENT_PATH``) and the sub-keys of a nested
+  reference object (``STATUS_FR``, ``STATUS_GUID``).
+  ``CATALOG_GUID`` is **not** an example of this: it is not returned at all and
+  is merely an unknown field.
+* **A type mismatch is a hard error, not an ignore.** A non-int value on an int
+  column raises ``EasyvistaValidationError`` (HTTP 590). So a condition has
+  three possible fates: honoured, silently dropped, or rejected outright.
 * **A broken quote does NOT return the table.** ``DEPARTMENT_CODE:"X""`` still
   parses as a field expression; the value just swallows the junk and matches
   nothing, so it returns 0. The danger is real but it is *not* this shape.
@@ -47,10 +54,6 @@ import pytest
 from easyvista_python_client import EasyvistaClient, EasyvistaError
 
 pytestmark = pytest.mark.integration
-
-# A syntactically valid GUID that matches no record — the spec's synthetic
-# convention. On a searchable field it yields 0; on an ignored one, everything.
-_BOGUS_GUID = "00000000-0000-0000-0000-000000000000"
 
 
 def _count(client: EasyvistaClient, search: str | None = None) -> int:
@@ -119,17 +122,21 @@ def requests_baseline(live_client: EasyvistaClient) -> int:
 
 
 @pytest.fixture(scope="session")
-def catalog_guid_is_unsearchable(
-    live_client: EasyvistaClient, requests_baseline: int
-) -> None:
-    """Skip unless ``CATALOG_GUID`` is still a silently-ignored field here.
+def ticket_with_catalog(live_client: EasyvistaClient) -> dict:
+    """A live ticket row carrying both SD_CATALOG_PATH and SD_CATALOG_ID.
 
-    A precondition, not an assertion: it lets the per-condition test below stay
-    meaningful on an instance where this particular field became searchable.
+    The single-ticket GET is required: the default list projection returns
+    neither field.
     """
-    got = _count_tickets(live_client, f'CATALOG_GUID:"{_BOGUS_GUID}"')
-    if got != requests_baseline:
-        pytest.skip("CATALOG_GUID is searchable here; no ignored field to compose with")
+    listed = live_client.search_tickets(max_rows=5)
+    for row in listed.records:
+        rfc = row.rfc_number
+        if not rfc:
+            continue
+        full = live_client.get_ticket(rfc).model_dump(by_alias=True)
+        if full.get("SD_CATALOG_PATH") and full.get("SD_CATALOG_ID"):
+            return full
+    pytest.skip("no sampled ticket carries both SD_CATALOG_PATH and SD_CATALOG_ID")
 
 
 @pytest.fixture(scope="session")
@@ -439,52 +446,122 @@ def test_semicolon_is_not_a_combinator_on_requests(live_client, two_tickets):
     assert got == 0
 
 
-def test_a_returned_field_is_not_necessarily_searchable(live_client, requests_baseline):
-    """``CATALOG_GUID`` is modelled and returned, but searching it is ignored.
+def test_a_returned_field_is_not_necessarily_searchable(
+    live_client, ticket_with_catalog, requests_baseline
+):
+    """``SD_CATALOG_PATH`` is returned and populated, but searching it is ignored.
 
     The nastiest shape of the silent-ignore trap, and one no amount of escaping
-    can fix: the filter is perfectly well-formed, the field is real and comes
-    back on every record, yet the condition is dropped and the caller gets the
-    whole table.
+    can fix: the filter is well-formed, the field is real and comes back on every
+    ticket, and the server still drops the condition and returns everything.
 
-    Deliberately **not** guarded by a skip: this asserts a property of the API,
-    not of this instance's data, so if an EasyVista version or configuration
-    makes ``CATALOG_GUID`` searchable, this test *should* fail and tell us the
-    fact changed. Skipping on "the assertion no longer holds" would make the
-    test vacuous. The contrast against ``RFC_NUMBER`` is what pins it down: a
-    bogus value on a *searchable* field returns 0, on an ignored field the
-    whole table.
+    Three assertions are needed, and each kills a different rival explanation:
+
+    1. the field is **returned** on this very ticket -> it is not an unknown field;
+    2. the searched value is **read off that ticket**, so it demonstrably exists
+       -> ``== baseline`` cannot mean "matches nothing";
+    3. the ``*_ID`` sibling from the same ticket **filters** -> ``== baseline``
+       cannot mean "this ticket set is unfilterable".
+
+    The version of this test that used ``CATALOG_GUID`` had only a bogus value on
+    a field that does not exist, so its single assertion had two causes and it
+    proved nothing. Do not weaken this back into that shape.
     """
     baseline = requests_baseline
-    bogus_on_ignored = _count_tickets(live_client, f'CATALOG_GUID:"{_BOGUS_GUID}"')
-    bogus_on_searchable = _count_tickets(live_client, 'RFC_NUMBER:"EVCLI-NO-SUCH"')
+    path_value = ticket_with_catalog["SD_CATALOG_PATH"]
+    id_value = ticket_with_catalog["SD_CATALOG_ID"]
 
-    assert bogus_on_searchable == 0  # RFC_NUMBER really is searchable
-    assert bogus_on_ignored == baseline  # CATALOG_GUID really is not
-    assert bogus_on_ignored > bogus_on_searchable
+    # 1. returned on this ticket (the fixture guarantees it; assert it anyway --
+    #    it is the premise the whole test rests on).
+    assert path_value
+
+    # 2. a real, existing value on the path column -> whole table.
+    assert _count_tickets(live_client, f'SD_CATALOG_PATH:"{path_value}"') == baseline
+
+    # 3. the sibling id, same ticket, really filters.
+    by_id = _count_tickets(live_client, f'SD_CATALOG_ID:"{id_value}"')
+    assert 0 < by_id < baseline
 
 
-def test_silent_ignore_is_per_condition_not_all_or_nothing(
-    live_client, two_tickets, catalog_guid_is_unsearchable
+def test_a_nested_reference_subkey_is_not_searchable(
+    live_client, ticket_with_catalog, requests_baseline
+):
+    """``STATUS_FR``/``STATUS_EN`` live *inside* the nested STATUS object, so they
+    are not top-level columns and a filter naming one is silently ignored.
+
+    This is the test that would have caught the ``STATUS_EN`` example shipped in
+    the README. It reads whichever language sub-key the instance populates rather
+    than hardcoding one, so it is reproducible on an English instance too.
+    """
+    status = ticket_with_catalog.get("STATUS")
+    if not isinstance(status, dict):
+        pytest.skip("sampled ticket has no nested STATUS object")
+
+    # Capture the sub-key and its value together: picking the key afterwards by
+    # matching on the value would pair the wrong key when two sub-keys share a
+    # value. `key` is whatever this instance populates (STATUS_FR here).
+    pair = next(
+        (
+            (k, v)
+            for k, v in status.items()
+            if k.upper().startswith("STATUS_")
+            and k.upper() not in {"STATUS_ID", "STATUS_GUID"}
+            and isinstance(v, str)
+            and v.strip()
+        ),
+        None,
+    )
+    status_id = ticket_with_catalog.get("STATUS_ID") or status.get("STATUS_ID")
+    if pair is None or not status_id:
+        pytest.skip("sampled ticket has no populated STATUS label + STATUS_ID pair")
+    key, label = pair
+
+    # A real label, off this very ticket, on the nested sub-key -> whole table.
+    assert _count_tickets(live_client, f'{key}:"{label}"') == requests_baseline
+    # ...while the top-level id from the same ticket filters.
+    by_id = _count_tickets(live_client, f'STATUS_ID:"{status_id}"')
+    assert 0 < by_id < requests_baseline
+
+
+def test_catalog_guid_is_indistinguishable_from_an_unknown_field(
+    live_client, requests_baseline
+):
+    """Pins the corrected belief so it cannot be re-derived wrongly.
+
+    ``CATALOG_GUID`` was long documented as "returned but unsearchable". It is
+    not returned at all (0/25 live single-ticket GETs) -- it is simply not a field
+    on ``requests``, and behaves exactly like a typo. Asserting the *equality*
+    with an unknown field is what distinguishes the two hypotheses.
+    """
+    bogus_guid = "{00000000-0000-0000-0000-000000000000}"
+    as_guid = _count_tickets(live_client, f'CATALOG_GUID:"{bogus_guid}"')
+    as_unknown = _count_tickets(live_client, 'NO_SUCH_FIELD_XYZ:"x"')
+    assert as_guid == as_unknown == requests_baseline
+
+
+def test_an_ignored_condition_is_dropped_per_condition(
+    live_client, two_tickets, ticket_with_catalog, requests_baseline
 ):
     """An ignored condition is dropped; the surviving conditions still apply.
 
-    ``RFC_NUMBER:"<real>",CATALOG_GUID:"<bogus>"`` returns the one ticket: the
+    ``RFC_NUMBER:"<real>",SD_CATALOG_PATH:"<real>"`` returns the one ticket: the
     unsearchable half evaporates rather than poisoning the whole query. Without
     this, "silently ignored" could have meant the *entire* search was discarded.
 
-    The fixture guard is meaningful here (unlike on the test above): the
-    precondition "CATALOG_GUID is unsearchable" is a *different* proposition
-    from the assertion "the ignore is per-condition", so skipping when the
-    precondition fails leaves a real assertion behind.
+    Uses ``SD_CATALOG_PATH`` -- a field proven returned-but-ignored with a real
+    value -- rather than the old ``CATALOG_GUID``, which was merely unknown.
     """
     rfc = two_tickets[0]["RFC_NUMBER"]
+    path_value = ticket_with_catalog["SD_CATALOG_PATH"]
+
     one = _count_tickets(live_client, f'RFC_NUMBER:"{rfc}"')
-    assert one > 0
+    assert one == 1  # RFC_NUMBER is unique; a weaker `> 0` would hide a widened query
+
     combined = _count_tickets(
-        live_client, f'RFC_NUMBER:"{rfc}",CATALOG_GUID:"{_BOGUS_GUID}"'
+        live_client, f'RFC_NUMBER:"{rfc}",SD_CATALOG_PATH:"{path_value}"'
     )
     assert combined == one
+    assert combined < requests_baseline  # the surviving condition really applied
 
 
 # --- Phase B: no escape for an embedded `"` exists --------------------------
@@ -538,3 +615,26 @@ def test_embedded_quote_cannot_be_escaped(live_client, probe_tickets):
         f'TITLE:"EVCLI{nonce}B 22"" monitor"',
     ):
         assert _count_tickets(live_client, search) == 0
+
+
+# --- a third fate: a hard type-mismatch error -------------------------------
+
+
+def test_type_mismatch_on_an_int_column_raises_rather_than_being_ignored(
+    live_client, requests_baseline
+):
+    """The search grammar's **third** outcome: a hard error.
+
+    A non-int value on an int column fails the server-side SQL conversion and
+    surfaces as EasyvistaValidationError (HTTP 590) -- it is neither matched nor
+    silently ignored. The int-valued half of the pair is what makes this
+    meaningful: it proves the column is fine and the *type* is what was rejected.
+    """
+    with pytest.raises(EasyvistaError):
+        _count_tickets(live_client, 'STATUS_ID:"ZZ-NOT-AN-INT"')
+
+    # Same column, type-correct bogus value -> honest 0, no error. This is the
+    # half that makes the raise meaningful: it proves the column works and the
+    # *type* was what got rejected. `== 0` also rules out a silent ignore, since
+    # requests_baseline is >= 2 by that fixture's own guard.
+    assert _count_tickets(live_client, 'STATUS_ID:"999999999"') == 0
