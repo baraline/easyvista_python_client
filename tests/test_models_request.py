@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from easyvista_python_client.models.common import EasyvistaModel
 from easyvista_python_client.models.request import PostRequest, Request, RequestUpdate
 from easyvista_python_client.pagination import (
@@ -99,13 +102,17 @@ def test_request_reads_aliased_fields():
 
 
 def test_post_request_to_api_uses_known_fields():
-    payload = PostRequest(catalog_guid="GUID1", catalog_code="CODE1", description="hi")
+    payload = PostRequest(catalog_code="CODE1", title="T", description="hi")
     body = payload.to_api()
-    assert body == {
-        "catalog_guid": "GUID1",
-        "catalog_code": "CODE1",
-        "description": "hi",
-    }
+    assert body == {"catalog_code": "CODE1", "title": "T", "description": "hi"}
+
+
+def test_post_request_rejects_catalog_guid():
+    """catalog_guid is not a verified create field and cannot be verified on the
+    probe profile (GET /catalog-requests is 403). extra="forbid" now rejects it
+    rather than silently sending a field the server may ignore."""
+    with pytest.raises(ValidationError):
+        PostRequest(catalog_code="CODE1", catalog_guid="GUID1")
 
 
 def test_post_request_to_api_includes_documented_create_fields():

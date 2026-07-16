@@ -46,14 +46,15 @@ def test_id_only_reference_from_top_level_id():
     assert ref.display == "1"
 
 
-def test_catalog_id_from_nested_sd_catalog_id_when_top_level_guid_null():
+def test_catalog_id_falls_back_to_nested_sd_catalog_id():
+    """No CATALOG_REQUEST_ID/_GUID at top level or nested, so the resolver falls
+    back to the first *_ID sub-key."""
     rec = {
         "CATALOG_REQUEST": {
             "TITLE_FR": "Cat",
             "SD_CATALOG_ID": "5791",
             "HREF": "http://x",
         },
-        "CATALOG_GUID": None,
     }
     ref = resolve_reference(rec, "CATALOG_REQUEST")
     assert ref.label == "Cat"

@@ -100,9 +100,13 @@ class PostRequest(EasyvistaWriteModel):
     surfaces as :class:`EasyvistaValidationError` (HTTP 590, code 2013), not a
     retried server error. ``custom_fields`` values are serialized with an ``e_``
     prefix unless they already start with ``e_`` (see :class:`EasyvistaWriteModel`).
+
+    ``catalog_code`` is the only verified way to name a catalog here. An earlier
+    ``catalog_guid`` field was removed: it is absent from the documented create
+    body, and it cannot be verified on a profile where ``GET /catalog-requests``
+    returns 403 (no way to obtain a real catalog GUID).
     """
 
-    catalog_guid: str | None = None
     catalog_code: str | None = None
     title: str | None = None
     description: str | None = None
