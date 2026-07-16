@@ -239,12 +239,14 @@ The verified search grammar is:
 
    EasyVista does **not** reject a ``search`` expression it cannot parse — it ignores the filter and
    returns **every** record. And because ``,`` combines conditions, an unescaped value can silently
-   widen a result set rather than fail. Build filters with the helpers, not f-strings:
+   widen a result set rather than fail.
 
    A third outcome exists: a value whose **type** does not match the column raises
    ``EasyvistaValidationError`` (HTTP 590) rather than being ignored — e.g.
    ``ev_equals_filter("STATUS_ID", "Open")`` sends a status *name* to an integer column and fails
    loudly. That is the friendlier failure; the silent ones above are the dangerous ones.
+
+   Build filters with the helpers, not f-strings:
 
 .. code-block:: python
 
