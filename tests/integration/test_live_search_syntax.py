@@ -51,7 +51,11 @@ from __future__ import annotations
 
 import pytest
 
-from easyvista_python_client import EasyvistaClient, EasyvistaError
+from easyvista_python_client import (
+    EasyvistaClient,
+    EasyvistaError,
+    EasyvistaValidationError,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -137,6 +141,39 @@ def ticket_with_catalog(live_client: EasyvistaClient) -> dict:
         if full.get("SD_CATALOG_PATH") and full.get("SD_CATALOG_ID"):
             return full
     pytest.skip("no sampled ticket carries both SD_CATALOG_PATH and SD_CATALOG_ID")
+
+
+@pytest.fixture(scope="session")
+def ticket_with_other_catalog(
+    live_client: EasyvistaClient, ticket_with_catalog: dict
+) -> dict:
+    """A live ticket row whose catalog path differs from ``ticket_with_catalog``'s.
+
+    ``two_tickets`` (max_rows=2) and ``ticket_with_catalog`` (max_rows=5, first
+    qualifying row) tend to resolve to the *same* underlying ticket under
+    stable default ordering. Pairing an RFC with its own catalog path would
+    leave ``test_an_ignored_condition_is_dropped_per_condition`` unable to tell
+    "the condition was dropped" apart from "the condition was honoured and
+    self-matched". A path proven to come from a *different* catalog closes
+    that gap: only a dropped condition can explain a match then.
+    """
+    own_path = ticket_with_catalog["SD_CATALOG_PATH"]
+    for offset in (0, 25, 50, 75):
+        page = live_client.search_tickets(max_rows=25, offset=offset)
+        if not page.records:
+            break
+        for row in page.records:
+            rfc = row.rfc_number
+            if not rfc:
+                continue
+            full = live_client.get_ticket(rfc).model_dump(by_alias=True)
+            path = full.get("SD_CATALOG_PATH")
+            if path and path != own_path:
+                return full
+    pytest.skip(
+        "no sampled ticket carries a SD_CATALOG_PATH different from "
+        "ticket_with_catalog's -- cannot rule out self-match"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -540,25 +577,36 @@ def test_catalog_guid_is_indistinguishable_from_an_unknown_field(
 
 
 def test_an_ignored_condition_is_dropped_per_condition(
-    live_client, two_tickets, ticket_with_catalog, requests_baseline
+    live_client, two_tickets, ticket_with_other_catalog, requests_baseline
 ):
     """An ignored condition is dropped; the surviving conditions still apply.
 
-    ``RFC_NUMBER:"<real>",SD_CATALOG_PATH:"<real>"`` returns the one ticket: the
-    unsearchable half evaporates rather than poisoning the whole query. Without
-    this, "silently ignored" could have meant the *entire* search was discarded.
+    ``RFC_NUMBER:"<real>",SD_CATALOG_PATH:"<a *different* ticket's real path>"``
+    returns the one ticket: the unsearchable half evaporates rather than
+    poisoning the whole query. Without this, "silently ignored" could have
+    meant the *entire* search was discarded.
+
+    The path comes from ``ticket_with_other_catalog`` -- a ticket in a
+    demonstrably *different* catalog than the RFC's own ticket -- rather than
+    from ``ticket_with_catalog`` directly. ``two_tickets`` and
+    ``ticket_with_catalog`` tend to resolve to the same underlying row under
+    stable default ordering, so pairing the RFC with *its own* catalog path
+    would leave ``combined == 1`` ambiguous between "the condition was
+    dropped" and "the condition was honoured and self-matched". With two
+    proven-distinct catalogs, an honoured AND across them could only return 0,
+    so ``combined == 1`` can only mean the condition was dropped.
 
     Uses ``SD_CATALOG_PATH`` -- a field proven returned-but-ignored with a real
     value -- rather than the old ``CATALOG_GUID``, which was merely unknown.
     """
     rfc = two_tickets[0]["RFC_NUMBER"]
-    path_value = ticket_with_catalog["SD_CATALOG_PATH"]
+    other_path_value = ticket_with_other_catalog["SD_CATALOG_PATH"]
 
     one = _count_tickets(live_client, f'RFC_NUMBER:"{rfc}"')
     assert one == 1  # RFC_NUMBER is unique; a weaker `> 0` would hide a widened query
 
     combined = _count_tickets(
-        live_client, f'RFC_NUMBER:"{rfc}",SD_CATALOG_PATH:"{path_value}"'
+        live_client, f'RFC_NUMBER:"{rfc}",SD_CATALOG_PATH:"{other_path_value}"'
     )
     assert combined == one
     assert combined < requests_baseline  # the surviving condition really applied
@@ -630,8 +678,9 @@ def test_type_mismatch_on_an_int_column_raises_rather_than_being_ignored(
     silently ignored. The int-valued half of the pair is what makes this
     meaningful: it proves the column is fine and the *type* is what was rejected.
     """
-    with pytest.raises(EasyvistaError):
+    with pytest.raises(EasyvistaValidationError) as excinfo:
         _count_tickets(live_client, 'STATUS_ID:"ZZ-NOT-AN-INT"')
+    assert excinfo.value.status_code == 590
 
     # Same column, type-correct bogus value -> honest 0, no error. This is the
     # half that makes the raise meaningful: it proves the column works and the
