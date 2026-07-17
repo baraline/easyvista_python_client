@@ -40,7 +40,7 @@ Nothing is closed automatically. When you are done inspecting, close the ticket:
 
     python scripts/validate_live_content_fidelity.py --close I260713_00001
 
-Credentials resolve like ``tests/integration/conftest.py`` but **test-only**::
+Credentials resolve like ``integration_tests/conftest.py`` but **test-only**::
 
     url    <- EASYVISTA_TEST_URL   | secrets/easyvista_test_url
     user   <- EASYVISTA_TEST_USER  | secrets/easyvista_test_user   (account fallback)
@@ -796,7 +796,7 @@ def main() -> int:
         return 2
 
     # These are per-instance and must not be hardcoded (see
-    # tests/integration/conftest.py's live_write_config): fail clearly instead of
+    # integration_tests/conftest.py's live_write_config): fail clearly instead of
     # silently falling back to a baked-in value.
     if args.close:
         if not args.status_guid:

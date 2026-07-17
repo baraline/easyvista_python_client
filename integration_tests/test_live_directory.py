@@ -1,7 +1,8 @@
 """Live, read-only smoke tests for the directory endpoints.
 
-Opt-in (``--run-integration``). Reads only — never writes (writes are provisional
-and profile-gated). NEVER point at production.
+Skipped automatically unless credentials are configured; never runs in CI. Reads
+only — never writes (directory writes are provisional and profile-gated). NEVER
+point at production.
 """
 
 from __future__ import annotations

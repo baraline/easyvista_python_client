@@ -1,5 +1,16 @@
 """Fixtures for live integration tests.
 
+These tests call a real EasyVista instance, so they live outside ``tests/`` and
+are **never run in CI** — CI runs ``pytest -m "not integration"``. You supply your
+own instance: every test here skips cleanly when credentials are absent, so a
+checkout with no ``secrets/`` and no ``EASYVISTA_TEST_*`` environment simply skips
+the suite rather than failing it.
+
+They are not read-only. The ``probe_tickets`` fixture creates two tickets and
+closes both in teardown; ``test_live_smoke`` additionally issues one create that
+the server is *expected to reject*, so no ticket persists from it. Point them at
+a preprod/test instance, never production.
+
 Credentials resolve from an uppercase env var first, then a lowercase file under
 ``secrets/``:
 
@@ -27,8 +38,8 @@ import pytest
 
 from easyvista_python_client import EasyvistaClient, EasyvistaConfig
 
-# secrets/ lives at the repo root: tests/integration/conftest.py -> parents[2].
-_SECRETS_DIR = Path(__file__).resolve().parents[2] / "secrets"
+# secrets/ lives at the repo root: integration_tests/conftest.py -> parents[1].
+_SECRETS_DIR = Path(__file__).resolve().parents[1] / "secrets"
 
 
 def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:

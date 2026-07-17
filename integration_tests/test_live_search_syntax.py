@@ -44,7 +44,7 @@ tickets on the live instance and unconditionally closes both in teardown (see
 ``live_write_config`` / ``probe_tickets`` in ``conftest.py``). That fixture
 additionally skips unless the instance-specific write config is present.
 
-Opt in with ``--run-integration``; skipped without credentials.
+Skipped automatically without credentials; never runs in CI.
 """
 
 from __future__ import annotations
