@@ -573,15 +573,32 @@ def test_a_nested_reference_subkey_is_not_searchable(
 
 
 def test_catalog_guid_is_indistinguishable_from_an_unknown_field(
-    live_client, requests_baseline
+    live_client, requests_baseline, ticket_with_catalog
 ):
     """Pins the corrected belief so it cannot be re-derived wrongly.
 
     ``CATALOG_GUID`` was long documented as "returned but unsearchable". It is
-    not returned at all (0/25 live single-ticket GETs) -- it is simply not a field
-    on ``requests``, and behaves exactly like a typo. Asserting the *equality*
-    with an unknown field is what distinguishes the two hypotheses.
+    not returned at all (0/25 live single-ticket GETs) -- it is simply not a
+    field on ``requests``, and behaves exactly like a typo.
+
+    Two assertions, and only one of them can actually pin that claim:
+
+    1. **Presence** -- ``CATALOG_GUID`` is absent from ``ticket_with_catalog``,
+       a full single-ticket GET. This is the assertion that establishes "not
+       returned at all". Search cannot do this: ``SD_CATALOG_PATH`` is proven
+       *returned* elsewhere in this file
+       (``test_a_returned_field_is_not_necessarily_searchable``), yet searching
+       it *also* returns the whole table. So the equality below, on its own, is
+       search-indistinguishable between "not returned" and "returned but
+       unsearchable" -- both fates silently drop the condition. It does not
+       distinguish the two hypotheses; only reading the GET payload does.
+    2. **Count equality** -- documents the resulting *behaviour*: an unknown
+       field behaves exactly like a typo'd field name, i.e. searching it
+       returns the same whole-table count as a condition on a field guaranteed
+       not to exist.
     """
+    assert "CATALOG_GUID" not in ticket_with_catalog
+
     bogus_guid = "{00000000-0000-0000-0000-000000000000}"
     as_guid = _count_tickets(live_client, f'CATALOG_GUID:"{bogus_guid}"')
     as_unknown = _count_tickets(live_client, 'NO_SUCH_FIELD_XYZ:"x"')

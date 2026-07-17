@@ -1,8 +1,10 @@
 """Models for the EasyVista ``requests`` resource (tickets).
 
-Field sets are the documented/common SD_REQUEST fields; ``extra="allow"`` on the
-read model preserves any others. Revisit exact fields against a live instance
-(spec open item O1).
+``Request``'s declared fields are those verified present on live single-ticket
+GETs (see its class docstring for exactly which, and which are deliberately
+left undeclared); ``extra="allow"`` preserves everything else. ``PostRequest``
+and ``RequestUpdate`` field sets follow the documented create/update bodies
+(see their own docstrings).
 """
 
 from __future__ import annotations
@@ -21,11 +23,13 @@ class Request(EasyvistaModel):
     ``extra="allow"`` preserves everything else, including the deliberately
     undeclared ones:
 
-    * ``*_PATH`` (``SD_CATALOG_PATH``, ``DEPARTMENT_PATH``, ``LOCATION_PATH``) —
-      returned and populated, but **silently ignored as search conditions**
-      (verified live: a real value returns the whole table while its ``*_ID``
-      sibling filters). Left undeclared so this model never invites filtering
-      on them.
+    * ``*_PATH`` (``SD_CATALOG_PATH``, ``DEPARTMENT_PATH``) — verified live:
+      returned and populated, but **silently ignored as search conditions** (a
+      real value returns the whole table while its ``*_ID`` sibling filters).
+      ``LOCATION_PATH`` is *presumed* to behave the same by family resemblance
+      only — no sampled ticket carried both ``LOCATION_PATH`` and
+      ``LOCATION_ID``, so it was never actually tested. Left undeclared so this
+      model never invites filtering on any of them.
     * ``E_*`` — instance-specific custom fields; they belong in the custom
       bucket of :meth:`~EasyvistaModel.classify_fields`, not here.
     * ``AVAILABLE_FIELD_*`` — the API's spare slots.
@@ -45,7 +49,8 @@ class Request(EasyvistaModel):
     title: str | None = Field(default=None, alias="TITLE")
     # The list view returns DESCRIPTION inline (a string); the single-ticket GET
     # expands it into an HREF reference object (``{"HREF": ".../description"}``).
-    # Accept either so both read paths validate (spec open items O1/O4).
+    # Accept either so both read paths validate. Whether the resolved text is
+    # HTML or plain text is still unverified (spec open item O4).
     description: str | dict[str, Any] | None = Field(default=None, alias="DESCRIPTION")
     external_reference: str | None = Field(default=None, alias="EXTERNAL_REFERENCE")
 
