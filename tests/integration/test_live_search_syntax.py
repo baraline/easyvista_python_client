@@ -145,19 +145,31 @@ def ticket_with_catalog(live_client: EasyvistaClient) -> dict:
 
 @pytest.fixture(scope="session")
 def ticket_with_other_catalog(
-    live_client: EasyvistaClient, ticket_with_catalog: dict
+    live_client: EasyvistaClient, two_tickets: tuple[dict, dict]
 ) -> dict:
-    """A live ticket row whose catalog path differs from ``ticket_with_catalog``'s.
+    """A live ticket row whose catalog path differs from ``two_tickets[0]``'s own.
 
-    ``two_tickets`` (max_rows=2) and ``ticket_with_catalog`` (max_rows=5, first
-    qualifying row) tend to resolve to the *same* underlying ticket under
-    stable default ordering. Pairing an RFC with its own catalog path would
-    leave ``test_an_ignored_condition_is_dropped_per_condition`` unable to tell
-    "the condition was dropped" apart from "the condition was honoured and
-    self-matched". A path proven to come from a *different* catalog closes
-    that gap: only a dropped condition can explain a match then.
+    Anchored directly to the ticket that
+    ``test_an_ignored_condition_is_dropped_per_condition`` actually pairs it
+    with -- resolved here via the single-ticket GET, since the list
+    projection ``two_tickets`` reads from carries no ``SD_CATALOG_PATH`` at
+    all -- rather than to an untethered proxy such as ``ticket_with_catalog``,
+    which only *coincidentally* tends to resolve to the same underlying row
+    as ``two_tickets[0]`` under stable default ordering. Pairing the RFC with
+    its own catalog path would leave that test unable to tell "the condition
+    was dropped" apart from "the condition was honoured and self-matched". A
+    path proven to differ from *this exact ticket's* own catalog closes that
+    gap structurally, no matter what any other fixture happens to pick: only
+    a dropped condition can then explain a match.
     """
-    own_path = ticket_with_catalog["SD_CATALOG_PATH"]
+    own_rfc = two_tickets[0]["RFC_NUMBER"]
+    own_full = live_client.get_ticket(own_rfc).model_dump(by_alias=True)
+    own_path = own_full.get("SD_CATALOG_PATH")
+    if not own_path:
+        pytest.skip(
+            "two_tickets[0]'s own ticket has no SD_CATALOG_PATH -- cannot "
+            "prove distinctness against it"
+        )
     for offset in (0, 25, 50, 75):
         page = live_client.search_tickets(max_rows=25, offset=offset)
         if not page.records:
@@ -172,7 +184,7 @@ def ticket_with_other_catalog(
                 return full
     pytest.skip(
         "no sampled ticket carries a SD_CATALOG_PATH different from "
-        "ticket_with_catalog's -- cannot rule out self-match"
+        "two_tickets[0]'s own ticket -- cannot rule out self-match"
     )
 
 
@@ -586,15 +598,17 @@ def test_an_ignored_condition_is_dropped_per_condition(
     poisoning the whole query. Without this, "silently ignored" could have
     meant the *entire* search was discarded.
 
-    The path comes from ``ticket_with_other_catalog`` -- a ticket in a
-    demonstrably *different* catalog than the RFC's own ticket -- rather than
-    from ``ticket_with_catalog`` directly. ``two_tickets`` and
-    ``ticket_with_catalog`` tend to resolve to the same underlying row under
-    stable default ordering, so pairing the RFC with *its own* catalog path
-    would leave ``combined == 1`` ambiguous between "the condition was
-    dropped" and "the condition was honoured and self-matched". With two
-    proven-distinct catalogs, an honoured AND across them could only return 0,
-    so ``combined == 1`` can only mean the condition was dropped.
+    The path comes from ``ticket_with_other_catalog``, which resolves
+    ``two_tickets[0]``'s own ticket via the single-ticket GET and searches for
+    a ticket whose ``SD_CATALOG_PATH`` demonstrably differs from *that exact
+    ticket's* own path -- not from some other fixture's unrelated pick.
+    Pairing the RFC with its own catalog path would leave ``combined == 1``
+    ambiguous between "the condition was dropped" and "the condition was
+    honoured and self-matched". With a catalog path proven distinct from this
+    exact ticket, an honoured AND across them could only return 0, so
+    ``combined == 1`` can only mean the condition was dropped -- a guarantee
+    that holds structurally, regardless of which ticket any other fixture
+    happens to pick.
 
     Uses ``SD_CATALOG_PATH`` -- a field proven returned-but-ignored with a real
     value -- rather than the old ``CATALOG_GUID``, which was merely unknown.
