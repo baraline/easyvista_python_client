@@ -230,7 +230,9 @@ def test_request_keeps_undeclared_fields_as_extras():
             "RFC_NUMBER": "I1",
             "SD_CATALOG_PATH": "Cat/Sub/Leaf",  # returned but unsearchable
             "DEPARTMENT_PATH": "Dept/Sub",  # returned but unsearchable
-            "LOCATION_PATH": "Site/Building",  # returned but unsearchable
+            # LOCATION_PATH: returned; unsearchable presumed by family
+            # resemblance to the two above, never tested (spec O-PATH-SCOPE).
+            "LOCATION_PATH": "Site/Building",
             "E_GTI_ID": "77",  # instance-custom
             "AVAILABLE_FIELD_1": "x",  # available slot
         }
