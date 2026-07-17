@@ -20,5 +20,9 @@ jobs:
       - run: mypy easyvista_python_client
       # `integration_tests/` calls a real EasyVista instance using credentials the
       # user supplies; it can never run here. Excluded by marker rather than left
-      # to skip on absent credentials, so a leaked secret could not make CI go live.
-      - run: pytest -m "not integration"
+      # to skip on absent credentials, so a leaked secret could not make CI go
+      # live. The marker is applied by location in integration_tests/conftest.py,
+      # so a new file cannot escape it by forgetting `pytestmark`.
+      # --strict-markers/--strict-config must be passed here, not in addopts,
+      # where pytest 9 silently ignores them.
+      - run: pytest -m "not integration" --strict-markers --strict-config

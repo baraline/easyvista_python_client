@@ -125,7 +125,12 @@ exclude = ["tests/", "integration_tests/"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests", "integration_tests"]
-addopts = "--cov=easyvista_python_client --cov-report=term-missing --strict-markers --strict-config"
+addopts = "--cov=easyvista_python_client --cov-report=term-missing"
+# --strict-markers / --strict-config are passed on CI's command line, NOT here:
+# in `addopts` pytest 9 silently ignores them (they are parsed as ini overrides,
+# which are harvested before addopts is prepended), so they would look like a
+# gate while doing nothing. Verified: a typo'd marker errors from the command
+# line and passes with a warning from addopts.
 markers = [
     "integration: live tests against a real EasyVista instance (skipped unless env configured)",
 ]

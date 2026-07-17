@@ -271,10 +271,11 @@ searchable, and a filter naming one is silently ignored — so it matches **ever
   correctly;
 - the sub-keys of a nested reference object (``STATUS_EN`` / ``STATUS_FR``, ``STATUS_GUID`` inside
   ``STATUS``): they are not top-level columns at all. Filter on the top-level ``STATUS_ID`` instead.
-  Which language sub-key your instance carries depends on how it was installed, but that does not
-  make either one searchable: the **nesting** is what the search layer cannot reach, so
-  ``STATUS_EN:"Open"`` is ignored on an English instance exactly as ``STATUS_FR:"…"`` is on a French
-  one. A language column that *is* top-level — ``DEPARTMENT_FR`` on ``departments`` — filters fine.
+  Which language sub-key your instance carries depends on how it was installed, but the language is
+  not what makes it unsearchable: what the search layer cannot reach is the **nesting**. Verified by
+  searching the sub-key an instance *does* populate, using a label read off one of its own tickets —
+  the whole table came back. A language column that is *top-level* — ``DEPARTMENT_FR`` on
+  ``departments`` — filters correctly, so the rule is about nesting, not about ``_EN`` / ``_FR``.
 
 Prefer the ``*_ID`` column, and verify a field filters before relying on it. Status **ids** are
 instance-specific, and there is no verified way to filter tickets by status *name*.

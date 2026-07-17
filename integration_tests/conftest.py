@@ -38,6 +38,30 @@ import pytest
 
 from easyvista_python_client import EasyvistaClient, EasyvistaConfig
 
+_HERE = Path(__file__).resolve().parent
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark every test **in this directory** ``integration``, whatever it declares.
+
+    CI's ``pytest -m "not integration"`` is the guarantee that nothing here ever
+    calls a live instance from a runner. Leaving that to a per-module
+    ``pytestmark`` makes the guarantee a convention: a new file that forgets it —
+    or misspells it — is collected and run, and ``--strict-markers`` does not
+    save you (in ``addopts`` pytest 9 silently ignores it — verified). Marking by
+    location makes the guarantee structural, so it cannot be forgotten.
+
+    The path check is essential, not defensive: pytest hands this hook **every**
+    collected item in the session, not only the ones under this conftest. Without
+    it this would mark the entire unit suite ``integration`` and CI would
+    deselect all of it.
+    """
+    for item in items:
+        path = getattr(item, "path", None)
+        if path is not None and _HERE in Path(path).resolve().parents:
+            item.add_marker(pytest.mark.integration)
+
+
 # secrets/ lives at the repo root: integration_tests/conftest.py -> parents[1].
 _SECRETS_DIR = Path(__file__).resolve().parents[1] / "secrets"
 
