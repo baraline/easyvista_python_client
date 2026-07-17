@@ -1,8 +1,13 @@
-"""Live, read-only smoke tests against a real EasyVista instance.
+"""Live smoke tests against a real EasyVista instance.
 
-Opt-in: run with ``--run-integration`` (or ``EASYVISTA_RUN_INTEGRATION=1``) and
-provide credentials via ``EASYVISTA_TEST_*`` env vars or ``secrets/easyvista_test_*``
-files. These tests perform reads only — never writes. NEVER point them at production.
+Skipped automatically unless credentials are configured, via ``EASYVISTA_TEST_*``
+env vars or ``secrets/easyvista_test_*`` files. Never runs in CI (which runs
+``pytest -m "not integration"``). NEVER point at production.
+
+No ticket persists from this module: it reads, plus issues a single create that
+the server is *expected to reject* (``test_missing_mandatory_field_raises_
+validation_error``). The ticket-creating fixture lives in ``conftest.py`` and is
+used by ``test_live_search_syntax``.
 """
 
 from __future__ import annotations

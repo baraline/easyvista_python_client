@@ -20,7 +20,7 @@ contract this script checks. It runs three tiers:
    / close / action / document / asset examples, which create real records on
    the target instance. Off by default — the project's live suite is read-only.
 
-Credentials resolve exactly like ``tests/integration/conftest.py``:
+Credentials resolve exactly like ``integration_tests/conftest.py``:
 
     url    <- EASYVISTA_TEST_URL    | secrets/easyvista_test_url
     user   <- EASYVISTA_TEST_USER (or _ACCOUNT) | secrets/easyvista_test_user
@@ -426,7 +426,7 @@ def run_offline(r: Results) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# credential resolution (mirrors tests/integration/conftest.py)
+# credential resolution (mirrors integration_tests/conftest.py)
 # --------------------------------------------------------------------------- #
 def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
     for name in env_names:

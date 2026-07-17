@@ -30,13 +30,24 @@ Linting and type-checking
 Integration tests
 ------------------
 
-Live integration tests are opt-in and read-only by default. Enable them with
-``--run-integration`` (or ``EASYVISTA_RUN_INTEGRATION=1``); credentials resolve from environment
-variables, falling back to files under ``secrets/``.
+``integration_tests/`` (at the repository root, outside ``tests/``) calls a **real EasyVista
+instance** that you supply. It never runs in CI — CI runs ``pytest -m "not integration"``.
+
+Credentials resolve from ``EASYVISTA_TEST_URL`` / ``EASYVISTA_TEST_USER`` / ``EASYVISTA_TEST_TOKEN``,
+falling back to files under ``secrets/`` (both gitignored). With no credentials configured the suite
+**skips cleanly**, so a plain ``pytest`` on a fresh checkout is offline and green.
+
+.. warning::
+
+   These tests are **not read-only**: they create tickets and close them in teardown. Once
+   credentials are present they run as part of a plain ``pytest``. Point them at a preprod or test
+   instance, never production.
 
 .. code-block:: bash
 
-   pytest --run-integration
+   pytest                      # unit tests + live tests (if credentials are configured)
+   pytest -m "not integration" # unit tests only -- what CI runs
+   pytest integration_tests    # live tests only
 
 Building the docs
 -----------------

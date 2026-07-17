@@ -269,10 +269,16 @@ searchable, and a filter naming one is silently ignored — so it matches **ever
 - the denormalized ``*_PATH`` display columns (``SD_CATALOG_PATH``, ``DEPARTMENT_PATH``): searching a
   real ``SD_CATALOG_PATH`` value returns the whole table, while its ``SD_CATALOG_ID`` sibling filters
   correctly;
-- the sub-keys of a nested reference object (``STATUS_FR``/``STATUS_EN``, ``STATUS_GUID`` inside
+- the sub-keys of a nested reference object (``STATUS_EN`` / ``STATUS_FR``, ``STATUS_GUID`` inside
   ``STATUS``): they are not top-level columns at all. Filter on the top-level ``STATUS_ID`` instead.
+  Which language sub-key your instance carries depends on how it was installed, but the language is
+  not what makes it unsearchable: what the search layer cannot reach is the **nesting**. Verified by
+  searching the sub-key an instance *does* populate, using a label read off one of its own tickets —
+  the whole table came back. A language column that is *top-level* — ``DEPARTMENT_FR`` on
+  ``departments`` — filters correctly, so the rule is about nesting, not about ``_EN`` / ``_FR``.
 
-Prefer the ``*_ID`` column, and verify a field filters before relying on it.
+Prefer the ``*_ID`` column, and verify a field filters before relying on it. Status **ids** are
+instance-specific, and there is no verified way to filter tickets by status *name*.
 
 .. code-block:: python
 

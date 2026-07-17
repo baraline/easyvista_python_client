@@ -1,5 +1,16 @@
 """Fixtures for live integration tests.
 
+These tests call a real EasyVista instance, so they live outside ``tests/`` and
+are **never run in CI** — CI runs ``pytest -m "not integration"``. You supply your
+own instance: every test here skips cleanly when credentials are absent, so a
+checkout with no ``secrets/`` and no ``EASYVISTA_TEST_*`` environment simply skips
+the suite rather than failing it.
+
+They are not read-only. The ``probe_tickets`` fixture creates two tickets and
+closes both in teardown; ``test_live_smoke`` additionally issues one create that
+the server is *expected to reject*, so no ticket persists from it. Point them at
+a preprod/test instance, never production.
+
 Credentials resolve from an uppercase env var first, then a lowercase file under
 ``secrets/``:
 
@@ -27,8 +38,32 @@ import pytest
 
 from easyvista_python_client import EasyvistaClient, EasyvistaConfig
 
-# secrets/ lives at the repo root: tests/integration/conftest.py -> parents[2].
-_SECRETS_DIR = Path(__file__).resolve().parents[2] / "secrets"
+_HERE = Path(__file__).resolve().parent
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark every test **in this directory** ``integration``, whatever it declares.
+
+    CI's ``pytest -m "not integration"`` is the guarantee that nothing here ever
+    calls a live instance from a runner. Leaving that to a per-module
+    ``pytestmark`` makes the guarantee a convention: a new file that forgets it —
+    or misspells it — is collected and run, and ``--strict-markers`` does not
+    save you (in ``addopts`` pytest 9 silently ignores it — verified). Marking by
+    location makes the guarantee structural, so it cannot be forgotten.
+
+    The path check is essential, not defensive: pytest hands this hook **every**
+    collected item in the session, not only the ones under this conftest. Without
+    it this would mark the entire unit suite ``integration`` and CI would
+    deselect all of it.
+    """
+    for item in items:
+        path = getattr(item, "path", None)
+        if path is not None and _HERE in Path(path).resolve().parents:
+            item.add_marker(pytest.mark.integration)
+
+
+# secrets/ lives at the repo root: integration_tests/conftest.py -> parents[1].
+_SECRETS_DIR = Path(__file__).resolve().parents[1] / "secrets"
 
 
 def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:

@@ -43,9 +43,19 @@ python -m sphinx -W --keep-going -b html docs docs/_build/html
 
 ## Live integration tests
 
-The default suite never touches the network. The `integration`-marked tests run
-only with `--run-integration` and credentials supplied via `EASYVISTA_TEST_*`
-environment variables or files under `secrets/`, both of which are gitignored.
+`integration_tests/` lives at the repository root, outside `tests/`, because it
+calls a **real EasyVista instance that you supply**. It never runs in CI — CI runs
+`pytest -m "not integration"`.
+
+Credentials come from `EASYVISTA_TEST_*` environment variables, falling back to
+files under `secrets/` (both gitignored). With none configured the suite skips
+cleanly, so `pytest` on a fresh checkout is offline and green.
+
+> **These tests are not read-only.** They create tickets and close them in
+> teardown. Once your credentials are present they run as part of a plain
+> `pytest` — use `pytest -m "not integration"` for a unit-only run. Point them at
+> a preprod or test instance, never production.
+
 Never commit an instance host, account id, or token — see the note below.
 
 ## Design Guidelines
