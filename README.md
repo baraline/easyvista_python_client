@@ -41,7 +41,7 @@ with EasyvistaClient(config) as client:
         )
     )
     fetched = client.get_ticket(ticket.rfc_number)
-    open_status = ev_equals_filter("STATUS_EN", "Open")
+    open_status = ev_equals_filter("STATUS_ID", 3)
     results = client.search_tickets(search=open_status, max_rows=50)
 
     # page through everything with the iterator (follows the API's offset paging)

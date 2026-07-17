@@ -240,11 +240,11 @@ async def test_async_count_tickets_returns_total_record_count(config):
         )
     )
     async with AsyncEasyvistaClient(config) as client:
-        total = await client.count_tickets(search="STATUS_EN~Open")
+        total = await client.count_tickets(search='STATUS_ID:"3"')
     assert total == 42
     assert route.call_count == 1
     assert route.calls.last.request.url.params["max_rows"] == "1"
-    assert route.calls.last.request.url.params["search"] == "STATUS_EN~Open"
+    assert route.calls.last.request.url.params["search"] == 'STATUS_ID:"3"'
 
 
 def _stats_responder(request):

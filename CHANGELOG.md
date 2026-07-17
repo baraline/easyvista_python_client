@@ -13,6 +13,21 @@ a deprecation policy will follow the 1.0 release.
 
 - Public `filters.py`: `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, and
   `is_safe_ev_value` for building EasyVista `search` expressions safely.
+- `Request` now declares fields that were previously reachable only as untyped
+  `extra="allow"` data — each verified present on live single-ticket GETs:
+  `title`, `request_id`, `external_reference`, `sd_catalog_id`, `urgency_id`,
+  `impact_id`, `severity_id`, `request_origin_id`, `department_id`,
+  `location_id`, `requestor_id`, `recipient_id`, `owner_id`, `submit_date_ut`,
+  and `last_update`.
+
+### Removed
+
+- **Breaking:** `PostRequest.catalog_guid` and `Request.catalog_guid` are gone.
+  `CATALOG_GUID` is absent from every sampled live ticket (0/25 single-ticket
+  GETs), from the documented create body, and from the vendor field inventory —
+  it could never populate. `PostRequest(catalog_guid=...)` previously validated
+  and was sent to the API; it now raises (`extra="forbid"`) instead of being
+  silently accepted. Use `catalog_code` to name a catalog on create.
 
 ### Fixed
 
@@ -27,6 +42,17 @@ a deprecation policy will follow the 1.0 release.
   **exact match**, identical to `:` — verified against a live instance. Examples implying
   substring matching (`ASSET_TAG~LAPTOP`) were wrong and have been replaced. The unverified
   `!~` / `!` / `is_null` / `is_not_null` operators are no longer documented as fact.
+- **Documentation correction:** the README's and user guide's tutorial examples filtered with
+  `ev_equals_filter("STATUS_EN", "Open")`. `STATUS_EN` is a sub-key of the nested `STATUS`
+  object, not a top-level column, so EasyVista silently ignored the condition and every example
+  returned *all* tickets, not just open ones. This was a documentation defect, not a library bug
+  — the library does not special-case field names, so nothing in the shipped code was broken.
+  Replaced with `ev_equals_filter("STATUS_ID", 3)` throughout, and the user guide now documents
+  which returned fields are actually searchable and the third (HTTP 590 type-mismatch) search
+  outcome.
+- `Request.status_id`, along with the model's other numeric identity/classification fields, now
+  uses an `OptionalInt` type that tolerates the API's `""` for an absent numeric; `status_id`
+  previously raised a validation error on that value.
 - `get_department_context` now raises `ValueError` for a blank or unrenderable `department_id`
   rather than building a malformed search (defence in depth; not a demonstrated exploitable path).
 

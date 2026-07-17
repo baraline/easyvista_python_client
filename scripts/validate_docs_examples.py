@@ -484,22 +484,57 @@ def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
         EasyvistaValidationError,
         PostRequest,
         Request,
+        ev_equals_filter,
     )
 
     with EasyvistaClient(config) as client:
-
-        def search_tickets() -> None:
-            res = client.search_tickets(search="STATUS_EN~Open", max_rows=5)
-            assert isinstance(res.total_record_count, int)
-            assert all(isinstance(x, Request) for x in res.records)
-
-        r.check("search_tickets(search='STATUS_EN~Open', max_rows=5)", search_tickets)
-
-        # A sample RFC for the ticket sub-resource reads.
+        # A sample RFC for the ticket sub-resource reads, a *real*,
+        # instance-specific STATUS_ID to filter on (never hardcode one --
+        # nobody running this script has confirmed any particular id exists
+        # on the target instance), and the unfiltered baseline count.
+        #
+        # The baseline matters: EasyVista silently ignores a search condition
+        # it cannot resolve and returns the WHOLE TABLE instead of erroring
+        # (see the search-syntax warning in docs/user_guide.rst) -- a filtered
+        # count is meaningless on its own, since a filter that matched every
+        # record looks identical to a filter that was silently ignored. The
+        # only way to tell them apart is to compare against this baseline.
         sample_rfc = None
+        sample_status_id = None
         probe = client.search_tickets(max_rows=1)
+        baseline_total = probe.total_record_count
         if probe.records and probe.records[0].rfc_number:
             sample_rfc = probe.records[0].rfc_number
+            # search_tickets' default field set omits STATUS_ID (verified
+            # live: it comes back None here); a full single-ticket GET
+            # returns it.
+            sample_status_id = client.get_ticket(sample_rfc).status_id
+        status_filter = ev_equals_filter("STATUS_ID", sample_status_id)
+
+        def search_tickets() -> None:
+            res = client.search_tickets(search=status_filter, max_rows=5)
+            assert isinstance(res.total_record_count, int)
+            assert all(isinstance(x, Request) for x in res.records)
+            # The defect this script exists to catch: a filtered count sitting
+            # at (or above) the unfiltered baseline is the silent-ignore
+            # failure signature, not a pass. `== baseline` must FAIL here.
+            assert 0 < res.total_record_count < baseline_total, (
+                f"search_tickets(search={status_filter!r}) returned "
+                f"{res.total_record_count} of {baseline_total} total records "
+                "-- the filter looks like it was silently ignored"
+            )
+
+        if status_filter is not None:
+            r.check(
+                f"search_tickets(search={status_filter!r}, max_rows=5)"
+                " [asserts filtered < baseline]",
+                search_tickets,
+            )
+        else:
+            r.skip(
+                "search_tickets(search='STATUS_ID:\"<id>\"', max_rows=5)",
+                "no ticket with a status id available to derive a real filter",
+            )
 
         def get_ticket() -> None:
             if not sample_rfc:
@@ -515,13 +550,19 @@ def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
         def iter_tickets() -> None:
             seen = 0
             for t in client.iter_tickets(
-                search="STATUS_EN~Open", page_size=50, max_records=3
+                search=status_filter, page_size=50, max_records=3
             ):
                 assert isinstance(t, Request)
                 seen += 1
             assert seen <= 3
 
-        r.check("iter_tickets(..., page_size=50, max_records=3)", iter_tickets)
+        if status_filter is not None:
+            r.check("iter_tickets(..., page_size=50, max_records=3)", iter_tickets)
+        else:
+            r.skip(
+                "iter_tickets(..., page_size=50, max_records=3)",
+                "no ticket with a status id available to derive a real filter",
+            )
 
         def search_assets() -> None:
             res = client.search_assets(max_rows=5)
@@ -570,17 +611,25 @@ def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
             r.skip("get_ticket_context(<rfc>).to_markdown()", "no tickets on instance")
 
         def reporting() -> None:
-            total = client.count_tickets(search="STATUS_EN~Open")
+            total = client.count_tickets(search=status_filter)
             assert isinstance(total, int) and total >= 0
             stats = client.ticket_statistics(
-                search="STATUS_EN~Open", dimensions=["STATUS"], max_records=5
+                search=status_filter, dimensions=["STATUS"], max_records=5
             )
             assert isinstance(stats.total, int)
             # Every breakdown reconciles to the (possibly capped) total.
             for counts in stats.breakdowns.values():
                 assert sum(counts.values()) == stats.total
 
-        r.check("count_tickets + ticket_statistics(dimensions=['STATUS'])", reporting)
+        if status_filter is not None:
+            r.check(
+                "count_tickets + ticket_statistics(dimensions=['STATUS'])", reporting
+            )
+        else:
+            r.skip(
+                "count_tickets + ticket_statistics(dimensions=['STATUS'])",
+                "no ticket with a status id available to derive a real filter",
+            )
 
         def rejected_create() -> None:
             # The error-handling example: missing mandatory title is rejected
