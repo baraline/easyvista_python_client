@@ -130,7 +130,7 @@ exclude = ["tests/", "integration_tests/", "testing/"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["easyvista_python_client", "scripts", "integration_tests", "tests"]
+testpaths = ["easyvista_python_client", "scripts", "integration_tests"]
 addopts = "--cov=easyvista_python_client --cov-report=term-missing"
 # --strict-markers / --strict-config are passed on CI's command line, NOT here:
 # in `addopts` pytest 9 silently ignores them (they are parsed as ini overrides,

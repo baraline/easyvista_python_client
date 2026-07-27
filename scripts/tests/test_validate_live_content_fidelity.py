@@ -14,9 +14,7 @@ import sys
 from pathlib import Path
 
 _SCRIPT = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "validate_live_content_fidelity.py"
+    Path(__file__).resolve().parents[1] / "validate_live_content_fidelity.py"
 )
 
 
