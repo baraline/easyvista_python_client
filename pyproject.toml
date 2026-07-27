@@ -30,6 +30,8 @@ exclude = [
     ".superpowers/",
     "docs/superpowers/",
     "scripts/",
+    "**/tests/",
+    "**/testing/",
 ]
 
 [project]
@@ -124,11 +126,11 @@ select = ["B", "E", "F", "I", "RUF", "UP"]
 python_version = "3.10"
 strict = true
 ignore_missing_imports = true
-exclude = ["tests/", "integration_tests/"]
+exclude = ["tests/", "integration_tests/", "testing/"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "integration_tests"]
+testpaths = ["easyvista_python_client", "scripts", "integration_tests", "tests"]
 addopts = "--cov=easyvista_python_client --cov-report=term-missing"
 # --strict-markers / --strict-config are passed on CI's command line, NOT here:
 # in `addopts` pytest 9 silently ignores them (they are parsed as ini overrides,
@@ -138,6 +140,13 @@ addopts = "--cov=easyvista_python_client --cov-report=term-missing"
 markers = [
     "integration: live tests against a real EasyVista instance (skipped unless env configured)",
 ]
+
+[tool.coverage.run]
+# Test modules now live inside the package, so `--cov=easyvista_python_client`
+# would measure them too. They execute end to end and report ~100%, which would
+# weigh ~6,700 lines of test code against ~2,700 lines of source and dilute the
+# fail_under gate below into one that passes on almost anything.
+omit = ["*/tests/*", "*/testing/*"]
 
 [tool.coverage.report]
 fail_under = 95
