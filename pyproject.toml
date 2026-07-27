@@ -30,6 +30,14 @@ exclude = [
     ".superpowers/",
     "docs/superpowers/",
     "scripts/",
+    # Unit tests now live inside `easyvista_python_client/` (see the sdist
+    # comment below), so the `packages = ["easyvista_python_client"]` wheel
+    # boundary no longer keeps them out on its own. These two globs are the
+    # sole mechanism excluding them from BOTH the wheel and the sdist -- delete
+    # or narrow one and the next build ships the test suite to PyPI, which
+    # cannot be un-uploaded. CI's `build-audit` job (.github/workflows/ci.yml)
+    # builds both artifacts and asserts neither contains a tests/ or testing/
+    # path, so a regression here fails CI instead of surfacing after publish.
     "**/tests/",
     "**/testing/",
 ]
@@ -98,12 +106,20 @@ docs = [
 packages = ["easyvista_python_client"]
 
 [tool.hatch.build.targets.sdist]
-# Neither test suite ships. Both stay in git, where anyone who wants to run them
-# clones the repo — which `integration_tests/` requires anyway, since it needs a
-# real instance and credentials no installer has. Nothing is lost on install:
-# pip builds a wheel from this sdist and installs that, so tests never reached
-# site-packages either way. The accepted cost is that a downstream packager
-# building from the tarball cannot run the suite. Matches glpi_python_client.
+# Neither test suite ships. `integration_tests/` and `scripts/` simply never
+# appear in the include list below, so they cannot end up in the tarball --
+# no allowlist entry, no inclusion. The unit tests are different: they now
+# live inside `/easyvista_python_client`, which the allowlist below DOES
+# include wholesale, so this list is not what keeps them out. That job falls
+# to the `**/tests/` and `**/testing/` entries in `[tool.hatch.build] exclude`
+# above, which strip the test files back out after the include pass pulls the
+# package tree in. Both stay in git either way, where anyone who wants to run
+# them clones the repo — which `integration_tests/` requires anyway, since it
+# needs a real instance and credentials no installer has. Nothing is lost on
+# install: pip builds a wheel from this sdist and installs that, so tests
+# never reached site-packages either way. The accepted cost is that a
+# downstream packager building from the tarball cannot run the suite. Matches
+# glpi_python_client.
 include = [
     "/easyvista_python_client",
     "/docs",
