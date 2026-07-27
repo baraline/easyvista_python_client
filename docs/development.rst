@@ -17,7 +17,7 @@ The suite uses ``pytest`` with ``respx`` for HTTP mocking, and asserts a coverag
 
 .. code-block:: bash
 
-   pytest
+   pytest -m "not integration"
 
 Linting and type-checking
 --------------------------

@@ -14,7 +14,7 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 python -m pre_commit install
 python -m pre_commit run --all-files
-python -m pytest
+python -m pytest -m "not integration"
 ```
 
 ## Quality Checks
@@ -23,7 +23,7 @@ Run these before opening a pull request:
 
 ```bash
 python -m pre_commit run --all-files
-python -m pytest
+python -m pytest -m "not integration"
 python -m ruff check .
 python -m mypy easyvista_python_client
 ```
