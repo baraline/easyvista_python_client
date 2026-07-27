@@ -96,11 +96,15 @@ docs = [
 packages = ["easyvista_python_client"]
 
 [tool.hatch.build.targets.sdist]
+# Neither test suite ships. Both stay in git, where anyone who wants to run them
+# clones the repo — which `integration_tests/` requires anyway, since it needs a
+# real instance and credentials no installer has. Nothing is lost on install:
+# pip builds a wheel from this sdist and installs that, so tests never reached
+# site-packages either way. The accepted cost is that a downstream packager
+# building from the tarball cannot run the suite. Matches glpi_python_client.
 include = [
     "/easyvista_python_client",
     "/docs",
-    "/tests",
-    "/integration_tests",
     "/CHANGELOG.md",
     "/CONTRIBUTING.md",
     "/LICENSE",
