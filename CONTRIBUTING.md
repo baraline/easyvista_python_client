@@ -76,3 +76,8 @@ Never commit an instance host, account id, or token — see the note below.
   by `models/tests/test_request.py`). Tests that span several modules, and any
   shared fixture, belong in `easyvista_python_client/testing/`. Neither
   directory ships in the wheel or the sdist.
+- "One test module per source module" is a ceiling, not a floor: a source
+  module whose behaviour is fully exercised through a caller's tests (for
+  example a model asserted only via the resource and client tests that build
+  it) does not need its own near-empty test file. Check coverage before adding
+  one.
