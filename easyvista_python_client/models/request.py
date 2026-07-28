@@ -126,7 +126,15 @@ class PostRequest(EasyvistaWriteModel):
 
 
 class RequestUpdate(EasyvistaWriteModel):
-    """Payload for updating a ticket via PUT."""
+    """Payload for updating a ticket via PUT.
+
+    ``docs/API_Info.md`` documents only the create, comment and close bodies, so
+    the update body is not vendor-documented. Every field here is one verified
+    accepted against a live instance -- ``title`` by the Phase 0 probe and by
+    ``integration_tests/test_live_ticket_identity.py``. Nothing is added
+    speculatively: an unaccepted field would silently no-op or raise HTTP 590.
+    """
 
     status_id: int | None = None
+    title: str | None = None
     description: str | None = None

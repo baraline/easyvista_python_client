@@ -884,6 +884,19 @@ def test_get_department_context_rejects_blank_department_id(config):
 
 
 @respx.mock
+def test_update_ticket_sends_title(config):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(
+            200, json={"RFC_NUMBER": "I1", "TITLE": "New title"}
+        )
+    )
+    with EasyvistaClient(config) as client:
+        updated = client.update_ticket("I1", RequestUpdate(title="New title"))
+    assert json.loads(route.calls.last.request.content) == {"title": "New title"}
+    assert updated.title == "New title"
+
+
+@respx.mock
 def test_find_departments_rejects_comma_injection(config):
     """A ',' injection must not silently widen the result set.
 

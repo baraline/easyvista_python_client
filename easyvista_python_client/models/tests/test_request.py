@@ -174,3 +174,11 @@ def test_request_keeps_undeclared_fields_as_extras():
 def test_request_title_absent_is_none_not_error():
     """Portal-created tickets carry no TITLE; that must parse, not raise."""
     assert Request.model_validate({"RFC_NUMBER": "I1"}).title is None
+
+
+def test_request_update_serializes_title():
+    assert RequestUpdate(title="New title").to_api() == {"title": "New title"}
+
+
+def test_request_update_omits_unset_fields():
+    assert RequestUpdate(status_id=3).to_api() == {"status_id": 3}
