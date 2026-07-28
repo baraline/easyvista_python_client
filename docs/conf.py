@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import date
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _installed_version
 from pathlib import Path
 
 try:
@@ -23,10 +24,12 @@ author = "easyvista-python-client contributors"
 copyright = f"{date.today().year}, {author}"
 
 try:
-    release = version("easyvista-python-client")
+    release = _installed_version("easyvista-python-client")
 except PackageNotFoundError:
     release = _read_project_version()
 
+# Sphinx reads both names; `version` must stay a str, so the metadata helper is
+# imported under an alias rather than being shadowed by this assignment.
 version = release
 
 extensions = [

@@ -60,10 +60,25 @@ import re
 import sys
 import traceback
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from easyvista_python_client._html import html_to_text
+
+if TYPE_CHECKING:
+    # Annotation-only: the package is imported lazily inside the functions below
+    # so that --help and the credential checks work without a live install.
+    from collections.abc import Callable, Sequence
+
+    from easyvista_python_client import (
+        Action,
+        Document,
+        EasyvistaClient,
+        EasyvistaConfig,
+        Request,
+    )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SECRETS_DIR = REPO_ROOT / "secrets"
@@ -141,8 +156,7 @@ COMMENT_PROBES: list[tuple[str, str]] = [
     ("plain_french", "Commentaire simple avec accents : café élève garçon Noël."),
     (
         "html_formatting",
-        "<b>Gras</b>, <i>italique</i>, et une liste <ul><li>un</li>"
-        "<li>deux</li></ul>.",
+        "<b>Gras</b>, <i>italique</i>, et une liste <ul><li>un</li><li>deux</li></ul>.",
     ),
     ("line_breaks", "Ligne un<br>Ligne deux<br>Ligne trois"),
     ("punctuation", "Ponctuation : -- [ ] ( ) / . , ; : ! ? # & % + = * fin."),
@@ -207,7 +221,7 @@ def _host(url: str) -> str:
     return (parsed.hostname or parsed.path.split("/")[0]).lower()
 
 
-def resolve_test_config():
+def resolve_test_config() -> EasyvistaConfig | None:
     """Build config from the TEST credentials only; refuse the prod host.
 
     Returns ``EasyvistaConfig`` or ``None`` when credentials are unavailable.
@@ -265,7 +279,7 @@ class Probe:
     note: str = ""
 
 
-def _ident_from(ticket) -> str | None:
+def _ident_from(ticket: Request) -> str | None:
     """Best identifier for follow-up calls (RFC, else the HREF's trailing id)."""
     if getattr(ticket, "rfc_number", None):
         return ticket.rfc_number
@@ -275,7 +289,9 @@ def _ident_from(ticket) -> str | None:
     return None
 
 
-def _find_marked(records, marker: str, attrs: tuple[str, ...]) -> str | None:
+def _find_marked(
+    records: Sequence[Document], marker: str, attrs: tuple[str, ...]
+) -> str | None:
     """Return the first record's text (via named ``attrs``) that contains ``marker``.
 
     Used for documents, where we specifically want the filename field to compare.
@@ -288,7 +304,7 @@ def _find_marked(records, marker: str, attrs: tuple[str, ...]) -> str | None:
     return None
 
 
-def _action_ident(action) -> str | None:
+def _action_ident(action: Action) -> str | None:
     """The created action's id (``ACTION_ID``, else the HREF's trailing segment)."""
     aid = getattr(action, "action_id", None)
     if aid:
@@ -321,7 +337,7 @@ class RunOptions:
     create_description: str = "Ticket created by the content fidelity validator"
 
 
-def _write(probe: Probe, write) -> None:
+def _write(probe: Probe, write: Callable[[], object]) -> None:
     """Run a write, recording REJECTED (590) / ERROR on failure, else leaving
     ``verdict`` pending (``None``) for the read-back pass."""
     from easyvista_python_client import EasyvistaError, EasyvistaValidationError
@@ -336,7 +352,7 @@ def _write(probe: Probe, write) -> None:
         probe.note = f"{type(exc).__name__}: {exc}"
 
 
-def run_fidelity(client, opts: RunOptions) -> tuple[str, list[Probe]]:
+def run_fidelity(client: EasyvistaClient, opts: RunOptions) -> tuple[str, list[Probe]]:
     """Create a ticket, write every probe, read back and classify.
 
     Returns ``(rfc, probes)``.
@@ -418,9 +434,7 @@ def run_fidelity(client, opts: RunOptions) -> tuple[str, list[Probe]]:
         print(f"  [write]   document {filename} ...", flush=True)
         _write(
             probe,
-            lambda f=filename, c=content: client.add_document(
-                rfc, filename=f, content=c
-            ),
+            partial(client.add_document, rfc, filename=filename, content=content),
         )
 
     # 5. read back and classify.
@@ -429,7 +443,7 @@ def run_fidelity(client, opts: RunOptions) -> tuple[str, list[Probe]]:
     return rfc, probes
 
 
-def _safe_resolve(client, path: str) -> str | None:
+def _safe_resolve(client: EasyvistaClient, path: str) -> str | None:
     """resolve_memo that returns None on any transport error (403/404/etc.)."""
     from easyvista_python_client import EasyvistaError
 
@@ -439,7 +453,9 @@ def _safe_resolve(client, path: str) -> str | None:
         return None
 
 
-def _find_action_note(client, actions, probe: Probe) -> str | None:
+def _find_action_note(
+    client: EasyvistaClient, actions: Sequence[Action], probe: Probe
+) -> str | None:
     """Return the note text of the action this comment probe created.
 
     The note lives at ``actions/{id}/description`` (verified live) — the inline
@@ -465,7 +481,9 @@ def _find_action_note(client, actions, probe: Probe) -> str | None:
     return None
 
 
-def _read_back_and_classify(client, rfc: str, probes: list[Probe]) -> None:
+def _read_back_and_classify(
+    client: EasyvistaClient, rfc: str, probes: list[Probe]
+) -> None:
     """Fill each pending probe's verdict from the read-back.
 
     The ``description`` write surfaces at the ``/comment`` memo (verified live);
@@ -575,7 +593,7 @@ def _print_verdict_table(probes: list[Probe], title: str) -> None:
             print(f"  returned: {_trunc(p.returned)}")
 
 
-def print_report(rfc: str, probes: list[Probe], client) -> None:
+def print_report(rfc: str, probes: list[Probe], client: EasyvistaClient) -> None:
     _print_verdict_table(probes, "CONTENT FIDELITY REPORT")
 
     # The API's own rendered view of the ticket.
@@ -603,7 +621,11 @@ def print_report(rfc: str, probes: list[Probe], client) -> None:
 # opt-in content-tolerance sweep (one throwaway ticket per adversarial probe)
 # --------------------------------------------------------------------------- #
 def run_tolerance(
-    client, opts: RunOptions, status_guid: str, *, close_each: bool = True
+    client: EasyvistaClient,
+    opts: RunOptions,
+    status_guid: str,
+    *,
+    close_each: bool = True,
 ) -> list[Probe]:
     """Map per-content acceptance/fidelity through the description memo.
 
@@ -637,12 +659,14 @@ def run_tolerance(
             probe.note = f"ticket create failed ({type(exc).__name__})"
             continue
         probe.ref = rfc
+        if rfc is None:
+            probe.verdict = "ERROR"
+            probe.note = "create returned neither an RFC nor a usable HREF"
+            continue
 
         _write(
             probe,
-            lambda p=payload, r=rfc: client.update_ticket(
-                r, RequestUpdate(description=p)
-            ),
+            partial(client.update_ticket, rfc, RequestUpdate(description=payload)),
         )
         if probe.verdict is None:  # write succeeded -> classify what came back
             returned = _safe_resolve(
@@ -675,7 +699,7 @@ def run_tolerance(
 # --------------------------------------------------------------------------- #
 # cleanup
 # --------------------------------------------------------------------------- #
-def do_close(client, rfc: str, status_guid: str) -> None:
+def do_close(client: EasyvistaClient, rfc: str, status_guid: str) -> None:
     client.close_ticket(
         rfc,
         status_guid=status_guid,
@@ -743,9 +767,7 @@ def main() -> int:
     parser.add_argument(
         "--impact",
         type=int,
-        default=_resolve_int(
-            ("EASYVISTA_TEST_IMPACT_ID",), "easyvista_test_impact_id"
-        ),
+        default=_resolve_int(("EASYVISTA_TEST_IMPACT_ID",), "easyvista_test_impact_id"),
         help="impact id for the probe ticket (env EASYVISTA_TEST_IMPACT_ID,"
         " or secrets/easyvista_test_impact_id)",
     )
@@ -767,9 +789,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--status-guid",
-        default=_resolve(
-            ("EASYVISTA_TEST_STATUS_GUID",), "easyvista_test_status_guid"
-        ),
+        default=_resolve(("EASYVISTA_TEST_STATUS_GUID",), "easyvista_test_status_guid"),
         help="closed-status GUID for --close (env EASYVISTA_TEST_STATUS_GUID,"
         " or secrets/easyvista_test_status_guid)",
     )
@@ -777,10 +797,14 @@ def main() -> int:
 
     # Force UTF-8 on stdout so unicode probe content (emoji, CJK, arrows) never
     # crashes the console print on a legacy code page (e.g. Windows cp1252).
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    # `reconfigure` exists on TextIOWrapper but not on the TextIO protocol that
+    # sys.stdout is typed as, and stdout may be replaced by a stream without it.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     # Best-effort .env load so EASYVISTA_TEST_* in a .env are picked up.
     try:
@@ -816,8 +840,7 @@ def main() -> int:
             missing.append("EASYVISTA_TEST_ORIGIN (or secrets/easyvista_test_origin)")
         if args.department is None:
             missing.append(
-                "EASYVISTA_TEST_DEPARTMENT_ID"
-                " (or secrets/easyvista_test_department_id)"
+                "EASYVISTA_TEST_DEPARTMENT_ID (or secrets/easyvista_test_department_id)"
             )
         if args.urgency is None:
             missing.append(

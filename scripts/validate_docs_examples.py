@@ -43,7 +43,16 @@ import inspect
 import os
 import sys
 import traceback
+from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Annotation-only: the package is imported lazily inside the functions below
+    # so the offline tier can report a missing install instead of crashing.
+    from collections.abc import Callable
+
+    from easyvista_python_client import EasyvistaConfig, Request
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SECRETS_DIR = REPO_ROOT / "secrets"
@@ -58,7 +67,7 @@ class Results:
         self.failed = 0
         self.skipped = 0
 
-    def check(self, name: str, fn) -> None:
+    def check(self, name: str, fn: Callable[[], object]) -> None:
         try:
             fn()
         except Exception as exc:
@@ -76,7 +85,7 @@ class Results:
         self.skipped += 1
         print(f"  [SKIP] {name} -- {reason}")
 
-    def check_perm(self, name: str, fn) -> None:
+    def check_perm(self, name: str, fn: Callable[[], object]) -> None:
         """Like check(), but a 403 'profile not authorized' is a SKIP, not a FAIL.
 
         A 403 here is an instance permission limit on the access token, not a
@@ -196,10 +205,10 @@ def run_offline(r: Results) -> None:
             assert cfg.account == "12345", cfg.account
             assert cfg.token == "tok-123", cfg.token
         finally:
-            for k in env_keys:
+            for k, previous in saved.items():
                 os.environ.pop(k, None)
-                if saved[k] is not None:
-                    os.environ[k] = saved[k]
+                if previous is not None:
+                    os.environ[k] = previous
 
     r.check(
         "EasyvistaConfig.from_env() reads EASYVISTA_URL/ACCOUNT/TOKEN",
@@ -227,10 +236,10 @@ def run_offline(r: Results) -> None:
             assert cfg.login == "rest.user", cfg.login
             assert cfg.password == "pw", cfg.password
         finally:
-            for k in env_keys:
+            for k, previous in saved.items():
                 os.environ.pop(k, None)
-                if saved[k] is not None:
-                    os.environ[k] = saved[k]
+                if previous is not None:
+                    os.environ[k] = previous
 
     r.check(
         "EasyvistaConfig.from_env() Basic fallback (LOGIN/PASSWORD)",
@@ -369,7 +378,7 @@ def run_offline(r: Results) -> None:
 
     # 11. SearchResult exposes the documented attributes.
     def search_result_fields() -> None:
-        sr = SearchResult(
+        sr: SearchResult[dict[str, Any]] = SearchResult(
             records=[], record_count=0, total_record_count=0, href="h", next_url=None
         )
         for attr in (
@@ -446,7 +455,7 @@ def _resolve_int(env_names: tuple[str, ...], filename: str) -> int | None:
     return int(value) if value is not None else None
 
 
-def resolve_live_config():
+def resolve_live_config() -> EasyvistaConfig | None:
     from easyvista_python_client import EasyvistaConfig
 
     url = _resolve(("EASYVISTA_TEST_URL",), "easyvista_test_url")
@@ -474,7 +483,9 @@ def resolve_live_config():
 # --------------------------------------------------------------------------- #
 # live read-only checks
 # --------------------------------------------------------------------------- #
-def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
+def run_live_readonly(
+    r: Results, config: EasyvistaConfig, catalog_code: str | None
+) -> None:
     print("\n== Live read-only (real instance) ==")
     from easyvista_python_client import (
         Action,
@@ -662,7 +673,7 @@ def run_live_readonly(r: Results, config, catalog_code: str | None) -> None:
 # --------------------------------------------------------------------------- #
 # live write checks (create real records -- opt-in only)
 # --------------------------------------------------------------------------- #
-def _ident_from(ticket) -> str | None:
+def _ident_from(ticket: Request) -> str | None:
     """Best identifier for follow-up calls.
 
     ``create_*`` responses return only ``{"HREF": ".../requests/<id>"}`` -- no
@@ -679,7 +690,7 @@ def _ident_from(ticket) -> str | None:
 
 def run_live_writes(
     r: Results,
-    config,
+    config: EasyvistaConfig,
     catalog_code: str,
     status_guid: str | None,
     asset_catalog_id: int,
@@ -828,8 +839,9 @@ def run_live_writes(
                 r.check_perm(
                     f"close_ticket('{target}', status_guid=..., delete_actions=1,"
                     " comment=...)",
-                    lambda t=target: client.close_ticket(
-                        t,
+                    partial(
+                        client.close_ticket,
+                        target,
                         status_guid=status_guid,
                         delete_actions=1,
                         comment="Resolved by validation",
@@ -867,9 +879,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--status-guid",
-        default=_resolve(
-            ("EASYVISTA_TEST_STATUS_GUID",), "easyvista_test_status_guid"
-        ),
+        default=_resolve(("EASYVISTA_TEST_STATUS_GUID",), "easyvista_test_status_guid"),
         help=(
             "closed status GUID for close_ticket (env EASYVISTA_TEST_STATUS_GUID,"
             " or secrets/easyvista_test_status_guid)"
