@@ -305,6 +305,20 @@ def test_resolve_url_rejects_a_scheme_downgrade_on_the_same_host():
         _base().resolve_url("http://ev.test/download/attachment/42")
 
 
+def test_resolve_url_accepts_a_same_origin_url_with_different_host_casing():
+    # DNS is case-insensitive and this API returns mixed-case URLs live.
+    assert _base().resolve_url("https://EV.TEST/download/42") == (
+        "https://EV.TEST/download/42"
+    )
+
+
+def test_resolve_url_still_rejects_a_userinfo_prefixed_foreign_host():
+    # "attacker.test@ev.test" must not read as the host "ev.test" just
+    # because case-folding was added.
+    with pytest.raises(EasyvistaError, match="outside the configured instance"):
+        _base().resolve_url("https://attacker.test@ev.test/download/42")
+
+
 @respx.mock
 def test_get_bytes_returns_raw_content_not_json():
     respx.get(f"{ROOT}/documents/1/content").mock(
@@ -358,6 +372,14 @@ def test_get_bytes_transport_error_raises_connection_error():
     with SyncTransport(_cfg()) as transport:
         with pytest.raises(EasyvistaConnectionError):
             transport.get_bytes("documents/1/content")
+
+
+def test_get_bytes_rejects_a_foreign_origin():
+    # Guards the wiring, not just the helper: _do_get_bytes must route through
+    # resolve_url. Without this, dropping that call breaks nothing in the suite.
+    with SyncTransport(_cfg()) as transport:
+        with pytest.raises(EasyvistaError, match="outside the configured instance"):
+            transport.get_bytes("https://attacker.test/download/42")
 
 
 @respx.mock

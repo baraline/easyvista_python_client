@@ -68,7 +68,15 @@ class BaseTransport:
         if not parsed.scheme and not parsed.netloc:
             return self.build_url(path_or_url)
         server = urlsplit(self.config.server)
-        if (parsed.scheme, parsed.netloc) != (server.scheme, server.netloc):
+        # Host comparison is case-folded because DNS is case-insensitive and
+        # this API returns mixed-case URLs (live: an upper-case "HTTPS://"
+        # scheme on DDL_HREF). Compare the RAW netloc, not .hostname: that
+        # keeps "https://attacker.test@ev.test/x" rejected, because its netloc
+        # is "attacker.test@ev.test", not "ev.test".
+        if (parsed.scheme, parsed.netloc.lower()) != (
+            server.scheme,
+            server.netloc.lower(),
+        ):
             raise EasyvistaError(
                 f"refusing to fetch {parsed.scheme}://{parsed.netloc} — it is "
                 f"outside the configured instance "
