@@ -125,9 +125,7 @@ def test_created_action_text_is_readable(
     _rfc, marker, action_id = ticket_with_action
     action = live_client.get_action(action_id)
     href = (
-        action.description.get("HREF")
-        if isinstance(action.description, dict)
-        else None
+        action.description.get("HREF") if isinstance(action.description, dict) else None
     )
     assert href, f"action {action_id} carries no DESCRIPTION href"
     text = live_client.resolve_memo(href)

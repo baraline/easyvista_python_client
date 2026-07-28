@@ -305,17 +305,23 @@ def _find_marked(
 
 
 def _action_ident(action: Action) -> str | None:
-    """The created action's id (``ACTION_ID``, else the HREF's trailing segment)."""
+    """The created action's id, when the API actually returns one.
+
+    There used to be an HREF-parsing fallback here, on the assumption that a
+    missing ``ACTION_ID`` could still be recovered from the create response's
+    trailing HREF segment, the way a created ticket's RFC is. Verified live
+    (see ``e221fe8`` and ``Action._derive_action_id_from_href``):
+    ``POST requests/{rfc}/actions`` echoes an HREF naming the **parent
+    request**, not the new action, and carries no ``ACTION_ID`` at all. That
+    HREF's trailing segment is the ticket's own RFC number, not an action id,
+    so parsing it could only ever produce a wrong value -- never a real one.
+    The fallback is removed rather than fixed because there is nothing to
+    fall back to: a created action's id is not recoverable from its create
+    response by any means. ``_find_action_note`` already handles a ``None``
+    ref by scanning every action on the ticket for the probe's marker.
+    """
     aid = getattr(action, "action_id", None)
-    if aid:
-        return str(aid)
-    try:
-        href = action.model_dump(by_alias=True).get("HREF")
-    except Exception:
-        href = None
-    if isinstance(href, str) and href:
-        return href.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
-    return None
+    return str(aid) if aid else None
 
 
 # --------------------------------------------------------------------------- #

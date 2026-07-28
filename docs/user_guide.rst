@@ -172,13 +172,18 @@ Actions are EasyVista's followup/comment analog. Add one with a
        PostAction(action_type_id=94, group_id=3, description="Triaged: on it"),
    )
    for action in client.list_actions(ticket.rfc_number):
-       print(action.action_id, action.comment)
+       print(action.action_id)
 
 .. note::
 
    ``action_type_id`` and ``group_id`` are instance-specific — the ids above are
    placeholders, so look yours up on your own instance rather than copying them.
-   Listing actions can be restricted by the access token's profile.
+   Listing actions can be restricted by the access token's profile. An action's
+   ``COMMENT`` field never carries the note text supplied as ``description`` —
+   read it back with :meth:`~easyvista_python_client.EasyvistaClient.get_action`
+   plus :meth:`~easyvista_python_client.EasyvistaClient.resolve_memo` (or let
+   :meth:`~easyvista_python_client.EasyvistaClient.get_ticket_context` resolve it
+   for you onto ``Action.description``).
 
 Assets
 ------
@@ -231,6 +236,14 @@ bundle as Markdown containing only content and human labels (no API URLs).
    context.description   # plain/raw description text (HTML reduced to text by to_markdown)
    context.actions       # list[Action]
    context.documents     # list[Document]  (rendered as filenames)
+
+.. note::
+
+   By default ``get_ticket_context`` also resolves each action's note text
+   (``resolve_action_bodies=True``), which costs two extra HTTP requests per
+   action — roughly 22 on a ticket carrying this instance's ~11-action
+   workflow baseline. Pass ``resolve_action_bodies=False`` to skip this and
+   fetch only the action list.
 
 The async client exposes the same method as a coroutine
 (``context = await client.get_ticket_context(rfc)``).

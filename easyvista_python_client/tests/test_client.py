@@ -985,9 +985,7 @@ def test_ticket_context_resolves_action_bodies(config):
     respx.get(f"{ROOT}/requests/I1/description").mock(
         return_value=httpx.Response(200, json={"DESCRIPTION": "the ticket body"})
     )
-    respx.get(f"{ROOT}/requests/I1/comment").mock(
-        return_value=httpx.Response(404)
-    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
     respx.get(f"{ROOT}/actions").mock(
         return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
     )
@@ -1019,12 +1017,8 @@ def test_ticket_context_can_skip_resolving_action_bodies(config):
     respx.get(f"{ROOT}/requests/I1").mock(
         return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
     )
-    respx.get(f"{ROOT}/requests/I1/description").mock(
-        return_value=httpx.Response(404)
-    )
-    respx.get(f"{ROOT}/requests/I1/comment").mock(
-        return_value=httpx.Response(404)
-    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
     item = respx.get(f"{ROOT}/actions/7").mock(
         return_value=httpx.Response(200, json={"ACTION_ID": 7})
     )
@@ -1046,12 +1040,8 @@ def test_ticket_context_tolerates_an_unreadable_action(config):
     respx.get(f"{ROOT}/requests/I1").mock(
         return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
     )
-    respx.get(f"{ROOT}/requests/I1/description").mock(
-        return_value=httpx.Response(404)
-    )
-    respx.get(f"{ROOT}/requests/I1/comment").mock(
-        return_value=httpx.Response(404)
-    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
     respx.get(f"{ROOT}/actions").mock(
         return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
     )
