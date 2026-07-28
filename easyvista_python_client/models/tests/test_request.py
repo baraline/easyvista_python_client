@@ -182,3 +182,48 @@ def test_request_update_serializes_title():
 
 def test_request_update_omits_unset_fields():
     assert RequestUpdate(status_id=3).to_api() == {"status_id": 3}
+
+
+def test_request_declares_the_official_time_fields():
+    ticket = Request.model_validate(
+        {
+            "RFC_NUMBER": "I1",
+            "CREATION_DATE_UT": "2026-07-28 09:00:00",
+            "MAX_RESOLUTION_DATE_UT": "2026-07-30 09:00:00",
+            "EXPECTED_DATE_UT": "2026-07-29 09:00:00",
+            "END_DATE_UT": "",
+            "SLA_ID": 4,
+            # A string, not an int: the 2026-07-28 Phase 0 probe found this
+            # field consistently typed str across every ticket it checked.
+            "TIME_USED_TO_SOLVE_REQUEST": "3600",
+        }
+    )
+    assert ticket.creation_date_ut == "2026-07-28 09:00:00"
+    assert ticket.max_resolution_date_ut == "2026-07-30 09:00:00"
+    assert ticket.expected_date_ut == "2026-07-29 09:00:00"
+    assert ticket.end_date_ut == ""
+    assert ticket.sla_id == 4
+    assert ticket.time_used_to_solve_request == "3600"
+
+
+def test_request_time_fields_default_to_none_when_absent():
+    ticket = Request.model_validate({"RFC_NUMBER": "I1"})
+    assert ticket.creation_date_ut is None
+    assert ticket.max_resolution_date_ut is None
+    assert ticket.sla_id is None
+
+
+def test_sla_id_treats_the_empty_string_sentinel_as_none():
+    assert Request.model_validate({"RFC_NUMBER": "I1", "SLA_ID": ""}).sla_id is None
+
+
+def test_gtr_custom_fields_stay_out_of_the_official_bucket():
+    # Declaring the official time fields must not pull the instance-specific
+    # E_GTR_*/E_GTI_* family in with them: those are per-deployment and belong
+    # in classify_fields().custom, which is what keeps this library portable.
+    fc = Request.model_validate(
+        {"RFC_NUMBER": "I1", "SLA_ID": 4, "E_GTR_STATUS": "OK", "E_GTI_UT": "x"}
+    ).classify_fields()
+    assert set(fc.custom) == {"E_GTR_STATUS", "E_GTI_UT"}
+    assert "SLA_ID" in fc.official
+    assert "MAX_RESOLUTION_DATE_UT" in fc.official

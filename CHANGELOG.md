@@ -19,6 +19,19 @@ a deprecation policy will follow the 1.0 release.
   `impact_id`, `severity_id`, `request_origin_id`, `department_id`,
   `location_id`, `requestor_id`, `recipient_id`, `owner_id`, `submit_date_ut`,
   and `last_update`.
+- `RequestUpdate.title` — a ticket's title can now be changed after creation
+  (`PUT /requests/{rfc}`), not only set at create time.
+- `EasyvistaClient.download_document` / `AsyncEasyvistaClient.download_document`
+  fetch an attachment's bytes. An absolute download URL is followed only when
+  its scheme and host match the configured `server`: every request carries the
+  instance's Bearer token, so a URL naming another host is refused rather than
+  followed.
+- `Request` now declares the official time-limit fields as typed attributes:
+  `creation_date_ut`, `max_resolution_date_ut`, `expected_date_ut`,
+  `end_date_ut`, `sla_id` and `time_used_to_solve_request`. As with the existing
+  timestamps, they are verified *returned* and no datetime parsing is claimed.
+  The instance-specific `E_GTR_*` / `E_GTI_*` family stays undeclared and
+  reachable through `classify_fields().custom`.
 
 ### Removed
 
