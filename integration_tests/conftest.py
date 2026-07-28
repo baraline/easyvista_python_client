@@ -156,9 +156,7 @@ def sample_catalog_code() -> str:
     isolate a different failure cannot use a made-up one, and the real code must
     not live in a tracked file.
     """
-    value = _resolve(
-        ("EASYVISTA_TEST_CATALOG_CODE",), "easyvista_test_catalog_code"
-    )
+    value = _resolve(("EASYVISTA_TEST_CATALOG_CODE",), "easyvista_test_catalog_code")
     if not value:
         pytest.skip(
             "needs EASYVISTA_TEST_CATALOG_CODE (or secrets/easyvista_test_catalog_code)"

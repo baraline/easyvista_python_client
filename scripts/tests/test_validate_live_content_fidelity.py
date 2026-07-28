@@ -13,9 +13,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-_SCRIPT = (
-    Path(__file__).resolve().parents[1] / "validate_live_content_fidelity.py"
-)
+_SCRIPT = Path(__file__).resolve().parents[1] / "validate_live_content_fidelity.py"
 
 
 def _load_script():
@@ -62,9 +60,7 @@ class TestClassifyFidelity:
     def test_dropped_readable_text_is_mangled(self) -> None:
         # The server silently dropped meaningful characters from the body.
         assert (
-            fid.classify_fidelity(
-                "total cost is 100 dollars", "total cost is dollars"
-            )
+            fid.classify_fidelity("total cost is 100 dollars", "total cost is dollars")
             == fid.MANGLED
         )
 
