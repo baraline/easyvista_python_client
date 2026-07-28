@@ -264,6 +264,17 @@ class EasyvistaClient:
         spec, parse = documents_res.build_list_documents(rfc_number)
         return parse(self._transport.send(spec))
 
+    def download_document(self, document: Document | str) -> bytes:
+        """Fetch an attachment's bytes.
+
+        ``document`` is a :class:`Document` from :meth:`list_documents` or a raw
+        href/path. Raises :class:`ValueError` when the record carries no
+        download URL, and :class:`EasyvistaError` when that URL points outside
+        the configured instance (see
+        :meth:`~easyvista_python_client._transport.BaseTransport.resolve_url`).
+        """
+        return self._transport.get_bytes(documents_res.download_href(document))
+
     # --- departments ----------------------------------------------------------
     def get_department(self, department_id: str | int) -> Department:
         spec, parse = departments_res.build_get_department(department_id)

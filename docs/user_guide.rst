@@ -195,10 +195,16 @@ Attach a file to a ticket (uploaded as base64 inside the JSON body) and list a t
    pdf = Path("report.pdf")
    client.add_document(ticket.rfc_number, filename=pdf.name, content=pdf.read_bytes())
    attachments = client.list_documents(ticket.rfc_number)
+   content = client.download_document(attachments[0])
+   Path("downloaded.pdf").write_bytes(content)
 
 .. note::
 
-   Binary **download** and multipart upload are not implemented yet — see the GLPI-parity roadmap.
+   ``download_document`` accepts a :class:`~easyvista_python_client.Document` or a raw
+   href. An absolute URL is followed only when its scheme and host match the configured
+   ``server`` — every request carries the instance's Bearer token, so a URL naming
+   another host is refused rather than followed. Multipart upload is still not
+   implemented; uploads go as base64 inside the JSON body.
 
 Exporting a ticket to Markdown
 ------------------------------

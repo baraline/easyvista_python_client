@@ -260,6 +260,10 @@ class AsyncEasyvistaClient:
         spec, parse = documents_res.build_list_documents(rfc_number)
         return parse(await self._transport.asend(spec))
 
+    async def download_document(self, document: Document | str) -> bytes:
+        """Async twin of :meth:`EasyvistaClient.download_document`."""
+        return await self._transport.aget_bytes(documents_res.download_href(document))
+
     # --- departments ----------------------------------------------------------
     async def get_department(self, department_id: str | int) -> Department:
         spec, parse = departments_res.build_get_department(department_id)

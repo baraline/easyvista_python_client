@@ -1,6 +1,10 @@
 import base64
 
+import pytest
+
+from easyvista_python_client.models.document import Document
 from easyvista_python_client.resources import documents as d
+from easyvista_python_client.resources.documents import download_href
 
 
 def test_build_add_document_base64_envelope_and_path():
@@ -54,3 +58,27 @@ def test_build_list_documents_capital_documents_envelope():
     docs = parser(payload)
     assert [doc.filename for doc in docs] == ["a.txt", "b.png"]
     assert [doc.download_href for doc in docs] == ["d1", "d2"]
+
+
+def test_download_href_prefers_the_ddl_href():
+    doc = Document.model_validate(
+        {
+            "HREF": "https://ev.test/api/v1/acme/documents/7",
+            "DDL_HREF": "https://ev.test/dl/7",
+        }
+    )
+    assert download_href(doc) == "https://ev.test/dl/7"
+
+
+def test_download_href_falls_back_to_the_plain_href():
+    doc = Document.model_validate({"HREF": "https://ev.test/api/v1/acme/documents/7"})
+    assert download_href(doc) == "https://ev.test/api/v1/acme/documents/7"
+
+
+def test_download_href_accepts_a_raw_string():
+    assert download_href("documents/7/content") == "documents/7/content"
+
+
+def test_download_href_raises_when_no_url_is_available():
+    with pytest.raises(ValueError, match="no download URL"):
+        download_href(Document.model_validate({"DOCUMENT": "report.pdf"}))

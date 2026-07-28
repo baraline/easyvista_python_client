@@ -55,3 +55,24 @@ def build_list_documents(
     rfc_number: str,
 ) -> tuple[RequestSpec, Callable[[Any], list[Document]]]:
     return RequestSpec("GET", f"requests/{rfc_number}/documents"), _all_documents
+
+
+def download_href(document: Document | str) -> str:
+    """The URL to fetch a document's bytes.
+
+    Accepts a :class:`Document` or a raw href/path. Prefers ``DDL_HREF`` (the
+    direct-download URL) and falls back to ``HREF``. Lives here, not on either
+    client, so the sync and async ``download_document`` share one definition of
+    which field carries the URL -- the same reason every other request/response
+    decision lives in this package.
+    """
+    href = (
+        document
+        if isinstance(document, str)
+        else (document.download_href or document.href)
+    )
+    if not href:
+        raise ValueError(
+            "document has no download URL (neither DDL_HREF nor HREF is set)"
+        )
+    return href

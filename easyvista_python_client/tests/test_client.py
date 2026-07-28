@@ -6,6 +6,7 @@ import respx
 
 from easyvista_python_client.client import EasyvistaClient
 from easyvista_python_client.directory import DepartmentContext
+from easyvista_python_client.exceptions import EasyvistaError
 from easyvista_python_client.models.action import PostAction
 from easyvista_python_client.models.asset import PostAsset
 from easyvista_python_client.models.department import (
@@ -13,6 +14,7 @@ from easyvista_python_client.models.department import (
     DepartmentUpdate,
     PostDepartment,
 )
+from easyvista_python_client.models.document import Document
 from easyvista_python_client.models.employee import Employee, PostEmployee
 from easyvista_python_client.models.request import PostRequest, RequestUpdate
 
@@ -923,3 +925,33 @@ def test_find_departments_rejects_comma_injection(config):
     # The unsafe value must never reach the server as a filter.
     for call in route.calls:
         assert '"' not in (call.request.url.params.get("search") or "")
+
+
+@respx.mock
+def test_download_document_fetches_the_ddl_href(config):
+    route = respx.get("https://ev.test/dl/7").mock(
+        return_value=httpx.Response(200, content=b"\x89PNG\r\n\x1a\n binary")
+    )
+    doc = Document.model_validate(
+        {"DOCUMENT": "shot.png", "DDL_HREF": "https://ev.test/dl/7"}
+    )
+    with EasyvistaClient(config) as client:
+        content = client.download_document(doc)
+    assert content == b"\x89PNG\r\n\x1a\n binary"
+    assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+@respx.mock
+def test_download_document_accepts_a_relative_path(config):
+    respx.get(f"{ROOT}/documents/7/content").mock(
+        return_value=httpx.Response(200, content=b"bytes")
+    )
+    with EasyvistaClient(config) as client:
+        assert client.download_document("documents/7/content") == b"bytes"
+
+
+def test_download_document_refuses_a_foreign_download_url(config):
+    doc = Document.model_validate({"DDL_HREF": "https://attacker.test/dl/7"})
+    with EasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaError, match="outside the configured instance"):
+            client.download_document(doc)
