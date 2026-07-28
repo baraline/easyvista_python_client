@@ -48,6 +48,13 @@ a deprecation policy will follow the 1.0 release.
   unescaped. Because `,` is an EasyVista combinator, a crafted value could silently widen the
   result set (verified live: a department lookup returned 2 records instead of 1). Both now
   validate the value.
+- **Documentation of observed behaviour, not a code change:** a `description` supplied to
+  `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
+  `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's
+  `COMMENT` Memo, not `DESCRIPTION` — verified live (0/15 sampled tickets, portal-created
+  included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
+  text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
+  directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
 
 ### Changed
 

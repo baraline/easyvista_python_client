@@ -128,6 +128,11 @@ class PostRequest(EasyvistaWriteModel):
     ``catalog_guid`` field was removed: it is absent from the documented create
     body, and it cannot be verified on a profile where ``GET /catalog-requests``
     returns 403 (no way to obtain a real catalog GUID).
+
+    ``description`` supplied at create time was **not** readable back through
+    either Memo on the verified instance -- neither ``DESCRIPTION`` nor
+    ``COMMENT``. To set body text you can read again, follow the create with
+    ``update_ticket(rfc, RequestUpdate(description=...))``.
     """
 
     catalog_code: str | None = None
@@ -151,6 +156,15 @@ class RequestUpdate(EasyvistaWriteModel):
     accepted against a live instance -- ``title`` by the Phase 0 probe and by
     ``integration_tests/test_live_ticket_identity.py``. Nothing is added
     speculatively: an unaccepted field would silently no-op or raise HTTP 590.
+
+    ``description`` writes the ticket's **COMMENT** Memo, not ``DESCRIPTION`` --
+    verified live. EasyVista models ``COMMENT`` as the request's justification
+    and ``DESCRIPTION`` as a separate Memo; which one a deployment actually
+    populates is a per-instance configuration choice. On the instance this
+    client was verified against, ``DESCRIPTION`` is empty on every ticket and
+    ``COMMENT`` carries the body text. Read it back with
+    ``resolve_memo("requests/{rfc}/comment")``, or take
+    ``TicketContext.comment``, which resolves it for you.
     """
 
     status_id: int | None = None

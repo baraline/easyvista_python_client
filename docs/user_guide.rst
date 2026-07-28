@@ -138,6 +138,14 @@ Fetch, update, and close a ticket by its RFC number:
        comment="Resolved",
    )
 
+.. note::
+
+   A ``description`` supplied at create time was not readable back through either
+   Memo field on the instance this client was verified against.
+   ``RequestUpdate.description`` writes the ticket's ``COMMENT`` Memo, not
+   ``DESCRIPTION`` — read it back with ``TicketContext.comment`` (see
+   :meth:`~easyvista_python_client.EasyvistaClient.get_ticket_context`).
+
 Custom fields
 ~~~~~~~~~~~~~
 
@@ -485,3 +493,10 @@ Create a ticket, add a comment, close it, and read it back:
        )
        resolved = client.get_ticket(ticket.rfc_number)
        print(resolved.rfc_number, resolved.status_id)
+
+.. note::
+
+   The ``description`` passed to ``PostRequest`` above is not guaranteed readable
+   back on every instance — see the note under "Working with tickets". If you need
+   to read the body text back, write it with ``update_ticket`` /
+   ``RequestUpdate.description`` and fetch it via ``TicketContext.comment``.
