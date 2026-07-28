@@ -193,6 +193,33 @@ class EasyvistaClient:
         spec, parse = actions_res.build_list_actions(rfc_number)
         return parse(self._transport.send(spec))
 
+    def get_action(self, action_id: str | int) -> Action:
+        """Fetch one action, including the Memo links ``list_actions`` omits.
+
+        The note text lives behind :attr:`Action.description`'s href on this
+        record; :meth:`get_ticket_context` resolves it for you.
+        """
+        spec, parse = actions_res.build_get_action(action_id)
+        return parse(self._transport.send(spec))
+
+    def _resolve_action_body(self, action: Action) -> Action:
+        """Return ``action`` with its note text resolved onto ``description``.
+
+        Costs two requests per action (item fetch, then the Memo), so callers
+        that do not need bodies pass ``resolve_action_bodies=False``. Degrades
+        to the unresolved record on 403/404 rather than failing the bundle.
+        """
+        if action.action_id is None:
+            return action
+        try:
+            full = self.get_action(action.action_id)
+        except (EasyvistaNotFound, EasyvistaAuthError):
+            return action
+        if isinstance(full.description, dict):
+            href = full.description.get("HREF")
+            full.description = self._safe_memo(href) if href else None
+        return full
+
     # --- assets --------------------------------------------------------------
     def create_asset(self, asset: PostAsset) -> Asset:
         spec, parse = assets_res.build_create_asset(asset)
@@ -469,12 +496,21 @@ class EasyvistaClient:
         field = path.rstrip("/").rsplit("/", 1)[-1]
         return parse_memo(self._transport.send(RequestSpec("GET", path)), field)
 
-    def get_ticket_context(self, rfc_number: str) -> TicketContext:
+    def get_ticket_context(
+        self, rfc_number: str, *, resolve_action_bodies: bool = True
+    ) -> TicketContext:
         """Fetch a ticket plus its resolved narrative content as a bundle.
 
-        Resolves the href-only ``description``/``comment`` sub-resources and lists
-        actions/documents. Missing sub-resources (404) or profile-restricted lists
-        (403) degrade to ``None`` / ``[]`` rather than failing the whole call.
+        Resolves the href-only ``description``/``comment`` sub-resources and
+        lists actions/documents. Missing sub-resources (404) or
+        profile-restricted lists (403) degrade to ``None`` / ``[]`` rather than
+        failing the whole call.
+
+        ``resolve_action_bodies`` (default on) additionally fetches each action
+        item-level and resolves its note text, because ``list_actions`` does not
+        return it — without this the rendered Markdown has empty action bodies.
+        It costs two extra requests per action; pass ``False`` to skip it when
+        you only need the action list.
         """
         ticket = self.get_ticket(rfc_number)
         description = self._safe_memo(f"requests/{rfc_number}/description")
@@ -483,6 +519,8 @@ class EasyvistaClient:
             actions = self.list_actions(rfc_number)
         except EasyvistaAuthError:
             actions = []
+        if resolve_action_bodies:
+            actions = [self._resolve_action_body(action) for action in actions]
         try:
             documents = self.list_documents(rfc_number)
         except EasyvistaAuthError:

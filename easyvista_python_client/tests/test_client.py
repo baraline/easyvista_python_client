@@ -955,3 +955,111 @@ def test_download_document_refuses_a_foreign_download_url(config):
     with EasyvistaClient(config) as client:
         with pytest.raises(EasyvistaError, match="outside the configured instance"):
             client.download_document(doc)
+
+
+@respx.mock
+def test_get_action_fetches_the_item_level_record(config):
+    respx.get(f"{ROOT}/actions/52990").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 52990,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/52990/description"},
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        action = client.get_action(52990)
+    assert action.action_id == 52990
+    assert action.description == {"HREF": f"{ROOT}/actions/52990/description"}
+
+
+@respx.mock
+def test_ticket_context_resolves_action_bodies(config):
+    # The defect this fixes: list_actions never returns DESCRIPTION, so the
+    # rendered Markdown had empty action bodies. The context now fetches each
+    # action item-level and resolves its DESCRIPTION memo.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1", "TITLE": "T"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "the ticket body"})
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
+    )
+    respx.get(f"{ROOT}/actions/7").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 7,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/7/description"},
+            },
+        )
+    )
+    respx.get(f"{ROOT}/actions/7/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "<p>the note</p>"})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert context.actions[0].description == "<p>the note</p>"
+    assert "the note" in context.to_markdown()
+
+
+@respx.mock
+def test_ticket_context_can_skip_resolving_action_bodies(config):
+    # Opt-out: resolving costs two extra requests per action, and a ticket on
+    # this instance carries ~11 workflow-generated actions.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(
+        return_value=httpx.Response(404)
+    )
+    item = respx.get(f"{ROOT}/actions/7").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 7})
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        client.get_ticket_context("I1", resolve_action_bodies=False)
+    assert item.call_count == 0
+
+
+@respx.mock
+def test_ticket_context_tolerates_an_unreadable_action(config):
+    # A 403 on one action must not fail the whole bundle -- same degradation
+    # rule the rest of get_ticket_context follows.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
+    )
+    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(403))
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert context.actions[0].action_id == 7
+    assert context.actions[0].description is None

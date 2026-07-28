@@ -32,6 +32,14 @@ a deprecation policy will follow the 1.0 release.
   timestamps, they are verified *returned* and no datetime parsing is claimed.
   The instance-specific `E_GTR_*` / `E_GTI_*` family stays undeclared and
   reachable through `classify_fields().custom`.
+- `EasyvistaClient.get_action` / `AsyncEasyvistaClient.get_action` fetch a single
+  action. The item-level record carries Memo links that `list_actions` omits —
+  including `DESCRIPTION`, which is where an action's note text actually lives.
+- `Action.description` and `Action.href`, plus `action_id` derived from the
+  create response's HREF (`POST requests/{rfc}/actions` echoes an HREF with no
+  populated `ACTION_ID`, exactly as ticket creation does).
+- `get_ticket_context(..., resolve_action_bodies=True)` resolves each action's
+  note text. Pass `False` to skip it — it costs two extra requests per action.
 
 ### Removed
 
@@ -55,6 +63,11 @@ a deprecation policy will follow the 1.0 release.
   included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
   text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
   directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
+- `TicketContext.to_markdown` rendered every action with an empty body. It read
+  the text from `Action.comment`, but `COMMENT` is a distinct field that never
+  carries it; the note supplied as `PostAction.description` comes back through
+  the action's `DESCRIPTION` Memo, which is reachable only via an item-level
+  `GET actions/{id}`. Verified against a live instance.
 
 ### Changed
 

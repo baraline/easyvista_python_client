@@ -15,7 +15,7 @@ from .._transport import RequestSpec
 from ..filters import ev_equals_filter
 from ..models.action import Action, PostAction
 from ..pagination import extract_records
-from .descriptor import ResourceDescriptor, build_search
+from .descriptor import ResourceDescriptor, build_get, build_search
 
 ACTIONS: ResourceDescriptor[Action] = ResourceDescriptor(
     path="actions", envelope_key="actions", model=Action
@@ -55,3 +55,18 @@ def build_list_actions(
         return parse_search(data).records
 
     return spec, parse
+
+
+def build_get_action(
+    action_id: str | int,
+) -> tuple[RequestSpec, Callable[[Any], Action]]:
+    """Fetch ONE action by id.
+
+    The item-level record is far richer than the list endpoint's: the note text
+    a caller passed as ``PostAction.description`` comes back through a
+    ``DESCRIPTION`` Memo sub-resource that ``list_actions`` does not return at
+    all (verified live). Uses the **top-level** ``actions/{id}`` path — the
+    nested ``requests/{rfc}/actions/{id}`` is rejected with HTTP 403, the same
+    way the nested list path is.
+    """
+    return build_get(ACTIONS, action_id)

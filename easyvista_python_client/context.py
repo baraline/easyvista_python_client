@@ -73,7 +73,15 @@ class TicketContext:
                 author = _text(adata.get("DONE_BY"))
                 heading = type_label + (f" — {author}" if author else "")
                 lines.append(f"### {heading}")
-                body = html_to_text(action.comment)
+                # DESCRIPTION carries the note text once get_ticket_context has
+                # resolved it; COMMENT is a separate field that never does
+                # (verified live). Fall back to it only for records that
+                # predate resolution.
+                body = html_to_text(
+                    action.description if isinstance(action.description, str) else None
+                ) or html_to_text(
+                    action.comment if isinstance(action.comment, str) else None
+                )
                 if body:
                     lines.extend(["", body])
                 lines.append("")

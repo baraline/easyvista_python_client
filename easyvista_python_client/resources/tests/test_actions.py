@@ -2,6 +2,7 @@ import pytest
 
 from easyvista_python_client.models.action import Action, PostAction
 from easyvista_python_client.resources import actions as a
+from easyvista_python_client.resources.actions import build_get_action
 
 
 def test_action_accepts_object_action_type():
@@ -66,3 +67,16 @@ def test_build_list_actions_rejects_blank_rfc(rfc):
 def test_build_list_actions_filters_by_rfc():
     spec, _ = a.build_list_actions("I240101_0001")
     assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'
+
+
+def test_build_get_action_targets_the_top_level_path():
+    spec, _ = build_get_action(52990)
+    assert spec.method == "GET"
+    # Top-level actions/{id}: the nested requests/{rfc}/actions/{id} is 403.
+    assert spec.path == "actions/52990"
+
+
+def test_build_get_action_parses_an_enveloped_record():
+    _, parse = build_get_action(52990)
+    action = parse({"actions": [{"ACTION_ID": 52990}]})
+    assert action.action_id == 52990

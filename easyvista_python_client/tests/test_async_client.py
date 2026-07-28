@@ -589,3 +589,47 @@ async def test_download_document_refuses_a_foreign_download_url(config):
     async with AsyncEasyvistaClient(config) as client:
         with pytest.raises(EasyvistaError, match="outside the configured instance"):
             await client.download_document(doc)
+
+
+@respx.mock
+async def test_get_action_fetches_the_item_level_record(config):
+    respx.get(f"{ROOT}/actions/52990").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 52990})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        action = await client.get_action(52990)
+    assert action.action_id == 52990
+
+
+@respx.mock
+async def test_ticket_context_resolves_action_bodies(config):
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
+    )
+    respx.get(f"{ROOT}/actions/7").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 7,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/7/description"},
+            },
+        )
+    )
+    respx.get(f"{ROOT}/actions/7/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "the note"})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        context = await client.get_ticket_context("I1")
+    assert context.actions[0].description == "the note"

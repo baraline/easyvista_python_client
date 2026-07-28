@@ -4,19 +4,47 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from .common import EasyvistaModel, EasyvistaWriteModel
+from .common import EasyvistaModel, EasyvistaWriteModel, OptionalInt
 
 
 class Action(EasyvistaModel):
-    """An action recorded against a ticket."""
+    """An action recorded against a ticket.
 
-    action_id: int | None = Field(default=None, alias="ACTION_ID")
-    comment: str | None = Field(default=None, alias="COMMENT")
+    Two shapes reach this model. ``list_actions`` returns a slim collection
+    record; ``get_action`` returns a much fuller item-level one whose
+    ``DESCRIPTION`` and ``COMMENT`` are Memo href objects. The note text a
+    caller supplied as ``PostAction.description`` comes back through
+    ``DESCRIPTION`` — **not** ``COMMENT``, and not on the list endpoint at all
+    (verified live). ``extra="allow"`` preserves everything else.
+    """
+
+    action_id: OptionalInt = Field(default=None, alias="ACTION_ID")
+    href: str | None = Field(default=None, alias="HREF")
+    comment: str | dict[str, Any] | None = Field(default=None, alias="COMMENT")
+    # Memo href object on the item-level GET; a plain string once resolved.
+    description: str | dict[str, Any] | None = Field(default=None, alias="DESCRIPTION")
     # The live API returns ACTION_TYPE as a nested object (id/name/...), not a
     # bare string, so accept either (same polymorphism as Request.description).
     action_type: str | dict[str, Any] | None = Field(default=None, alias="ACTION_TYPE")
+
+    @model_validator(mode="after")
+    def _derive_action_id_from_href(self) -> Action:
+        """Populate ``action_id`` from ``href`` when the API omits it.
+
+        ``POST requests/{rfc}/actions`` echoes an HREF-only body whose
+        ``ACTION_ID`` is unpopulated — the same shape ticket creation returns
+        (see ``Request._derive_rfc_from_href``). The trailing path segment of
+        that HREF is the action's id, so callers can use ``action.action_id``
+        straight after a create. Reads, which carry a real ``ACTION_ID``, are
+        left untouched, as is an HREF whose tail is not numeric.
+        """
+        if self.action_id is None and isinstance(self.href, str) and self.href:
+            tail = self.href.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+            if tail.isdigit():
+                self.action_id = int(tail)
+        return self
 
 
 class PostAction(EasyvistaWriteModel):

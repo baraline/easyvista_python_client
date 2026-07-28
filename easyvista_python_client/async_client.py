@@ -189,6 +189,33 @@ class AsyncEasyvistaClient:
         spec, parse = actions_res.build_list_actions(rfc_number)
         return parse(await self._transport.asend(spec))
 
+    async def get_action(self, action_id: str | int) -> Action:
+        """Fetch one action, including the Memo links ``list_actions`` omits.
+
+        The note text lives behind :attr:`Action.description`'s href on this
+        record; :meth:`get_ticket_context` resolves it for you.
+        """
+        spec, parse = actions_res.build_get_action(action_id)
+        return parse(await self._transport.asend(spec))
+
+    async def _resolve_action_body(self, action: Action) -> Action:
+        """Return ``action`` with its note text resolved onto ``description``.
+
+        Costs two requests per action (item fetch, then the Memo), so callers
+        that do not need bodies pass ``resolve_action_bodies=False``. Degrades
+        to the unresolved record on 403/404 rather than failing the bundle.
+        """
+        if action.action_id is None:
+            return action
+        try:
+            full = await self.get_action(action.action_id)
+        except (EasyvistaNotFound, EasyvistaAuthError):
+            return action
+        if isinstance(full.description, dict):
+            href = full.description.get("HREF")
+            full.description = await self._safe_memo(href) if href else None
+        return full
+
     # --- assets --------------------------------------------------------------
     async def create_asset(self, asset: PostAsset) -> Asset:
         spec, parse = assets_res.build_create_asset(asset)
@@ -439,7 +466,9 @@ class AsyncEasyvistaClient:
         field = path.rstrip("/").rsplit("/", 1)[-1]
         return parse_memo(await self._transport.asend(RequestSpec("GET", path)), field)
 
-    async def get_ticket_context(self, rfc_number: str) -> TicketContext:
+    async def get_ticket_context(
+        self, rfc_number: str, *, resolve_action_bodies: bool = True
+    ) -> TicketContext:
         """Async twin of :meth:`EasyvistaClient.get_ticket_context`."""
         ticket = await self.get_ticket(rfc_number)
         description = await self._safe_memo(f"requests/{rfc_number}/description")
@@ -448,6 +477,8 @@ class AsyncEasyvistaClient:
             actions = await self.list_actions(rfc_number)
         except EasyvistaAuthError:
             actions = []
+        if resolve_action_bodies:
+            actions = [await self._resolve_action_body(action) for action in actions]
         try:
             documents = await self.list_documents(rfc_number)
         except EasyvistaAuthError:
