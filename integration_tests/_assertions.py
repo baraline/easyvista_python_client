@@ -5,13 +5,21 @@ helpers. That is what makes "no real instance data" structural rather than
 remembered: writing ``assert employee.last_name == "..."`` means bypassing this
 module, which a reviewer can see in the diff.
 
-**Why each helper binds its result to a local before asserting.** pytest rewrites
-assertions and reports the operands of the expression it rewrote, so
-``assert bool(value), msg`` reports ``where False = bool(<the live value>)`` and
-``assert isinstance(value, str), msg`` reports the value too. The message string
-is not what protects anything -- binding the boolean to a plain local first is,
-because a bare ``assert ok`` gives the rewriter nothing to expand. Do not
-"simplify" these back into one-liners; ``test_assertions.py`` will fail if you do.
+**What actually keeps live values out of failure text.** Every helper takes a
+``label`` and builds a message naming only that label, so a caller cannot
+interpolate the value by accident. That is the guarantee, and it holds
+unconditionally.
+
+Each helper additionally binds its result to a plain local before asserting
+(``ok = bool(value)``, then ``assert ok, ...``). That is defence in depth, not
+the active mechanism: pytest's assertion rewriter -- which reports the operands
+of the expression it rewrote, and would print ``where False = bool(<the live
+value>)`` -- only instruments ``conftest.py``, files matching ``python_files``,
+and modules passed to ``register_assert_rewrite``. This module is none of
+those, so its asserts are plain Python and only the message is ever rendered.
+Keep the local-variable form anyway: it costs nothing and it is what makes
+these helpers safe to move into a ``conftest.py`` or a test module later, both
+of which ARE rewritten. Do not register this module for rewriting.
 
 Identifiers (RFC numbers, ids) are fine to print. Names, e-mail addresses,
 department and catalog labels, and Consigne text are not.

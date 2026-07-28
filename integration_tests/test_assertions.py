@@ -16,11 +16,11 @@ from integration_tests._assertions import (
 
 
 class _Falsy:
-    """A falsy value whose repr is a stand-in for live data.
+    """A falsy value whose repr would be recognisable if it leaked.
 
-    Used to prove the helpers keep the value out of the failure text: if a
-    helper let pytest's assertion rewriter see the value, this repr would show
-    up in the report.
+    Stands in for live data (a name, an e-mail address): the tests below check
+    that the failure message is built from the label alone, so this repr never
+    appears in it.
     """
 
     def __init__(self, text: str) -> None:
@@ -43,7 +43,7 @@ def test_assert_populated_message_names_only_the_label():
     assert str(info.value) == "REQUESTOR is empty"
 
 
-def test_assert_populated_never_reports_the_value():
+def test_assert_populated_message_excludes_the_value():
     with pytest.raises(AssertionError) as info:
         assert_populated(_Falsy("A Real Person"), "REQUESTOR")
     assert "A Real Person" not in str(info.value)
@@ -54,7 +54,7 @@ def test_assert_shape_accepts_a_matching_type():
     assert_shape(3, (int, str), "SLA_ID")
 
 
-def test_assert_shape_message_names_the_label_and_types_only():
+def test_assert_shape_message_excludes_the_value():
     with pytest.raises(AssertionError) as info:
         assert_shape(_Falsy("someone@example.test"), int, "REQUESTOR_ID")
     message = str(info.value)
@@ -94,3 +94,17 @@ def test_require_field_skip_message_is_exactly_the_field_name():
     assert str(info.value) == (
         "the field REQUESTOR_NAME is present but empty on this instance"
     )
+
+
+def test_helper_messages_name_only_the_label():
+    # The real guarantee: a failure message is assembled from the label and
+    # nothing else, so no caller can leak a live name or e-mail through one.
+    secret = "someone@example.test"
+    with pytest.raises(AssertionError) as populated:
+        assert_populated(_Falsy(secret), "REQUESTOR")
+    with pytest.raises(AssertionError) as shape:
+        assert_shape(_Falsy(secret), int, "REQUESTOR_ID")
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        require_field({"REQUESTOR_NAME": ""}, "REQUESTOR_NAME")
+    for outcome in (populated, shape, skipped):
+        assert secret not in str(outcome.value)
