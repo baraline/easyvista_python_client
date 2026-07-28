@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any, NoReturn
+from urllib.parse import urlsplit
 
 import httpx
 from tenacity import (
@@ -49,6 +50,31 @@ class BaseTransport:
 
     def build_url(self, path: str) -> str:
         return f"{self.config.api_root}/{path.lstrip('/')}"
+
+    def resolve_url(self, path_or_url: str) -> str:
+        """Return an absolute URL for a resource path or an API-supplied URL.
+
+        Relative paths join to ``api_root`` exactly as :meth:`build_url` does.
+        An absolute URL is passed through **only when its scheme and host match
+        ``config.server``**, and raises otherwise.
+
+        That check is load-bearing, not decoration. Every request this transport
+        makes carries the instance's Bearer token, so following an absolute URL
+        taken out of a response body (an attachment's ``DDL_HREF``, say) would
+        hand that credential to whatever host the body named. The API is trusted
+        to describe its own instance, not to redirect us off it.
+        """
+        parsed = urlsplit(path_or_url)
+        if not parsed.scheme and not parsed.netloc:
+            return self.build_url(path_or_url)
+        server = urlsplit(self.config.server)
+        if (parsed.scheme, parsed.netloc) != (server.scheme, server.netloc):
+            raise EasyvistaError(
+                f"refusing to fetch {parsed.scheme}://{parsed.netloc} — it is "
+                f"outside the configured instance "
+                f"({server.scheme}://{server.netloc})"
+            )
+        return path_or_url
 
     def headers(self) -> dict[str, str]:
         base = {"Accept": "application/json", "Content-Type": "application/json"}
@@ -180,6 +206,42 @@ class SyncTransport(BaseTransport):
         except httpx.TransportError as exc:
             raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
 
+    def _do_get_bytes(self, path_or_url: str) -> bytes:
+        response = self._client.get(
+            self.resolve_url(path_or_url), follow_redirects=True
+        )
+        if self.is_retryable_status(response.status_code):
+            raise _RetryableResponse(response)
+        if not response.is_success:
+            self._raise_for_response(response)
+        return response.content
+
+    def get_bytes(self, path_or_url: str) -> bytes:
+        """GET raw bytes (an attachment), not JSON.
+
+        :meth:`BaseTransport.finish` always calls ``response.json()``, so binary
+        responses need their own path. This one reuses the same retry policy and
+        the same error mapping, so a 403 on an attachment still surfaces as
+        :class:`EasyvistaAuthError`. ``follow_redirects`` is on because a
+        download URL commonly redirects to a signed location; httpx strips the
+        ``Authorization`` header on a cross-origin redirect, so a foreign
+        redirect degrades to an unauthenticated fetch rather than leaking the
+        instance token.
+        """
+        retryer = Retrying(
+            stop=stop_after_attempt(self.config.max_retries + 1),
+            wait=wait_exponential(multiplier=0.5, max=10),
+            retry=retry_if_exception_type((_RetryableResponse, httpx.TransportError)),
+            reraise=True,
+        )
+        try:
+            result: bytes = retryer(self._do_get_bytes, path_or_url)
+            return result
+        except _RetryableResponse as exc:
+            self._raise_for_response(exc.response)
+        except httpx.TransportError as exc:
+            raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
+
 
 class AsyncTransport(BaseTransport):
     """Native-async executor backed by an ``httpx.AsyncClient``."""
@@ -221,5 +283,31 @@ class AsyncTransport(BaseTransport):
             return await retryer(self._do_asend, spec)
         except _RetryableResponse as exc:
             return self.finish(exc.response)
+        except httpx.TransportError as exc:
+            raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
+
+    async def _do_aget_bytes(self, path_or_url: str) -> bytes:
+        response = await self._client.get(
+            self.resolve_url(path_or_url), follow_redirects=True
+        )
+        if self.is_retryable_status(response.status_code):
+            raise _RetryableResponse(response)
+        if not response.is_success:
+            self._raise_for_response(response)
+        return response.content
+
+    async def aget_bytes(self, path_or_url: str) -> bytes:
+        """Async twin of :meth:`SyncTransport.get_bytes`."""
+        retryer = AsyncRetrying(
+            stop=stop_after_attempt(self.config.max_retries + 1),
+            wait=wait_exponential(multiplier=0.5, max=10),
+            retry=retry_if_exception_type((_RetryableResponse, httpx.TransportError)),
+            reraise=True,
+        )
+        try:
+            result: bytes = await retryer(self._do_aget_bytes, path_or_url)
+            return result
+        except _RetryableResponse as exc:
+            self._raise_for_response(exc.response)
         except httpx.TransportError as exc:
             raise EasyvistaConnectionError(f"connection failed: {exc}") from exc

@@ -281,3 +281,115 @@ async def test_asend_does_not_retry_590_and_raises_validation_error():
     assert ei.value.status_code == 590
     assert ei.value.ev_code == "2013"
     assert route.call_count == 1
+
+
+def test_resolve_url_joins_a_relative_path_to_the_api_root():
+    assert _base().resolve_url("requests/I1") == f"{ROOT}/requests/I1"
+
+
+def test_resolve_url_passes_through_a_same_origin_absolute_url():
+    url = "https://ev.test/download/attachment/42"
+    assert _base().resolve_url(url) == url
+
+
+def test_resolve_url_rejects_a_foreign_origin():
+    # Load-bearing, not decoration: every request this transport makes carries
+    # the instance's Bearer token, so following a URL a response body named
+    # would hand that credential to whatever host it named.
+    with pytest.raises(EasyvistaError, match="outside the configured instance"):
+        _base().resolve_url("https://attacker.test/download/attachment/42")
+
+
+def test_resolve_url_rejects_a_scheme_downgrade_on_the_same_host():
+    with pytest.raises(EasyvistaError, match="outside the configured instance"):
+        _base().resolve_url("http://ev.test/download/attachment/42")
+
+
+@respx.mock
+def test_get_bytes_returns_raw_content_not_json():
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(200, content=b"\x00\x01\xff not json")
+    )
+    with SyncTransport(_cfg()) as transport:
+        assert transport.get_bytes("documents/1/content") == b"\x00\x01\xff not json"
+
+
+@respx.mock
+def test_get_bytes_sends_the_bearer_header():
+    route = respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(200, content=b"ok")
+    )
+    with SyncTransport(_cfg()) as transport:
+        transport.get_bytes("https://ev.test/download/42")
+    assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+@respx.mock
+def test_get_bytes_maps_403_to_auth_error():
+    respx.get(f"{ROOT}/documents/1/content").mock(return_value=httpx.Response(403))
+    with SyncTransport(_cfg()) as transport:
+        with pytest.raises(EasyvistaAuthError):
+            transport.get_bytes("documents/1/content")
+
+
+@respx.mock
+def test_get_bytes_retries_then_succeeds():
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, content=b"bytes")]
+    )
+    with SyncTransport(_cfg(max_retries=2)) as transport:
+        assert transport.get_bytes("documents/1/content") == b"bytes"
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_get_bytes_exhausts_retries_raises_server_error():
+    respx.get(f"{ROOT}/documents/1/content").mock(return_value=httpx.Response(503))
+    with SyncTransport(_cfg(max_retries=1)) as transport:
+        with pytest.raises(EasyvistaServerError):
+            transport.get_bytes("documents/1/content")
+
+
+@respx.mock
+def test_get_bytes_transport_error_raises_connection_error():
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+    with SyncTransport(_cfg()) as transport:
+        with pytest.raises(EasyvistaConnectionError):
+            transport.get_bytes("documents/1/content")
+
+
+@respx.mock
+async def test_aget_bytes_returns_raw_content_not_json():
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(200, content=b"\x00\x01\xff not json")
+    )
+    async with AsyncTransport(_cfg()) as transport:
+        got = await transport.aget_bytes("documents/1/content")
+    assert got == b"\x00\x01\xff not json"
+
+
+@respx.mock
+async def test_aget_bytes_maps_403_to_auth_error():
+    respx.get(f"{ROOT}/documents/1/content").mock(return_value=httpx.Response(403))
+    async with AsyncTransport(_cfg()) as transport:
+        with pytest.raises(EasyvistaAuthError):
+            await transport.aget_bytes("documents/1/content")
+
+
+@respx.mock
+async def test_aget_bytes_retries_then_succeeds():
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, content=b"bytes")]
+    )
+    async with AsyncTransport(_cfg(max_retries=2)) as transport:
+        assert await transport.aget_bytes("documents/1/content") == b"bytes"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_aget_bytes_rejects_a_foreign_origin():
+    async with AsyncTransport(_cfg()) as transport:
+        with pytest.raises(EasyvistaError, match="outside the configured instance"):
+            await transport.aget_bytes("https://attacker.test/download/42")
