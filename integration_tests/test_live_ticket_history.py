@@ -48,7 +48,8 @@ def ticket_with_action(
     fresh = [a for a in live_client.list_actions(rfc) if a.action_id not in before]
     assert len(fresh) == 1, (
         f"expected exactly 1 new action on {rfc} after creating one, got "
-        f"{len(fresh)} -- list_actions is not scoping to this ticket"
+        f"{len(fresh)} -- either list_actions is not scoping to this ticket, "
+        f"or a workflow step wrote to it concurrently"
     )
     action_id = fresh[0].action_id
     assert action_id is not None, "listed action carries no ACTION_ID"
@@ -58,35 +59,45 @@ def ticket_with_action(
 def test_list_actions_filters_to_the_requested_ticket(
     live_client: EasyvistaClient, ticket_factory, live_action_config
 ):
-    # THE decisive assertion, and the one the existing suite lacks. This API
-    # silently drops a search condition it cannot honour and returns the whole
-    # table, so a list_actions that is not really filtering looks identical to
-    # one that is -- unless you compare before and after adding exactly one
-    # action.
+    # THE decisive assertion of this module, and it has to be SPATIAL rather
+    # than temporal to be worth anything. An earlier before/after delta on a
+    # single ticket was not decisive: if list_actions returned the whole
+    # ~35,900-row /actions table, the delta across our own create would still
+    # be +1 on a quiet instance, so a broken filter looked identical to a
+    # working one.
     #
-    # Phase 0 (2026-07-28 probe, U4) found this instance's fresh tickets are
-    # NOT action-free: they already carry a stable, non-zero baseline of
-    # system/workflow-generated actions (11, reproduced across two probe
-    # runs). An absolute `actions == []` assertion would fail here for a
-    # reason that has nothing to do with filter correctness. The delta below
-    # is still decisive: a whole-table response would return the *same* huge
-    # count before and after (delta 0, or some unrelated noise), never a
-    # clean +1.
-    rfc = ticket_factory()
-    before = len(live_client.list_actions(rfc))
+    # Comparing two fresh tickets removes that dependence on background write
+    # activity entirely. A whole-table response returns the same rows for both,
+    # so the sets would be equal and our action would appear under BOTH -- which
+    # is exactly what this asserts cannot happen. This API silently drops a
+    # search condition it cannot honour and returns everything rather than
+    # erroring, which is why the guard has to be this explicit.
+    rfc_a = ticket_factory()
+    rfc_b = ticket_factory()
+    before_a = {a.action_id for a in live_client.list_actions(rfc_a)}
     live_client.create_action(
-        rfc,
+        rfc_a,
         PostAction(
             action_type_id=int(live_action_config["action_type_id"]),
             group_id=int(live_action_config["group_id"]),
             description=f"EVCLI{uuid.uuid4().hex[:10].upper()}FILTERPROBE",
         ),
     )
-    after = len(live_client.list_actions(rfc))
-    assert after == before + 1, (
-        f"list_actions on {rfc} went from {before} to {after} actions after "
-        f"creating exactly one — expected a delta of exactly 1; the filter is "
-        f"not scoping to this ticket"
+    ids_a = {a.action_id for a in live_client.list_actions(rfc_a)}
+    ids_b = {a.action_id for a in live_client.list_actions(rfc_b)}
+
+    new_ids = ids_a - before_a
+    assert len(new_ids) == 1, (
+        f"expected exactly 1 new action on {rfc_a} after creating one, got "
+        f"{len(new_ids)}"
+    )
+    assert ids_a != ids_b, (
+        f"list_actions returned the same {len(ids_a)} action ids for {rfc_a} "
+        f"and {rfc_b} -- it is not scoping to the requested ticket"
+    )
+    assert not (new_ids & ids_b), (
+        f"the action created on {rfc_a} also appears under {rfc_b} -- "
+        f"list_actions is returning unrelated tickets' actions"
     )
 
 
