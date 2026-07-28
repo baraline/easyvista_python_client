@@ -327,6 +327,7 @@ def run_offline(r: Results) -> None:
             "iter_assets": {"search", "fields", "sort", "page_size", "max_records"},
             "add_document": {"rfc_number", "filename", "content"},
             "list_documents": {"rfc_number"},
+            "download_document": {"document"},
         }
         problems = []
         for method, params in expected.items():
@@ -362,6 +363,7 @@ def run_offline(r: Results) -> None:
             "iter_assets",
             "add_document",
             "list_documents",
+            "download_document",
             "from_env",
         }
         missing = [m for m in public if not hasattr(AsyncEasyvistaClient, m)]
