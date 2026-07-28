@@ -1,12 +1,18 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.16.0
     hooks:
-      - id: ruff
+      - id: ruff-check
       - id: ruff-format
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.2
+    rev: v2.3.0
     hooks:
       - id: mypy
         additional_dependencies: ["pydantic>=2.8", "httpx", "tenacity"]
-        exclude: (^|/)tests/|(^|/)testing/
+        # Must mirror [tool.mypy] exclude in pyproject.toml. pre-commit passes
+        # filenames explicitly, and mypy ignores its own `exclude` for files named
+        # on the command line -- so this regex is the ONLY thing keeping the hook
+        # in step with the project's type-checking policy. `integration_tests/`
+        # needs its own alternative: pyproject's bare `tests/` matches it as a
+        # substring, but the anchored `(^|/)tests/` here does not.
+        exclude: (^|/)tests/|(^|/)testing/|^integration_tests/
