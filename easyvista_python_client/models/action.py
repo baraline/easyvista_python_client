@@ -33,12 +33,14 @@ class Action(EasyvistaModel):
     def _derive_action_id_from_href(self) -> Action:
         """Populate ``action_id`` from ``href`` when the API omits it.
 
-        ``POST requests/{rfc}/actions`` echoes an HREF-only body whose
-        ``ACTION_ID`` is unpopulated — the same shape ticket creation returns
-        (see ``Request._derive_rfc_from_href``). The trailing path segment of
-        that HREF is the action's id, so callers can use ``action.action_id``
-        straight after a create. Reads, which carry a real ``ACTION_ID``, are
-        left untouched, as is an HREF whose tail is not numeric.
+        Defensive, and deliberately narrow: it fires only when ``href``'s
+        trailing segment is numeric. It does **not** fire for a create
+        response — ``POST requests/{rfc}/actions`` returns an HREF naming the
+        **parent request**, not the new action, so its tail is an RFC number
+        and ``.isdigit()`` correctly declines rather than inventing an id
+        (verified live). A created action's id is not recoverable from its
+        create response at all; see :meth:`EasyvistaClient.create_action`.
+        Reads that carry a real ``ACTION_ID`` are left untouched.
         """
         if self.action_id is None and isinstance(self.href, str) and self.href:
             tail = self.href.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]

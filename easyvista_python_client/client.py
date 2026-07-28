@@ -186,6 +186,14 @@ class EasyvistaClient:
 
     # --- actions -------------------------------------------------------------
     def create_action(self, rfc_number: str, action: PostAction) -> Action:
+        """Create one action on a ticket.
+
+        The returned :class:`Action` carries **no usable ``action_id``**: the
+        live create response is an HREF naming the parent request, with no
+        ``ACTION_ID`` (verified live). To address the action you just created,
+        diff :meth:`list_actions` across the call — see
+        ``integration_tests/test_live_ticket_history.py`` for the pattern.
+        """
         spec, parse = actions_res.build_create_action(rfc_number, action)
         return parse(self._transport.send(spec))
 

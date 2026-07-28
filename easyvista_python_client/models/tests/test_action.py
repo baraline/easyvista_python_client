@@ -17,9 +17,10 @@ def test_action_reads_the_item_level_description_memo():
     }
 
 
-def test_action_id_is_derived_from_the_create_response_href():
-    # POST requests/{rfc}/actions echoes an HREF with no populated ACTION_ID
-    # (verified live). The trailing segment of that HREF is the id.
+def test_action_id_is_derived_from_a_numeric_href_tail():
+    # The validator is deliberately narrow: it only fires when href's trailing
+    # segment is numeric. It does NOT describe the live create response --
+    # that names the parent request instead, see the test below.
     action = Action.model_validate(
         {"HREF": "https://ev.test/api/v1/acme/actions/52990", "ACTION_ID": None}
     )
@@ -39,6 +40,15 @@ def test_action_id_treats_the_empty_string_sentinel_as_none():
 
 def test_action_id_ignores_a_non_numeric_href_tail():
     action = Action.model_validate({"HREF": "https://ev.test/api/v1/acme/actions"})
+    assert action.action_id is None
+
+
+def test_action_id_is_not_derived_from_a_parent_request_href():
+    # The live create response names the parent REQUEST, not the action, so the
+    # numeric-tail guard must decline rather than parse an RFC as an id.
+    action = Action.model_validate(
+        {"HREF": "https://ev.test/api/v1/acme/requests/I260728_00013"}
+    )
     assert action.action_id is None
 
 
