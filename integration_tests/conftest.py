@@ -19,6 +19,13 @@ Credentials resolve from an uppercase env var first, then a lowercase file under
     user   <- EASYVISTA_TEST_USER (or _ACCOUNT) | secrets/easyvista_test_user
     token  <- EASYVISTA_TEST_TOKEN  | secrets/easyvista_test_token
 
+Two further per-instance ids resolve the same way (env var, else the matching
+lowercase ``secrets/`` file), gating only the tests that need them
+(``live_action_config``, see below):
+
+    action_type_id <- EASYVISTA_TEST_ACTION_TYPE_ID
+    group_id       <- EASYVISTA_TEST_GROUP_ID
+
 Auth is **Bearer** (the ``token`` value) — confirmed against the live preprod
 instance. The ``url`` value is the **full API root** (it already ends in
 ``/api/v1/{account}``), so we split it back into ``server`` + ``account`` so
@@ -32,8 +39,9 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -65,6 +73,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 # secrets/ lives at the repo root: integration_tests/conftest.py -> parents[1].
 _SECRETS_DIR = Path(__file__).resolve().parents[1] / "secrets"
+
+# Bounded so the Consigne fixture cannot walk a large instance's whole directory.
+CONSIGNE_SCAN_LIMIT = 50
 
 
 def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
@@ -240,3 +251,155 @@ def probe_tickets(live_client, live_write_config) -> Iterator[tuple[str, str, st
                 errors.append((rfc, exc))
         if errors:
             raise RuntimeError(f"failed to close probe ticket(s): {errors}")
+
+
+class RichTicket(NamedTuple):
+    """The shared read-only ticket: its RFC plus the synthetic content it carries.
+
+    Consumers need the authored title and description to assert round-trips
+    against values this suite wrote (design principle P2), so they travel with
+    the RFC rather than being re-declared in every module.
+    """
+
+    rfc: str
+    title: str
+    description: str
+
+
+@pytest.fixture(scope="session")
+def live_action_config() -> dict[str, str]:
+    """Instance-specific ids needed to CREATE an action.
+
+    Deliberately separate from ``live_write_config``: that fixture gates ticket
+    creation for the whole suite (``probe_tickets`` included), and folding these
+    two keys into it would skip every write test on an instance that has simply
+    not configured an action type. Only the action-creating tests depend on this.
+    """
+    keys = {
+        "action_type_id": (
+            "EASYVISTA_TEST_ACTION_TYPE_ID",
+            "easyvista_test_action_type_id",
+        ),
+        "group_id": ("EASYVISTA_TEST_GROUP_ID", "easyvista_test_group_id"),
+    }
+    resolved: dict[str, str] = {}
+    for name, (env, filename) in keys.items():
+        value = _resolve((env,), filename)
+        if not value:
+            pytest.skip(f"action tests need {env} (or secrets/{filename})")
+        resolved[name] = value
+    return resolved
+
+
+@pytest.fixture(scope="session")
+def rich_ticket(live_client, live_write_config) -> Iterator[RichTicket]:
+    """One ticket created with every settable field; closed in teardown.
+
+    All-synthetic content, so any round-trip assertion compares our own strings
+    against themselves. Session-scoped and treated as read-only by its
+    consumers: a test that MUTATES a ticket takes a fresh one from
+    ``ticket_factory`` instead, so a title-update test can never invalidate a
+    title-read test regardless of collection order.
+    """
+    from easyvista_python_client import PostRequest
+
+    cfg = live_write_config
+    nonce = uuid.uuid4().hex[:10].upper()
+    title = f"EVCLI{nonce}RICH"
+    description = f"EVCLI{nonce} capability-suite fixture ticket; safe to close"
+    ticket = live_client.create_ticket(
+        PostRequest(
+            catalog_code=cfg["catalog_code"],
+            title=title,
+            description=description,
+            origin=int(cfg["origin"]),
+            department_id=int(cfg["department_id"]),
+            urgency_id=int(cfg["urgency_id"]),
+            impact_id=int(cfg["impact_id"]),
+        )
+    )
+    rfc = ticket.rfc_number
+    assert rfc, "create_ticket returned no rfc_number"
+    try:
+        yield RichTicket(rfc=rfc, title=title, description=description)
+    finally:
+        live_client.close_ticket(
+            rfc,
+            status_guid=cfg["status_guid"],
+            delete_actions=1,
+            comment="fixture cleanup",
+        )
+
+
+@pytest.fixture
+def ticket_factory(live_client, live_write_config) -> Iterator[Callable[[], str]]:
+    """Create fresh tickets for mutating tests; close every one in teardown.
+
+    Returns a zero-argument callable that creates one ticket and returns its
+    RFC. Teardown attempts EVERY created ticket regardless of individual
+    failures and raises once at the end -- the ``probe_tickets`` pattern -- so
+    one failed close never orphans the rest.
+    """
+    from easyvista_python_client import PostRequest
+
+    cfg = live_write_config
+    created: list[str] = []
+
+    def _make() -> str:
+        nonce = uuid.uuid4().hex[:10].upper()
+        ticket = live_client.create_ticket(
+            PostRequest(
+                catalog_code=cfg["catalog_code"],
+                title=f"EVCLI{nonce}",
+                description=f"EVCLI{nonce} capability-suite ticket; safe to close",
+                origin=int(cfg["origin"]),
+                department_id=int(cfg["department_id"]),
+                urgency_id=int(cfg["urgency_id"]),
+                impact_id=int(cfg["impact_id"]),
+            )
+        )
+        rfc = ticket.rfc_number
+        assert rfc, "create_ticket returned no rfc_number"
+        created.append(rfc)
+        return rfc
+
+    try:
+        yield _make
+    finally:
+        errors = []
+        for rfc in created:
+            try:
+                live_client.close_ticket(
+                    rfc,
+                    status_guid=cfg["status_guid"],
+                    delete_actions=1,
+                    comment="factory cleanup",
+                )
+            except Exception as exc:  # every ticket must be attempted regardless
+                errors.append((rfc, exc))
+        if errors:
+            raise RuntimeError(f"failed to close factory ticket(s): {errors}")
+
+
+@pytest.fixture(scope="session")
+def consigne_department_id(live_client) -> int:
+    """A department id whose note (``COMMENT_DEPARTMENT``) is non-empty.
+
+    Yields the **id only** -- never the note text, never the department label
+    (design principle P2). Skips when the scan finds none, which is a fact about
+    the instance rather than a defect (P1).
+    """
+    from easyvista_python_client import EasyvistaError
+
+    scanned = 0
+    for dept in live_client.iter_departments(max_records=CONSIGNE_SCAN_LIMIT):
+        if dept.department_id is None:
+            continue
+        scanned += 1
+        try:
+            note = live_client.get_department_comment(dept.department_id)
+        except EasyvistaError:
+            continue  # profile-gated or missing on this record; keep scanning
+        if note and note.strip():
+            return dept.department_id
+    pytest.skip(f"no department with a non-empty note in {scanned} scanned")
