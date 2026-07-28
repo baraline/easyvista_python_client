@@ -23,7 +23,8 @@ What it does (default run)
        filename + body, and a small binary PNG.
 4. Reads everything back (``resolve_memo`` for the description, ``list_actions``,
    ``list_documents``) and classifies each piece with the pure
-   :func:`classify_fidelity` (unit-tested in ``tests/test_content_fidelity.py``).
+   :func:`classify_fidelity` (unit-tested in
+   ``scripts/tests/test_validate_live_content_fidelity.py``).
 5. Prints a fidelity table, the API's own Markdown view of the ticket
    (``get_ticket_context().to_markdown()``), and the **RFC + URLs**. The ticket
    is left **OPEN** for manual inspection in the EasyVista web UI.

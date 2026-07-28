@@ -53,3 +53,14 @@ def test_optional_int_field_coerces_empty_and_whitespace_to_none():
     assert _M.model_validate({"n": "  "}).n is None
     assert _M.model_validate({"n": "42"}).n == 42
     assert _M.model_validate({"n": 42}).n == 42
+
+
+class _Sample(EasyvistaModel):
+    pass
+
+
+def test_base_model_keeps_unknown_fields():
+    model = _Sample.model_validate({"RFC_NUMBER": "I123", "e_custom1": "x"})
+    dumped = model.model_dump(by_alias=True)
+    assert dumped["RFC_NUMBER"] == "I123"
+    assert dumped["e_custom1"] == "x"

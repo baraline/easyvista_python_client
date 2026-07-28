@@ -14,7 +14,7 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 python -m pre_commit install
 python -m pre_commit run --all-files
-python -m pytest
+python -m pytest -m "not integration"
 ```
 
 ## Quality Checks
@@ -23,7 +23,7 @@ Run these before opening a pull request:
 
 ```bash
 python -m pre_commit run --all-files
-python -m pytest
+python -m pytest -m "not integration"
 python -m ruff check .
 python -m mypy easyvista_python_client
 ```
@@ -32,7 +32,7 @@ Coverage is enforced at 95% and `--cov` is always on via `addopts`, so a
 single-file run needs `--no-cov` to avoid a spurious under-coverage failure:
 
 ```bash
-python -m pytest tests/test_client_sync.py --no-cov
+python -m pytest easyvista_python_client/tests/test_client.py --no-cov
 ```
 
 ## Documentation build
@@ -43,9 +43,9 @@ python -m sphinx -W --keep-going -b html docs docs/_build/html
 
 ## Live integration tests
 
-`integration_tests/` lives at the repository root, outside `tests/`, because it
-calls a **real EasyVista instance that you supply**. It never runs in CI — CI runs
-`pytest -m "not integration"`.
+`integration_tests/` lives at the repository root, apart from the unit tests
+inside the package, because it calls a **real EasyVista instance that you
+supply**. It never runs in CI — CI runs `pytest -m "not integration"`.
 
 Credentials come from `EASYVISTA_TEST_*` environment variables, falling back to
 files under `secrets/` (both gitignored). With none configured the suite skips
@@ -71,4 +71,13 @@ Never commit an instance host, account id, or token — see the note below.
   EasyVista instance; use obviously synthetic placeholders in examples and
   fixtures rather than values copied from a real instance.
 - Add tests for payload serialization and response normalization when adding
-  endpoints.
+  endpoints. Unit tests live beside the code: one test module per source
+  module, in that package's `tests/` directory (`models/request.py` is covered
+  by `models/tests/test_request.py`). Tests that span several modules, and any
+  shared fixture, belong in `easyvista_python_client/testing/`. Neither
+  directory ships in the wheel or the sdist.
+- "One test module per source module" is a ceiling, not a floor: a source
+  module whose behaviour is fully exercised through a caller's tests (for
+  example a model asserted only via the resource and client tests that build
+  it) does not need its own near-empty test file. Check coverage before adding
+  one.

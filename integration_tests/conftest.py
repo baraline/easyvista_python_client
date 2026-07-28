@@ -1,10 +1,11 @@
 """Fixtures for live integration tests.
 
-These tests call a real EasyVista instance, so they live outside ``tests/`` and
-are **never run in CI** — CI runs ``pytest -m "not integration"``. You supply your
-own instance: every test here skips cleanly when credentials are absent, so a
-checkout with no ``secrets/`` and no ``EASYVISTA_TEST_*`` environment simply skips
-the suite rather than failing it.
+These tests call a real EasyVista instance, so they live apart from the unit
+tests inside the package and are **never run in CI** — CI runs
+``pytest -m "not integration"``. You supply your own instance: every test here
+skips cleanly when credentials are absent, so a checkout with no ``secrets/``
+and no ``EASYVISTA_TEST_*`` environment simply skips the suite rather than
+failing it.
 
 They are not read-only. The ``probe_tickets`` fixture creates two tickets and
 closes both in teardown; ``test_live_smoke`` additionally issues one create that

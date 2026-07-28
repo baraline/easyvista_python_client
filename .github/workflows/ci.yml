@@ -26,3 +26,28 @@ jobs:
       # --strict-markers/--strict-config must be passed here, not in addopts,
       # where pytest 9 silently ignores them.
       - run: pytest -m "not integration" --strict-markers --strict-config
+
+  build-audit:
+    # Before the test co-location refactor, "tests never ship" was structural:
+    # the unit tests lived outside `packages = ["easyvista_python_client"]`, so
+    # the wheel could not physically contain them. Now they live inside that
+    # tree and are kept out only by two glob patterns in
+    # `[tool.hatch.build] exclude` (`**/tests/`, `**/testing/`) in
+    # pyproject.toml. Nothing else in this workflow builds a package, so a
+    # future edit that narrows or removes those globs would go unnoticed here
+    # and publish the entire test suite to PyPI on the next release -- an
+    # upload that cannot be taken back. This job builds both artifacts on
+    # every push and PR and asserts neither manifest contains a tests/ or
+    # testing/ path, so that regression fails CI instead of surfacing after
+    # publish. It is a separate job (not another step in the matrix above) so
+    # it builds and audits once rather than once per Python version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m build
+      - run: |
+          python -c "import glob, tarfile, zipfile; w = sorted(glob.glob('dist/*.whl'))[-1]; s = sorted(glob.glob('dist/*.tar.gz'))[-1]; names = zipfile.ZipFile(w).namelist() + tarfile.open(s).getnames(); bad = [n for n in names if '/tests/' in n or '/testing/' in n or n.endswith('/tests') or n.endswith('/testing')]; print('offenders:', bad); assert not bad, bad; print('OK - no test files in either artifact')"

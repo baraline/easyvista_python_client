@@ -17,7 +17,7 @@ The suite uses ``pytest`` with ``respx`` for HTTP mocking, and asserts a coverag
 
 .. code-block:: bash
 
-   pytest
+   pytest -m "not integration"
 
 Linting and type-checking
 --------------------------
@@ -30,8 +30,9 @@ Linting and type-checking
 Integration tests
 ------------------
 
-``integration_tests/`` (at the repository root, outside ``tests/``) calls a **real EasyVista
-instance** that you supply. It never runs in CI — CI runs ``pytest -m "not integration"``.
+``integration_tests/`` (at the repository root, apart from the unit tests inside the package)
+calls a **real EasyVista instance** that you supply. It never runs in CI — CI runs
+``pytest -m "not integration"``.
 
 Credentials resolve from ``EASYVISTA_TEST_URL`` / ``EASYVISTA_TEST_USER`` / ``EASYVISTA_TEST_TOKEN``,
 falling back to files under ``secrets/`` (both gitignored). With no credentials configured the suite

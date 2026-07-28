@@ -498,7 +498,7 @@ async def test_get_department_context_async(config):
 
 @respx.mock
 async def test_get_department_context_rejects_unsafe_department_id(config):
-    """Async twin of the sync rejection test in test_client_sync.py.
+    """Async twin of the sync rejection test in test_client.py.
 
     get_department_context has no fallback scan, so an unsafe department_id
     must raise rather than silently proceed with a malformed search.

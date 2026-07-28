@@ -9,4 +9,4 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies: ["pydantic>=2.8", "httpx", "tenacity"]
-        exclude: ^tests/
+        exclude: (^|/)tests/|(^|/)testing/
