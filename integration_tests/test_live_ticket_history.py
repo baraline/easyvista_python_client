@@ -152,16 +152,20 @@ def test_action_type_reference_resolves(
 def test_ticket_context_bundles_the_conversation(
     live_client: EasyvistaClient, ticket_with_action
 ):
+    # Proves the bundle assembles and carries our action. Narrative-content
+    # resolution is NOT re-asserted here -- it has dedicated coverage in
+    # test_live_ticket_metadata.py, and on this instance DESCRIPTION is unused
+    # while a factory ticket's COMMENT is never written (Task 8's finding), so
+    # asserting either here would pin an instance fact this test is not about.
     rfc, _, action_id = ticket_with_action
     context = live_client.get_ticket_context(rfc)
     assert context.ticket.rfc_number == rfc
-    # NOT `== 1`: a fresh ticket already carries ~11 workflow-generated
-    # actions on this instance (Phase 0, U4). What matters is that ours is
-    # among them.
     assert any(a.action_id == action_id for a in context.actions), (
         f"action {action_id} missing from the context bundle for {rfc}"
     )
-    assert_populated(context.description, "resolved DESCRIPTION")
+    assert isinstance(context.documents, list)
+    assert context.description is None or isinstance(context.description, str)
+    assert context.comment is None or isinstance(context.comment, str)
 
 
 def test_ticket_context_markdown_carries_the_action_and_no_api_urls(
