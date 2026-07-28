@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from easyvista_python_client import (
     Action,
     Asset,
@@ -51,11 +53,11 @@ def _config() -> EasyvistaConfig:
     )
 
 
-def _declared(model_cls: type) -> set[str]:
+def _declared(model_cls: type[BaseModel]) -> set[str]:
     return {(f.alias or n).upper() for n, f in model_cls.model_fields.items()}
 
 
-def _merge(records: list[dict]) -> dict[str, Any]:
+def _merge(records: list[dict[str, Any]]) -> dict[str, Any]:
     """One representative value per field across records.
 
     Prefers a dict value, then a non-empty one.
@@ -71,7 +73,7 @@ def _merge(records: list[dict]) -> dict[str, Any]:
     return merged
 
 
-def _classify(merged: dict, declared: set[str]) -> dict[str, list[str]]:
+def _classify(merged: dict[str, Any], declared: set[str]) -> dict[str, list[str]]:
     custom, available, links, ref_objs, scalars = [], [], [], [], []
     for k, v in merged.items():
         ku = k.upper()
@@ -124,7 +126,7 @@ def main() -> None:
 
     with EasyvistaClient(cfg) as client:
 
-        def get(path: str, **p: Any) -> list[dict]:
+        def get(path: str, **p: Any) -> list[dict[str, Any]]:
             return extract_records(
                 client._transport.send(RequestSpec("GET", path, params=p or None))
             )
@@ -160,7 +162,7 @@ def main() -> None:
         )
 
         # --- actions (from the sampled tickets) ---
-        actions: list[dict] = []
+        actions: list[dict[str, Any]] = []
         for rfc in rfcs:
             try:
                 actions += get(
@@ -174,9 +176,9 @@ def main() -> None:
 
         # --- documents: scan more tickets via the typed method until some
         # have attachments ---
-        docs: list[dict] = []
+        docs: list[dict[str, Any]] = []
         for rfc in [
-            r.get("RFC_NUMBER")
+            str(r["RFC_NUMBER"])
             for r in get("requests", max_rows=40)
             if r.get("RFC_NUMBER")
         ]:
