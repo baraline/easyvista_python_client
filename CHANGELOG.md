@@ -35,9 +35,15 @@ a deprecation policy will follow the 1.0 release.
 - `EasyvistaClient.get_action` / `AsyncEasyvistaClient.get_action` fetch a single
   action. The item-level record carries Memo links that `list_actions` omits —
   including `DESCRIPTION`, which is where an action's note text actually lives.
-- `Action.description` and `Action.href`, plus `action_id` derived from the
-  create response's HREF (`POST requests/{rfc}/actions` echoes an HREF with no
-  populated `ACTION_ID`, exactly as ticket creation does).
+- `Action.description` and `Action.href`, plus an `action_id` derived from `href`
+  when the API omits it. The derivation is deliberately narrow: it uses `href`'s
+  trailing segment only when that segment is numeric, which is the case for an
+  item-level `GET actions/{id}`, and it never overwrites an `ACTION_ID` the API
+  did send. It does **not** fire for a create response — `POST
+  requests/{rfc}/actions` echoes an HREF naming the **parent request**, so the
+  tail is an RFC number rather than an id. A created action's id is therefore not
+  recoverable from its create response at all; diff `list_actions` across the
+  create to identify it (verified live).
 - `get_ticket_context(..., resolve_action_bodies=True)` resolves each action's
   note text. Pass `False` to skip it — it costs two extra requests per action.
 
@@ -56,13 +62,6 @@ a deprecation policy will follow the 1.0 release.
   unescaped. Because `,` is an EasyVista combinator, a crafted value could silently widen the
   result set (verified live: a department lookup returned 2 records instead of 1). Both now
   validate the value.
-- **Documentation of observed behaviour, not a code change:** a `description` supplied to
-  `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
-  `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's
-  `COMMENT` Memo, not `DESCRIPTION` — verified live (0/15 sampled tickets, portal-created
-  included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
-  text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
-  directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
 - `TicketContext.to_markdown` rendered every action with an empty body. It read
   the text from `Action.comment`, but `COMMENT` is a distinct field that never
   carries it; the note supplied as `PostAction.description` comes back through
@@ -71,6 +70,13 @@ a deprecation policy will follow the 1.0 release.
 
 ### Changed
 
+- **Documentation of observed behaviour, not a code change:** a `description` supplied to
+  `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
+  `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's
+  `COMMENT` Memo, not `DESCRIPTION` — verified live (0/15 sampled tickets, portal-created
+  included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
+  text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
+  directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
 - **Documentation correction:** the `search` operator `~` was documented as "contains". It is
   **exact match**, identical to `:` — verified against a live instance. Examples implying
   substring matching (`ASSET_TAG~LAPTOP`) were wrong and have been replaced. The unverified
