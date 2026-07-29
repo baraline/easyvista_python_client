@@ -54,13 +54,32 @@ class TicketContext:
             lines.extend(f"| {k} | {_cell(v)} |" for k, v in rows)
             lines.append("")
 
+        # Headings name the ROLE a block plays in this ticket, decided from the
+        # data in hand -- not the EasyVista field it came from.
+        #
+        # Which memo carries a ticket's body is a per-deployment fact. On the
+        # verified instance DESCRIPTION is unused and the body arrives in
+        # COMMENT (0/15 sampled tickets had a non-empty DESCRIPTION, 15/15 had a
+        # COMMENT), and `RequestUpdate.description` writes COMMENT too -- so
+        # this library's own tickets export that way on any instance. Titling
+        # that block "Comment" mislabels the single most important part of the
+        # document for an LLM, or for a RAG chunker splitting on "## ".
+        #
+        # But the opposite hard-coding is just as wrong: an instance that
+        # populates DESCRIPTION properly uses COMMENT for a genuine follow-up
+        # note, and fusing or relabelling the two would destroy a real
+        # distinction. So neither universal is asserted. When only one memo has
+        # text it IS the body, whichever it came from, and is titled
+        # "Description"; when both do, the distinction is real and each keeps
+        # its own heading. An instance where DESCRIPTION works renders exactly
+        # as it did before.
         description = html_to_text(self.description)
-        if description:
-            lines.extend(["## Description", "", description, ""])
-
         comment = html_to_text(self.comment)
-        if comment:
+        if description and comment:
+            lines.extend(["## Description", "", description, ""])
             lines.extend(["## Comment", "", comment, ""])
+        elif description or comment:
+            lines.extend(["## Description", "", description or comment, ""])
 
         if self.actions:
             lines.extend(["## Actions", ""])

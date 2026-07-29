@@ -15,12 +15,17 @@ def _ticket() -> Request:
                 "STATUS_FR": "En cours",
                 "HREF": "https://h/api/v1/12345/status/12",
             },
+            # Synthetic labels. These were lifted from a real ticket and named a
+            # real organisation and catalog; design principle P2 keeps live
+            # names, department and catalog labels out of tracked files and
+            # assertion literals, and a unit test fixture has no reason to carry
+            # them.
             "DEPARTMENT": {
-                "DEPARTMENT_FR": "Groupe Constellation",
+                "DEPARTMENT_FR": "Example Department",
                 "HREF": "https://h/api/v1/12345/departments/37",
             },
             "CATALOG_REQUEST": {
-                "TITLE_FR": "[MAGIC] - ticket",
+                "TITLE_FR": "[EXAMPLE] - ticket",
                 "HREF": "https://h/api/v1/12345/catalog-requests/5791",
             },
             "CREATION_DATE_UT": "2025-11-28T11:35:22+01:00",
@@ -32,8 +37,8 @@ def test_to_markdown_has_title_and_header_labels():
     md = TicketContext(_ticket(), None, None, [], []).to_markdown()
     assert "# Ticket I240101_0010 — Printer down" in md
     assert "| Status | En cours |" in md
-    assert "| Department | Groupe Constellation |" in md
-    assert "| Catalog | [MAGIC] - ticket |" in md
+    assert "| Department | Example Department |" in md
+    assert "| Catalog | [EXAMPLE] - ticket |" in md
 
 
 def test_to_markdown_contains_no_api_url():
@@ -50,6 +55,50 @@ def test_to_markdown_renders_description_and_comment_as_text():
     assert "Hello world" in md
     assert "## Comment" in md
     assert "a note" in md
+    # Both memos populated -> the distinction is real, so both survive, and
+    # DESCRIPTION comes first. The `in` checks above are order-agnostic and
+    # would pass on a reversed document.
+    assert md.index("## Description") < md.index("## Comment")
+
+
+# --- headings name the ROLE, not the source field ---------------------------
+#
+# Which memo carries a ticket's body is per-deployment: on the verified instance
+# DESCRIPTION is unused and COMMENT holds it, and `RequestUpdate.description`
+# writes COMMENT on any instance. So a lone populated memo is the body whichever
+# field it arrived in, and is titled "Description". These three tests pin the
+# whole rule; without them a future edit could hard-code either universal.
+
+
+def test_lone_comment_is_titled_description():
+    # The verified deployment's shape, and the case the rule exists for: the
+    # ticket's body text arrives in COMMENT with DESCRIPTION empty. Titling it
+    # "Comment" mislabels the most important block in the document for a RAG
+    # chunker splitting on "## ".
+    md = TicketContext(_ticket(), None, "the printer is offline", [], []).to_markdown()
+    assert "## Description" in md
+    assert "## Comment" not in md
+    assert "the printer is offline" in md
+
+
+def test_lone_description_is_titled_description():
+    # The other single-memo case -- an instance that populates DESCRIPTION and
+    # leaves COMMENT empty -- renders exactly as it always did.
+    md = TicketContext(
+        _ticket(), "<p>the printer is offline</p>", "", [], []
+    ).to_markdown()
+    assert "## Description" in md
+    assert "## Comment" not in md
+    assert "the printer is offline" in md
+
+
+def test_whitespace_only_memo_counts_as_empty():
+    # `html_to_text` strips, so a memo holding only markup or blanks reduces to
+    # "" and must take the lone-memo branch rather than the both-populated one.
+    md = TicketContext(_ticket(), "<p>  </p>", "real body", [], []).to_markdown()
+    assert "## Description" in md
+    assert "## Comment" not in md
+    assert "real body" in md
 
 
 def test_to_markdown_omits_empty_sections():
