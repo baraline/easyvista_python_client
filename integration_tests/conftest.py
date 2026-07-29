@@ -33,6 +33,10 @@ instance. The ``url`` value is the **full API root** (it already ends in
 bare host (no ``/api/`` segment), the ``user`` value is used as the account.
 
 The secret values are loaded by this test process at runtime and never printed.
+Nor is live instance content: ``_force_short_traceback`` strips the frame-
+argument block from every failure in this directory, which is what stops a test
+spilling the fixtures it was handed. See ``_assertions.py`` for the other two
+layers of that guarantee and why all three are needed.
 """
 
 from __future__ import annotations
@@ -50,8 +54,58 @@ from easyvista_python_client import EasyvistaClient, EasyvistaConfig
 _HERE = Path(__file__).resolve().parent
 
 
+def _force_short_traceback(item: pytest.Item) -> None:
+    """Render ``item``'s failures without the frame-argument block (P2).
+
+    This is the leak no assertion style can close. pytest renders a *long*
+    traceback entry together with that frame's arguments, and a test function's
+    arguments are its fixtures -- so ``test_a_returned_field_is_not_searchable(
+    live_client, ticket_with_catalog, ...)`` prints ``ticket_with_catalog =
+    {...the entire live ticket payload...}`` above the message on **any**
+    failure, including an unexpected exception that never reached an assert.
+    Careful asserts do not help: the reprs come from the traceback, not from the
+    assertion rewriter. Measured, not assumed.
+
+    The short style omits that block and keeps file, line, failing statement and
+    message -- enough, because every message in this suite names a field rather
+    than a value. Scoped per item so the unit suite keeps its long tracebacks;
+    forcing it here rather than asking callers for ``--tb=short`` keeps the
+    guarantee structural, the same reason the marker below is applied by
+    location.
+
+    ``--showlocals`` and ``--full-trace`` both defeat a short style on their own
+    (measured: each puts the reprs back), so they are neutralized for the
+    duration of this one report and restored immediately -- the unit suite still
+    honours them. Delegating to ``_repr_failure_py`` rather than calling
+    ``excinfo.getrepr`` directly keeps pytest's own handling of fixture-lookup
+    errors and ``pytest.fail(pytrace=False)``, which a hand-rolled version would
+    silently lose. It is pytest-private but long-stable, and it would fail loudly
+    (AttributeError) rather than quietly start leaking.
+    """
+
+    def repr_failure(excinfo, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        option = item.config.option
+        saved = (
+            getattr(option, "showlocals", False),
+            getattr(option, "fulltrace", False),
+        )
+        option.showlocals = False
+        option.fulltrace = False
+        try:
+            return item._repr_failure_py(excinfo, style="short")
+        finally:
+            option.showlocals, option.fulltrace = saved
+
+    item.repr_failure = repr_failure  # type: ignore[method-assign]
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Mark every test **in this directory** ``integration``, whatever it declares.
+    """Apply both directory-wide guarantees to every test **in this directory**.
+
+    Two things, each structural rather than remembered: the ``integration``
+    marker (below) and the redacted traceback (``_force_short_traceback``). Both
+    are applied by location for the same reason -- a new module that forgets a
+    ``pytestmark`` or writes a careless assert still gets them.
 
     CI's ``pytest -m "not integration"`` is the guarantee that nothing here ever
     calls a live instance from a runner. Leaving that to a per-module
@@ -69,6 +123,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         path = getattr(item, "path", None)
         if path is not None and _HERE in Path(path).resolve().parents:
             item.add_marker(pytest.mark.integration)
+            _force_short_traceback(item)
 
 
 # secrets/ lives at the repo root: integration_tests/conftest.py -> parents[1].
@@ -111,7 +166,13 @@ def live_config() -> EasyvistaConfig:
         version, _, account_tail = rest.partition("/")
         account = account_tail.split("/")[0]
         if not account:
-            pytest.skip(f"could not parse an account from the API root URL ({root!r})")
+            # Names the shape expected, never the configured URL: this module
+            # promises the secret values are never printed, and a skip reason is
+            # rendered output like any other (P2).
+            pytest.skip(
+                "could not parse an account from the configured API root URL "
+                "(expected .../api/{version}/{account})"
+            )
         return EasyvistaConfig(
             server=server, account=account, token=token, api_version=version
         )
