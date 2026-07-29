@@ -70,6 +70,29 @@ a deprecation policy will follow the 1.0 release.
 
 ### Changed
 
+- `AsyncEasyvistaClient.get_ticket_context` and `get_department_context` now issue their
+  independent sub-requests **concurrently** instead of one after another. The async client
+  previously awaited every call in sequence, so it was no faster than the synchronous one
+  (measured against a live instance on a ticket with 19 actions: 14.65s async, 13.44s sync,
+  5.31s after this change). Same requests, same results, same degradation on 403/404 — only
+  the issue order changed. Peak in-flight is 4 sub-resource requests then at most 8
+  concurrent action-body resolutions for a ticket, and 7 branches for a department.
+  Two deltas worth knowing: on a **failing** bundle the siblings already in flight are
+  awaited before the error propagates, so an error path can issue more requests than it did
+  before (bounded by the fan-out width, and all of them reads); and when two branches fail,
+  the exception raised is the first in source order — the one the sequential version would
+  have raised — rather than whichever failed soonest. `create_tickets` stays deliberately
+  sequential: those are writes, and a mid-batch failure must leave a knowable prefix.
+- `TicketContext.to_markdown()` now titles a lone narrative block `## Description` whichever
+  memo it arrived in. A ticket's body does not always live in `DESCRIPTION` — on the verified
+  instance that memo is unused and `COMMENT` carries the body (and `RequestUpdate.description`
+  writes `COMMENT` on any instance), so the rendered document titled a ticket's main text
+  "Comment", which misleads an LLM or a RAG chunker splitting on headings. The renderer no longer
+  assumes either mapping: when only one memo has text it is the body and is titled
+  `## Description`; when both do, the distinction is real and each keeps its own heading, byte
+  identical to before. An instance that populates `DESCRIPTION` is unaffected. The
+  `TicketContext.description` / `.comment` attributes are unchanged and still name their
+  source memo.
 - **Documentation of observed behaviour, not a code change:** a `description` supplied to
   `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
   `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's

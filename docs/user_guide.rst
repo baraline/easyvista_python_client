@@ -72,6 +72,24 @@ Synchronous vs asynchronous
 synchronous client, as coroutines. Use the synchronous client for scripts and CLI tools; use the
 asynchronous client inside an event loop (FastAPI, aiohttp) or for concurrent fan-out.
 
+.. note::
+
+   The two aggregate readers — :meth:`~easyvista_python_client.AsyncEasyvistaClient.get_ticket_context`
+   and :meth:`~easyvista_python_client.AsyncEasyvistaClient.get_department_context` — issue their
+   independent sub-requests concurrently, so they are substantially faster than their synchronous
+   twins rather than merely non-blocking (measured on a ticket with 19 actions: 13.4s sync, 5.3s
+   async). Peak in flight is a handful of requests: at most 8 concurrent action-body resolutions for
+   a ticket, 7 branches for a department.
+
+   Two practical consequences. ``max_retries`` defaults to ``0``, so raise it if you fan out — a
+   429 from a rate-limited instance is not retried otherwise. And share one open client across your
+   tasks rather than opening one per task: ``aclose()`` is terminal and is not reference-counted, so
+   the first ``async with`` block to exit closes the client for everyone still using it.
+
+   ``create_tickets`` is deliberately **not** concurrent. Those are writes, EasyVista assigns the
+   RFC number server-side, and a failure part-way through a concurrent batch would leave you unable
+   to say which tickets exist.
+
 .. code-block:: python
 
    import asyncio
@@ -246,7 +264,21 @@ bundle as Markdown containing only content and human labels (no API URLs).
    fetch only the action list.
 
 The async client exposes the same method as a coroutine
-(``context = await client.get_ticket_context(rfc)``).
+(``context = await client.get_ticket_context(rfc)``) and issues those requests
+concurrently — see :ref:`sync-vs-async`.
+
+.. note::
+
+   **Which heading a ticket's body gets.** ``to_markdown`` titles a block by the
+   role it plays, not by the EasyVista field it came from. A ticket's body does
+   not always arrive in ``DESCRIPTION``: on many deployments that memo is unused
+   and ``COMMENT`` carries the text, and ``RequestUpdate.description`` writes
+   ``COMMENT`` on any instance. So when only one of the two memos has text, it is
+   the body and is rendered under ``## Description`` whichever field it came
+   from; when both have text the distinction is real and each keeps its own
+   ``## Description`` / ``## Comment`` heading. The ``context.description`` and
+   ``context.comment`` attributes are unaffected and still name their source
+   memo.
 
 Searching and pagination
 -------------------------
