@@ -629,3 +629,122 @@ async def test_ticket_context_resolves_action_bodies(config):
     async with AsyncEasyvistaClient(config) as client:
         context = await client.get_ticket_context("I1")
     assert context.actions[0].description == "the note"
+
+
+@respx.mock
+async def test_async_ticket_context_can_skip_resolving_action_bodies(config):
+    # Opt-out parity with the sync client: resolving costs two extra requests
+    # per action, and a ticket on this instance carries ~11 workflow-generated
+    # actions.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    item = respx.get(f"{ROOT}/actions/7").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 7})
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        context = await client.get_ticket_context("I1", resolve_action_bodies=False)
+    assert item.call_count == 0
+    assert [a.action_id for a in context.actions] == [7]
+
+
+@respx.mock
+async def test_async_ticket_context_tolerates_an_unreadable_action(config):
+    # Async twin of the sync 403 degrade. The unreadable action stays in the
+    # bundle unresolved -- a profile restriction must never silently shorten a
+    # ticket's history -- and its readable neighbour still resolves.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200, json={"actions": [{"ACTION_ID": 7}, {"ACTION_ID": 8}]}
+        )
+    )
+    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(403))
+    respx.get(f"{ROOT}/actions/8").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 8,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/8/description"},
+            },
+        )
+    )
+    respx.get(f"{ROOT}/actions/8/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "the note"})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        context = await client.get_ticket_context("I1")
+    assert [a.action_id for a in context.actions] == [7, 8]
+    assert context.actions[0].description is None
+    assert context.actions[1].description == "the note"
+
+
+@respx.mock
+async def test_async_ticket_context_tolerates_a_missing_action(config):
+    # The 404 arm of the same except clause: an action listed but gone by the
+    # time we fetch it degrades exactly like a 403, and keeps its slot.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200, json={"actions": [{"ACTION_ID": 7}, {"ACTION_ID": 8}]}
+        )
+    )
+    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions/8").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 8})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        context = await client.get_ticket_context("I1")
+    assert [a.action_id for a in context.actions] == [7, 8]
+    assert context.actions[0].description is None
+
+
+@respx.mock
+async def test_async_ticket_context_keeps_an_action_that_has_no_id(config):
+    # A listed action with neither ACTION_ID nor a numeric HREF tail has
+    # nothing to fetch item-level, so it passes through untouched. Without the
+    # short-circuit the client would request `actions/None` (here: an unmocked
+    # route) instead of degrading.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"actions": [{"HREF": f"{ROOT}/requests/I1"}, {"ACTION_ID": 8}]},
+        )
+    )
+    item = respx.get(f"{ROOT}/actions/8").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 8})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        context = await client.get_ticket_context("I1")
+    assert [a.action_id for a in context.actions] == [None, 8]
+    assert item.call_count == 1

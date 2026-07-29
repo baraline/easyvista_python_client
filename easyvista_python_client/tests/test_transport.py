@@ -383,6 +383,48 @@ def test_get_bytes_rejects_a_foreign_origin():
 
 
 @respx.mock
+def test_get_bytes_drops_the_bearer_token_on_a_cross_host_redirect():
+    # resolve_url only vets the FIRST hop; `follow_redirects=True` means the
+    # instance can still bounce us somewhere else. What keeps the token from
+    # following is httpx stripping Authorization when a redirect leaves the
+    # origin -- third-party behaviour the docstring on get_bytes relies on, and
+    # `httpx>=0.27` leaves unbounded, so pin it here rather than trust it.
+    respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://cdn.attacker.test/blob/42"}
+        )
+    )
+    foreign = respx.get("https://cdn.attacker.test/blob/42").mock(
+        return_value=httpx.Response(200, content=b"blob")
+    )
+    with SyncTransport(_cfg()) as transport:
+        content = transport.get_bytes("https://ev.test/download/42")
+    assert content == b"blob"
+    leaked = "authorization" in foreign.calls.last.request.headers
+    assert not leaked, "the instance token followed a redirect off the instance"
+
+
+@respx.mock
+def test_get_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
+    # Control for the test above: without it, a transport that simply never
+    # sent Authorization at all would look like a pass. A download URL commonly
+    # redirects to a signed location on the same host, and that hop must stay
+    # authenticated.
+    respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://ev.test/download/42/signed"}
+        )
+    )
+    signed = respx.get("https://ev.test/download/42/signed").mock(
+        return_value=httpx.Response(200, content=b"blob")
+    )
+    with SyncTransport(_cfg()) as transport:
+        content = transport.get_bytes("https://ev.test/download/42")
+    assert content == b"blob"
+    assert signed.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+@respx.mock
 async def test_aget_bytes_returns_raw_content_not_json():
     respx.get(f"{ROOT}/documents/1/content").mock(
         return_value=httpx.Response(200, content=b"\x00\x01\xff not json")
@@ -415,3 +457,39 @@ async def test_aget_bytes_rejects_a_foreign_origin():
     async with AsyncTransport(_cfg()) as transport:
         with pytest.raises(EasyvistaError, match="outside the configured instance"):
             await transport.aget_bytes("https://attacker.test/download/42")
+
+
+@respx.mock
+async def test_aget_bytes_drops_the_bearer_token_on_a_cross_host_redirect():
+    # Async twin of the sync pin -- the AsyncClient must strip Authorization on
+    # a redirect off the instance just as the sync one does.
+    respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://cdn.attacker.test/blob/42"}
+        )
+    )
+    foreign = respx.get("https://cdn.attacker.test/blob/42").mock(
+        return_value=httpx.Response(200, content=b"blob")
+    )
+    async with AsyncTransport(_cfg()) as transport:
+        content = await transport.aget_bytes("https://ev.test/download/42")
+    assert content == b"blob"
+    leaked = "authorization" in foreign.calls.last.request.headers
+    assert not leaked, "the instance token followed a redirect off the instance"
+
+
+@respx.mock
+async def test_aget_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
+    # Control for the test above (see its sync twin).
+    respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://ev.test/download/42/signed"}
+        )
+    )
+    signed = respx.get("https://ev.test/download/42/signed").mock(
+        return_value=httpx.Response(200, content=b"blob")
+    )
+    async with AsyncTransport(_cfg()) as transport:
+        content = await transport.aget_bytes("https://ev.test/download/42")
+    assert content == b"blob"
+    assert signed.calls.last.request.headers["Authorization"] == "Bearer tok"

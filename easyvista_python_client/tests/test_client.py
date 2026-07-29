@@ -1053,3 +1053,33 @@ def test_ticket_context_tolerates_an_unreadable_action(config):
         context = client.get_ticket_context("I1")
     assert context.actions[0].action_id == 7
     assert context.actions[0].description is None
+
+
+@respx.mock
+def test_ticket_context_tolerates_an_action_that_has_vanished(config):
+    # The 404 arm of the same except clause -- an action listed but deleted
+    # before we fetch it item-level. Without this case the clause could be
+    # narrowed to EasyvistaAuthError alone and the suite would stay green.
+    # The vanished action keeps its slot: degrading must never shorten a
+    # ticket's history behind the caller's back.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200, json={"actions": [{"ACTION_ID": 7}, {"ACTION_ID": 8}]}
+        )
+    )
+    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions/8").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 8})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert [a.action_id for a in context.actions] == [7, 8]
+    assert context.actions[0].description is None
