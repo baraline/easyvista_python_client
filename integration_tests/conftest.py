@@ -227,8 +227,12 @@ def probe_tickets(live_client, live_write_config) -> Iterator[tuple[str, str, st
                 impact_id=int(cfg["impact_id"]),
             )
         )
-        assert ticket.rfc_number, "create_ticket returned no rfc_number"
-        return ticket.rfc_number
+        # Bound first so the failed assert has no sub-expression to explain:
+        # `assert ticket.rfc_number` makes the rewriter print the whole live
+        # Request, nested REQUESTOR/DEPARTMENT labels included (P2).
+        rfc = ticket.rfc_number
+        assert rfc, "create_ticket returned no rfc_number"
+        return rfc
 
     created: list[str] = []
     try:
@@ -389,7 +393,7 @@ def consigne_department_id(live_client) -> int:
     (design principle P2). Skips when the scan finds none, which is a fact about
     the instance rather than a defect (P1).
     """
-    from easyvista_python_client import EasyvistaError
+    from easyvista_python_client import EasyvistaAuthError, EasyvistaNotFound
 
     scanned = 0
     for dept in live_client.iter_departments(max_records=CONSIGNE_SCAN_LIMIT):
@@ -398,7 +402,11 @@ def consigne_department_id(live_client) -> int:
         scanned += 1
         try:
             note = live_client.get_department_comment(dept.department_id)
-        except EasyvistaError:
+        # Exactly the two the comment below claims: 403 (profile-gated) and 404
+        # (no such memo). Catching EasyvistaError swallowed the transport and
+        # 5xx cases too, so a dropped connection read as "this department has
+        # no Consigne" and the scan ended in a skip instead of a failure.
+        except (EasyvistaAuthError, EasyvistaNotFound):
             continue  # profile-gated or missing on this record; keep scanning
         if note and note.strip():
             return dept.department_id

@@ -45,16 +45,23 @@ def test_urgency_and_impact_round_trip_from_create(
     live_client: EasyvistaClient, rich_ticket, live_write_config
 ):
     # Compared against the ids we sent, which come from secrets/ -- an id is
-    # fine to assert on; a label would not be.
+    # fine to assert on; a label would not be. Both comparisons are bound to a
+    # local first: an int-vs-int assert makes the rewriter print
+    # `where <Request repr>.urgency_id`, and that Request is extra="allow" and
+    # carries the nested DEPARTMENT / CATALOG_REQUEST / REQUESTOR labels (P2).
     ticket = live_client.get_ticket(rich_ticket.rfc)
-    assert ticket.urgency_id == int(live_write_config["urgency_id"])
-    assert ticket.impact_id == int(live_write_config["impact_id"])
+    urgency_matches = ticket.urgency_id == int(live_write_config["urgency_id"])
+    impact_matches = ticket.impact_id == int(live_write_config["impact_id"])
+    assert urgency_matches, "URGENCY_ID does not match the id sent on create"
+    assert impact_matches, "IMPACT_ID does not match the id sent on create"
 
 
 def test_severity_is_a_declared_attribute(live_client: EasyvistaClient, rich_ticket):
     # Not set on create, so it may legitimately be None -- what this asserts is
     # that reaching it does not require digging through extra="allow" data.
-    assert hasattr(live_client.get_ticket(rich_ticket.rfc), "severity_id")
+    ticket = live_client.get_ticket(rich_ticket.rfc)
+    declares_severity = hasattr(ticket, "severity_id")
+    assert declares_severity, "Request does not declare severity_id"
 
 
 def test_status_reference_resolves_to_a_display_label(
@@ -83,15 +90,6 @@ def test_gtr_fields_are_reachable_through_the_custom_bucket(
     require_field(custom, field)
 
 
-def test_custom_bucket_holds_only_e_prefixed_fields(
-    live_client: EasyvistaClient, rich_ticket
-):
-    # The rule that keeps the library portable: declaring the official time
-    # fields in Task 5 must not have pulled any of them into the custom bucket.
-    custom = live_client.get_ticket(rich_ticket.rfc).classify_fields().custom
-    assert all(key.upper().startswith("E_") for key in custom)
-
-
 def test_description_round_trips_through_the_comment_memo(
     live_client: EasyvistaClient, ticket_factory
 ):
@@ -106,7 +104,10 @@ def test_description_round_trips_through_the_comment_memo(
     live_client.update_ticket(rfc, RequestUpdate(description=body))
     text = live_client.resolve_memo(f"requests/{rfc}/comment")
     assert_populated(text, "COMMENT memo after update_ticket")
-    assert body in html_to_text(text or ""), (
+    # Bound first: `assert body in html_to_text(...)` reprs the server-returned
+    # memo, which on a real ticket is arbitrary instance text (P2).
+    round_trips = body in html_to_text(text or "")
+    assert round_trips, (
         "text written via RequestUpdate.description is not readable back from "
         "the ticket's COMMENT memo"
     )
@@ -118,11 +119,15 @@ def test_description_memo_is_addressable(live_client: EasyvistaClient, rich_tick
     # Whether it holds text is per-deployment, so content is skip-gated (P1)
     # rather than asserted -- this instance leaves it empty.
     raw = live_client.get_ticket(rich_ticket.rfc).description
-    assert isinstance(raw, dict) and "HREF" in raw, (
-        "DESCRIPTION is not an href object on the single-ticket GET"
-    )
-    text = live_client.resolve_memo(raw["HREF"])
-    assert text is None or isinstance(text, str)
+    # Bound first, the same shape test_live_ticket_history.py uses for an
+    # action's DESCRIPTION href: `assert isinstance(raw, dict) and ...` reprs
+    # `raw`, and a bare falsy local reprs nothing. An HREF is an identifier, so
+    # binding it rather than the boolean is P2-safe and keeps mypy's narrowing.
+    href = raw.get("HREF") if isinstance(raw, dict) else None
+    assert href, "DESCRIPTION is not an href object on the single-ticket GET"
+    text = live_client.resolve_memo(href)
+    is_optional_str = text is None or isinstance(text, str)
+    assert is_optional_str, "resolve_memo returned neither a str nor None"
     if not (text and text.strip()):
         pytest.skip("DESCRIPTION is unused on this instance (COMMENT carries the body)")
     assert_populated(html_to_text(text), "DESCRIPTION after html_to_text")

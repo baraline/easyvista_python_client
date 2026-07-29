@@ -46,7 +46,10 @@ def ticket_with_action(
         ),
     )
     fresh = [a for a in live_client.list_actions(rfc) if a.action_id not in before]
-    assert len(fresh) == 1, (
+    # Bound first: `assert len(fresh) == 1` reprs the list, i.e. every live
+    # Action record in it (P2). The message still carries the count.
+    exactly_one_new = len(fresh) == 1
+    assert exactly_one_new, (
         f"expected exactly 1 new action on {rfc} after creating one, got "
         f"{len(fresh)} -- either list_actions is not scoping to this ticket, "
         f"or a workflow step wrote to it concurrently"
@@ -129,7 +132,9 @@ def test_created_action_text_is_readable(
     )
     assert href, f"action {action_id} carries no DESCRIPTION href"
     text = live_client.resolve_memo(href)
-    assert marker in html_to_text(text or ""), (
+    # Bound first: the `in` operand would repr the server-returned memo text.
+    body_readable = marker in html_to_text(text or "")
+    assert body_readable, (
         "the created action's body is not readable from its DESCRIPTION memo"
     )
 
@@ -143,9 +148,10 @@ def test_ticket_context_resolves_the_action_body(
     context = live_client.get_ticket_context(rfc)
     ours = next((a for a in context.actions if a.action_id == action_id), None)
     assert ours is not None, f"action {action_id} missing from the context bundle"
-    assert marker in html_to_text(
+    body_resolved = marker in html_to_text(
         ours.description if isinstance(ours.description, str) else ""
-    ), "get_ticket_context did not resolve the action's note text"
+    )
+    assert body_resolved, "get_ticket_context did not resolve the action's note text"
 
 
 def test_action_type_reference_resolves(
@@ -172,9 +178,16 @@ def test_ticket_context_bundles_the_conversation(
     assert any(a.action_id == action_id for a in context.actions), (
         f"action {action_id} missing from the context bundle for {rfc}"
     )
-    assert isinstance(context.documents, list)
-    assert context.description is None or isinstance(context.description, str)
-    assert context.comment is None or isinstance(context.comment, str)
+    documents_is_list = isinstance(context.documents, list)
+    assert documents_is_list, "context.documents is not a list"
+    description_is_optional_str = context.description is None or isinstance(
+        context.description, str
+    )
+    assert description_is_optional_str, "context.description is neither str nor None"
+    comment_is_optional_str = context.comment is None or isinstance(
+        context.comment, str
+    )
+    assert comment_is_optional_str, "context.comment is neither str nor None"
 
 
 def test_ticket_context_markdown_carries_the_action_and_no_api_urls(
@@ -182,7 +195,12 @@ def test_ticket_context_markdown_carries_the_action_and_no_api_urls(
 ):
     rfc, marker, _ = ticket_with_action
     markdown = live_client.get_ticket_context(rfc).to_markdown()
-    assert marker in markdown, "the action body is missing from the rendered Markdown"
-    assert live_client.config.api_root not in markdown, (
-        "the rendered Markdown leaked an API URL"
-    )
+    # Both operands bound first, and this is the site that most needs it: the
+    # rendered document holds `| Department | <label> |`, `| Location | ... |`
+    # and `| Catalog | ... |` rows plus `### <type> — <DONE_BY>` action
+    # headings, so an `in` / `not in` against it prints the haystack -- exactly
+    # the instance data these tests exist to keep out of a failure report (P2).
+    action_rendered = marker in markdown
+    assert action_rendered, "the action body is missing from the rendered Markdown"
+    href_free = live_client.config.api_root not in markdown
+    assert href_free, "the rendered Markdown leaked an API URL"

@@ -73,6 +73,33 @@ def test_require_field_reads_an_easyvista_model():
     assert require_field(ticket, "E_GTR_STATUS") == "OK"
 
 
+def test_require_field_treats_zero_as_present():
+    # `require_field` gates on `value is None or value == ""`, NOT on
+    # truthiness. Simplifying it to `if not value` would pass every other test
+    # in this file, but a field that is legitimately 0 -- a duration, a count --
+    # would start silently SKIPPING its test: the suite stays green while the
+    # coverage disappears, in the very helper that enforces P1.
+    #
+    # The skip has to be caught and converted, not allowed to propagate: a test
+    # that merely calls the helper would itself be reported SKIPPED under the
+    # regression, which is exactly the quiet false-pass being guarded against.
+    try:
+        returned = require_field({"E_GTI_UT": 0}, "E_GTI_UT")
+    except pytest.skip.Exception:
+        pytest.fail("require_field skipped a value of 0 instead of returning it")
+    assert returned == 0
+
+
+def test_require_field_treats_false_as_present():
+    # The boolean twin of the case above, and the same skip-to-failure
+    # conversion for the same reason.
+    try:
+        returned = require_field({"E_GTR_STATUS": False}, "E_GTR_STATUS")
+    except pytest.skip.Exception:
+        pytest.fail("require_field skipped a value of False instead of returning it")
+    assert returned is False
+
+
 def test_require_field_skips_when_the_field_is_absent():
     with pytest.raises(pytest.skip.Exception) as info:
         require_field({"TITLE": "x"}, "E_GTR_STATUS")

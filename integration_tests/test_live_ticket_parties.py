@@ -39,7 +39,11 @@ def test_department_id_round_trips_from_create(
     live_client: EasyvistaClient, rich_ticket, live_write_config
 ):
     ticket = live_client.get_ticket(rich_ticket.rfc)
-    assert ticket.department_id == int(live_write_config["department_id"])
+    # Bound first: an int-vs-int assert makes the rewriter print
+    # `where <Request repr>.department_id`, and that repr carries the nested
+    # DEPARTMENT label this module exists to keep out of the output (P2).
+    department_matches = ticket.department_id == int(live_write_config["department_id"])
+    assert department_matches, "DEPARTMENT_ID does not match the id sent on create"
 
 
 def test_party_references_resolve_to_labels(live_client: EasyvistaClient, rich_ticket):
