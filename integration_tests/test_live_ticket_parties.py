@@ -69,7 +69,12 @@ def test_requestor_resolves_to_an_employee_record(
         # deployment (P1).
         pytest.skip("GET /employees/{id} is not authorized for this profile")
     assert_shape(employee, Employee, "get_employee result")
-    assert str(employee.employee_id) == str(requestor_id)
+    # Bound first: `assert str(employee.employee_id) == str(requestor_id)` makes
+    # the rewriter explain the call's argument, and that reprs `employee` --
+    # the record's last name, e-mail and login (P2). Both ids are printable, but
+    # the object they were read off is not.
+    ids_match = str(employee.employee_id) == str(requestor_id)
+    assert ids_match, "get_employee returned a different employee than REQUESTOR_ID"
     carries_identity = any(
         bool(getattr(employee, field, None)) for field in IDENTITY_FIELDS
     )

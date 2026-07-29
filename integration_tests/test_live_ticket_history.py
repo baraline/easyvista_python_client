@@ -174,7 +174,13 @@ def test_ticket_context_bundles_the_conversation(
     # asserting either here would pin an instance fact this test is not about.
     rfc, _, action_id = ticket_with_action
     context = live_client.get_ticket_context(rfc)
-    assert context.ticket.rfc_number == rfc
+    # Bound first. A str-vs-str compare takes pytest's string-diff path and
+    # prints nothing extra -- but only while BOTH operands are str. If
+    # `rfc_number` is None, which is exactly the state this asserts against, the
+    # rewriter falls back to reprs and prints `context.ticket` (the whole
+    # Request) and `context` (the bundle: actions, documents, comment) with it.
+    rfc_matches = context.ticket.rfc_number == rfc
+    assert rfc_matches, "the context bundle is not for the ticket requested"
     assert any(a.action_id == action_id for a in context.actions), (
         f"action {action_id} missing from the context bundle for {rfc}"
     )

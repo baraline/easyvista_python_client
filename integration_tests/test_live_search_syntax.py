@@ -44,6 +44,17 @@ tickets on the live instance and unconditionally closes both in teardown (see
 ``live_write_config`` / ``probe_tickets`` in ``conftest.py``). That fixture
 additionally skips unless the instance-specific write config is present.
 
+**Bind every count before asserting on it.** These probes interpolate live
+department codes, department labels, asset tags and catalog paths into the
+``search`` expressions they send, and pytest's assertion rewriter reports the
+*arguments* of a call it rewrote: an inline ``assert _count(client,
+f'DEPARTMENT_FR:"{label}"') == baseline`` prints that label on failure, and
+``assert "CATALOG_GUID" not in ticket`` prints the entire ticket payload.
+Assigning the count to a local first leaves the rewriter nothing but two
+integers to explain (measured, not assumed). RFC numbers and REQUEST_IDs are
+identifiers, which design principle P2 permits printing, so the tests that
+interpolate only those are left inline.
+
 Skipped automatically without credentials; never runs in CI.
 """
 
@@ -356,7 +367,8 @@ def test_semicolon_is_not_a_combinator(live_client, sample_department_row, basel
     literal ``<code>";DEPARTMENT_ID:"<id>``. It is also not silently ignored.
     """
     code, real_id = sample_department_row
-    assert _count(live_client, f'DEPARTMENT_CODE:"{code}"') > 0
+    exact = _count(live_client, f'DEPARTMENT_CODE:"{code}"')
+    assert exact > 0
     got = _count(live_client, f'DEPARTMENT_CODE:"{code}";DEPARTMENT_ID:"{real_id}"')
     assert got == 0
     assert got != baseline
@@ -376,15 +388,17 @@ def test_tilde_is_exact_match_not_contains(
     code = other_department_code
     infix = code[1:]
     if _count(live_client, f'DEPARTMENT_CODE:"{infix}"') != 0:
-        pytest.skip(f"a department code equals {infix!r}; not a clean infix probe")
+        pytest.skip("a department code equals the infix; not a clean infix probe")
+
+    tilde_full = _count(live_client, f"DEPARTMENT_CODE~{code}")
+    colon_full = _count(live_client, f'DEPARTMENT_CODE:"{code}"')
+    tilde_infix = _count(live_client, f"DEPARTMENT_CODE~{infix}")
 
     # The full code is found by both operators, identically.
-    assert 0 < _count(live_client, f"DEPARTMENT_CODE~{code}") < baseline
-    assert _count(live_client, f"DEPARTMENT_CODE~{code}") == _count(
-        live_client, f'DEPARTMENT_CODE:"{code}"'
-    )
+    assert 0 < tilde_full < baseline
+    assert tilde_full == colon_full
     # ...but the infix is found by neither: `~` is not "contains".
-    assert _count(live_client, f"DEPARTMENT_CODE~{infix}") == 0
+    assert tilde_infix == 0
 
 
 def test_tilde_is_exact_match_on_free_text_fields_too(
@@ -404,12 +418,15 @@ def test_tilde_is_exact_match_on_free_text_fields_too(
         pytest.skip("a department label equals the infix; not a clean probe")
 
     exact = _count(live_client, f'DEPARTMENT_FR:"{label}"')
+    tilde_full = _count(live_client, f"DEPARTMENT_FR~{label}")
+    tilde_infix = _count(live_client, f"DEPARTMENT_FR~{infix}")
+
     assert 0 < exact < baseline
     # `~` on the full label agrees with `:` exactly...
-    assert _count(live_client, f"DEPARTMENT_FR~{label}") == exact
+    assert tilde_full == exact
     # ...and a strict infix of a label that verifiably exists matches nothing.
     # A real "contains" operator would have to return >= 1 here.
-    assert _count(live_client, f"DEPARTMENT_FR~{infix}") == 0
+    assert tilde_infix == 0
 
 
 def test_comma_inside_a_quoted_value_is_a_literal(
@@ -453,10 +470,13 @@ def test_tilde_on_asset_tag_is_exact_match(live_client):
     if _count_assets(live_client, f'ASSET_TAG:"{infix}"') != 0:
         pytest.skip("an asset tag equals the infix; not a clean probe")
     exact = _count_assets(live_client, f'ASSET_TAG:"{tag}"')
+    tilde_full = _count_assets(live_client, f"ASSET_TAG~{tag}")
+    tilde_infix = _count_assets(live_client, f"ASSET_TAG~{infix}")
+
     assert 0 < exact < asset_baseline
-    assert _count_assets(live_client, f"ASSET_TAG~{tag}") == exact
+    assert tilde_full == exact
     # a real "contains" would match
-    assert _count_assets(live_client, f"ASSET_TAG~{infix}") == 0
+    assert tilde_infix == 0
 
 
 # --- generalization beyond `departments` -----------------------------------
@@ -524,8 +544,10 @@ def test_a_returned_field_is_not_necessarily_searchable(
     #    it is the premise the whole test rests on).
     assert path_value
 
-    # 2. a real, existing value on the path column -> whole table.
-    assert _count_tickets(live_client, f'SD_CATALOG_PATH:"{path_value}"') == baseline
+    # 2. a real, existing value on the path column -> whole table. Bound first:
+    #    a catalog path is a label, and an inline assert would print it (P2).
+    by_path = _count_tickets(live_client, f'SD_CATALOG_PATH:"{path_value}"')
+    assert by_path == baseline
 
     # 3. the sibling id, same ticket, really filters.
     by_id = _count_tickets(live_client, f'SD_CATALOG_ID:"{id_value}"')
@@ -566,7 +588,9 @@ def test_a_nested_reference_subkey_is_not_searchable(
     key, label = pair
 
     # A real label, off this very ticket, on the nested sub-key -> whole table.
-    assert _count_tickets(live_client, f'{key}:"{label}"') == requests_baseline
+    # Bound first so the failure cannot print the label (P2).
+    by_subkey = _count_tickets(live_client, f'{key}:"{label}"')
+    assert by_subkey == requests_baseline
     # ...while the top-level id from the same ticket filters.
     by_id = _count_tickets(live_client, f'STATUS_ID:"{status_id}"')
     assert 0 < by_id < requests_baseline
@@ -597,7 +621,11 @@ def test_catalog_guid_is_indistinguishable_from_an_unknown_field(
        returns the same whole-table count as a condition on a field guaranteed
        not to exist.
     """
-    assert "CATALOG_GUID" not in ticket_with_catalog
+    # Bound first: `assert "CATALOG_GUID" not in ticket_with_catalog` makes the
+    # rewriter print the ENTIRE live ticket payload -- every department, catalog
+    # and requestor label on it (P2).
+    guid_absent = "CATALOG_GUID" not in ticket_with_catalog
+    assert guid_absent, "CATALOG_GUID is present on this ticket after all"
 
     bogus_guid = "{00000000-0000-0000-0000-000000000000}"
     as_guid = _count_tickets(live_client, f'CATALOG_GUID:"{bogus_guid}"')
@@ -711,7 +739,10 @@ def test_type_mismatch_on_an_int_column_raises_rather_than_being_ignored(
     """
     with pytest.raises(EasyvistaValidationError) as excinfo:
         _count_tickets(live_client, 'STATUS_ID:"ZZ-NOT-AN-INT"')
-    assert excinfo.value.status_code == 590
+    # Bound first: asserting on `excinfo.value.status_code` renders the
+    # ExceptionInfo, and with it the server's own error prose (P2).
+    status_code = excinfo.value.status_code
+    assert status_code == 590
 
     # Same column, type-correct bogus value -> honest 0, no error. This is the
     # half that makes the raise meaningful: it proves the column works and the

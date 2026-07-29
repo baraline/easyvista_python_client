@@ -55,7 +55,12 @@ def test_download_round_trips_text_bytes(live_client: EasyvistaClient, ticket_fa
     rfc = ticket_factory()
     payload = f"EVCLI{_nonce()} capability-suite payload\n".encode()
     document = _upload(live_client, rfc, ".txt", payload)
-    assert live_client.download_document(document) == payload
+    # Bound first: an inline `assert live_client.download_document(document)
+    # == payload` makes the rewriter print the call's arguments, and `document`
+    # is a server-returned extra="allow" record, not a value this module
+    # authored (P2). The bytes are ours, but the Document is not.
+    round_trips = live_client.download_document(document) == payload
+    assert round_trips, "downloaded bytes differ from the uploaded payload"
 
 
 def test_download_round_trips_non_utf8_bytes(
@@ -67,7 +72,8 @@ def test_download_round_trips_non_utf8_bytes(
     rfc = ticket_factory()
     payload = bytes(range(256)) + b"\xff\xfe\x00\x01"
     document = _upload(live_client, rfc, ".bin", payload)
-    assert live_client.download_document(document) == payload
+    round_trips = live_client.download_document(document) == payload
+    assert round_trips, "downloaded bytes differ from the uploaded binary payload"
 
 
 def test_document_identifier_fields_are_present(
