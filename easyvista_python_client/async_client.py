@@ -1,12 +1,19 @@
-"""Native-async EasyVista client — mirrors EasyvistaClient with coroutines."""
+"""EasyVista client — a flat facade over the resource builders.
+
+The blocking and the coroutine surface are two spellings of one source: they
+differ only in the ``async``/``await`` keywords and in the few names that must
+differ (the client class, its iterator types, ``aclose``/``close``). Every
+docstring and comment in this module therefore describes both, and prose here
+must read true on either surface -- never "see the other client", and never a
+claim that holds on only one of them.
+"""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator, Awaitable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
-from typing import Any
 
+from ._concurrency_async import Semaphore, settle
 from ._transport import AsyncTransport, RequestSpec
 from .config import EasyvistaConfig
 from .context import TicketContext
@@ -48,38 +55,12 @@ from .resources import requests as requests_res
 _ACTION_FANOUT = 8
 
 
-async def _settle(*awaitables: Awaitable[Any]) -> list[Any]:
-    """Run ``awaitables`` concurrently; return results in **source** order.
-
-    ``return_exceptions=True`` is load-bearing twice over, and removing it is
-    the tempting "simplification" this docstring exists to prevent.
-
-    First, orphans. A bare ``asyncio.gather`` propagates the first exception
-    while its siblings keep running -- it does not cancel them (measured). Those
-    orphaned requests outlive the call and can still be in flight when
-    ``__aexit__`` closes the client, which surfaces as a bare ``RuntimeError``
-    inside a task nobody awaits. Settling every awaitable first means no request
-    outlives the method that issued it.
-
-    Second, *which* exception wins. Collecting the results and re-raising the
-    first failure in source order reproduces the exception the old sequential
-    code would have raised. A bare gather instead raises whichever failed
-    soonest on the clock, so the error a caller sees would depend on server
-    timing.
-
-    The cost, accepted deliberately: on a failing bundle every sibling still
-    runs to completion, so an error path can issue more requests than it used
-    to. They are bounded by the fan-out width and they are all reads.
-    """
-    results = await asyncio.gather(*awaitables, return_exceptions=True)
-    for result in results:
-        if isinstance(result, BaseException):
-            raise result
-    return list(results)
-
-
 class AsyncEasyvistaClient:
-    """Async client for the EasyVista Service Manager REST API."""
+    """Client for the EasyVista Service Manager REST API.
+
+    Blocking as ``EasyvistaClient``, coroutine-returning as
+    ``AsyncEasyvistaClient``: same methods, same arguments, same results.
+    """
 
     def __init__(self, config: EasyvistaConfig) -> None:
         self.config = config
@@ -200,9 +181,10 @@ class AsyncEasyvistaClient:
         creation date. When the cap truncates, the result describes the fetched
         subset — use :meth:`count_tickets` for the true total.
 
-        Delegates to the same pure :func:`aggregate_tickets` on both surfaces;
-        the async surface collects ``iter_tickets``'s async generator into a
-        list first, since :func:`aggregate_tickets` consumes a plain iterable.
+        Delegates to the same pure :func:`aggregate_tickets` on both surfaces.
+        The page is collected into a list first because that function consumes
+        a plain iterable, and the async surface's ``iter_tickets`` is an async
+        generator it cannot take directly.
         """
         dims = DEFAULT_DIMENSIONS if dimensions is None else dimensions
         has_date_filter = created_since is not None or created_until is not None
@@ -590,18 +572,17 @@ class AsyncEasyvistaClient:
         issues one request at a time throughout. On a hard failure (5xx, a
         transport error) siblings already in flight on the async surface run to
         completion before the error propagates, so a failing call there can
-        issue more requests than the sequential surface does; see
-        :func:`_settle` for why that is the right trade.
+        issue more requests than the sequential surface does; the ``settle``
+        helper's own docstring explains why that is the right trade.
         """
         # Wave 0, deliberately outside the fan-out: this is the one call with no
         # fallback, so a wrong RFC number should cost one request, not five.
         ticket = await self.get_ticket(rfc_number)
 
-        # Each wrapper keeps its sync twin's except clause TEXTUALLY -- see
-        # client.py get_ticket_context. The asymmetry is real and load-bearing:
-        # the memos degrade on 404 *and* 403, while the two list calls catch
-        # EasyvistaAuthError ONLY, so a 404 there still fails the bundle. Do not
-        # tidy these into a shared handler.
+        # The asymmetry between these two except clauses is real and
+        # load-bearing: the memos degrade on 404 *and* 403, while the two list
+        # calls catch EasyvistaAuthError ONLY, so a 404 there still fails the
+        # bundle. Do not tidy them into a shared handler.
         async def _actions() -> list[Action]:
             try:
                 return await self.list_actions(rfc_number)
@@ -614,7 +595,7 @@ class AsyncEasyvistaClient:
             except EasyvistaAuthError:
                 return []
 
-        description, comment, actions, documents = await _settle(
+        description, comment, actions, documents = await settle(
             self._safe_memo(f"requests/{rfc_number}/description"),
             self._safe_memo(f"requests/{rfc_number}/comment"),
             _actions(),
@@ -635,24 +616,25 @@ class AsyncEasyvistaClient:
     async def _resolve_action_bodies(self, actions: list[Action]) -> list[Action]:
         """Resolve every action's note text concurrently, bounded and in order.
 
-        The semaphore is built **here, per call**. An ``asyncio.Semaphore``
-        binds to the first event loop that *contends* it -- an uncontended
-        acquire never touches the loop at all -- so one stored on the client or
-        at module level would pass every low-traffic test and then raise
-        ``RuntimeError: bound to a different event loop`` the first time a
-        second loop contended it, i.e. in production under load (measured on
-        3.10). A per-call semaphore cannot do that.
+        The limiter is built **here, per call**. On the async surface it is an
+        ``asyncio.Semaphore``, which binds to the first event loop that
+        *contends* it -- an uncontended acquire never touches the loop at all --
+        so one stored on the client or at module level would pass every
+        low-traffic test and then raise ``RuntimeError: bound to a different
+        event loop`` the first time a second loop contended it, i.e. in
+        production under load (measured on 3.10). A per-call limiter cannot do
+        that.
 
-        ``_settle`` preserves source order, so the returned list matches
+        ``settle`` preserves source order, so the returned list matches
         ``list_actions`` order regardless of which resolutions finish first.
         """
-        limiter = asyncio.Semaphore(_ACTION_FANOUT)
+        limiter = Semaphore(_ACTION_FANOUT)
 
         async def _one(action: Action) -> Action:
             async with limiter:
                 return await self._resolve_action_body(action)
 
-        resolved: list[Action] = await _settle(*(_one(a) for a in actions))
+        resolved: list[Action] = await settle(*(_one(a) for a in actions))
         return resolved
 
     async def get_department_context(
@@ -691,11 +673,10 @@ class AsyncEasyvistaClient:
         if search is None:
             raise ValueError("department_id is required to build a department context")
 
-        # Each branch keeps its sync twin's except clause textually (see
-        # client.py get_department_context); here every one of them degrades on
-        # both 403 and 404, unlike the ticket bundle above. The `include_*` /
-        # `resolve_*` flags move inside the branch so a disabled one costs no
-        # request at all, exactly as the sequential `if` did.
+        # Every branch here degrades on both 403 and 404, unlike the ticket
+        # bundle above, whose two list calls catch EasyvistaAuthError only. The
+        # `include_*` / `resolve_*` flags sit inside the branch so a disabled one
+        # costs no request at all, exactly as a plain `if` around the call would.
         async def _employees() -> list[Employee]:
             try:
                 return [e async for e in self.iter_employees(search=search)]
@@ -762,7 +743,7 @@ class AsyncEasyvistaClient:
             recent,
             statistics,
             assets,
-        ) = await _settle(
+        ) = await settle(
             _employees(),
             _manager(),
             _note(),

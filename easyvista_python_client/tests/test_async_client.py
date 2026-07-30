@@ -884,7 +884,7 @@ async def test_resolved_actions_keep_list_order_despite_completion_order(config)
     """Out-of-order completion must not reorder the history.
 
     Action 7 is slow and action 8 is instant, so they complete in reverse. The
-    bundle must still read [7, 8] -- ``_settle`` returns results in source
+    bundle must still read [7, 8] -- ``settle`` returns results in source
     order. The other tests here mock with ``return_value=``, which is
     order-agnostic and would stay green under a shuffle.
     """

@@ -1083,3 +1083,42 @@ def test_ticket_context_tolerates_an_action_that_has_vanished(config):
         context = client.get_ticket_context("I1")
     assert [a.action_id for a in context.actions] == [7, 8]
     assert context.actions[0].description is None
+
+
+@respx.mock
+def test_ticket_context_lists_documents_before_resolving_action_bodies(config):
+    """The generated shape fetches documents in the fan-out, not after it.
+
+    Accepted delta: same requests, same results, different order on the wire.
+    """
+    seen: list[str] = []
+
+    def record(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"records": [{"ACTION_ID": 7}]})
+
+    respx.route().mock(side_effect=record)
+    with EasyvistaClient(config) as client:
+        client.get_ticket_context("I1")
+
+    documents = next(i for i, p in enumerate(seen) if p.endswith("/documents"))
+    actions_item = next(i for i, p in enumerate(seen) if p.endswith("/actions/7"))
+    assert documents < actions_item
+
+
+@respx.mock
+def test_ticket_statistics_materialises_the_page(config):
+    """Accepted delta: the tickets are collected into a list before aggregating."""
+    respx.route().mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [{"RFC_NUMBER": "I1"}],
+                "record_count": "1",
+                "total_record_count": "1",
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        stats = client.ticket_statistics(max_records=1)
+    assert stats.total == 1
