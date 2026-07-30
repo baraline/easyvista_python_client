@@ -18,6 +18,7 @@ import respx
 from easyvista_python_client._async._concurrency import Semaphore, settle
 from easyvista_python_client._async.client import _ACTION_FANOUT, AsyncEasyvistaClient
 from easyvista_python_client.exceptions import EasyvistaError, EasyvistaNotFound
+from easyvista_python_client.models.action import Action
 from easyvista_python_client.models.request import PostRequest
 
 ROOT = "https://ev.test/api/v1/acme"
@@ -96,28 +97,52 @@ async def test_the_semaphore_actually_bounds_concurrency():
     assert peak <= 2
 
 
-def test_the_semaphore_is_built_per_call():
-    """A stored asyncio.Semaphore binds to the first loop that contends it.
+@respx.mock
+def test_the_action_limiter_is_built_per_call(config):
+    """``_resolve_action_bodies`` survives being driven from a second loop.
 
-    Two separate loops must each be able to contend a fresh one. A semaphore
-    stored on the client would raise "bound to a different event loop" here.
+    An ``asyncio.Semaphore`` binds to the first event loop that *contends* it,
+    and raises ``RuntimeError: ... is bound to a different event loop`` when a
+    second one does. Hoisting ``Semaphore(_ACTION_FANOUT)`` out of
+    ``_resolve_action_bodies`` onto ``self`` or module scope is therefore a
+    real regression, and this is the lock on it: one client, two separate
+    ``asyncio.run`` calls, both resolving the same fan-out.
+
+    Two details make it bite. The fan-out is deliberately **wider than
+    ``_ACTION_FANOUT``**, because an uncontended acquire never touches the loop
+    at all -- that is exactly why a hoisted limiter passes every low-traffic
+    test and only fails in production under load. And the mocked handler
+    sleeps, so the branches genuinely overlap rather than completing one at a
+    time and never exhausting the limiter.
 
     Deliberately a plain ``def``: it drives two loops of its own with
     ``asyncio.run``, which raises if it is called from inside a running loop --
     and ``asyncio_mode = "auto"`` would supply exactly that.
     """
+    count = _ACTION_FANOUT + 4
 
-    async def contend():
-        limiter = Semaphore(1)
+    async def _responder(request):
+        await asyncio.sleep(0.01)
+        action_id = int(request.url.path.rsplit("/", 1)[-1])
+        return httpx.Response(200, json={"ACTION_ID": action_id, "DESCRIPTION": "note"})
 
-        async def hold():
-            async with limiter:
-                await asyncio.sleep(0.01)
+    for i in range(1, count + 1):
+        respx.get(f"{ROOT}/actions/{i}").mock(side_effect=_responder)
 
-        await settle(hold(), hold())
+    listed = [Action.model_validate({"ACTION_ID": i}) for i in range(1, count + 1)]
+    client = AsyncEasyvistaClient(config)
 
-    asyncio.run(contend())
-    asyncio.run(contend())
+    async def resolve():
+        return await client._resolve_action_bodies(list(listed))
+
+    first = asyncio.run(resolve())
+    second = asyncio.run(resolve())
+    asyncio.run(client.aclose())
+
+    expected = list(range(1, count + 1))
+    assert [a.action_id for a in first] == expected
+    assert [a.action_id for a in second] == expected
+    assert [a.description for a in second] == ["note"] * count
 
 
 # --- the client's fan-outs ----------------------------------------------------

@@ -20,7 +20,8 @@ import httpx
 import respx
 
 from easyvista_python_client._sync._concurrency import Semaphore, settle
-from easyvista_python_client._sync.client import EasyvistaClient
+from easyvista_python_client._sync.client import _ACTION_FANOUT, EasyvistaClient
+from easyvista_python_client.models.action import Action
 
 ROOT = "https://ev.test/api/v1/acme"
 
@@ -74,6 +75,40 @@ def test_the_semaphore_is_inert():
     with limiter:
         with limiter:
             assert True
+
+
+@respx.mock
+def test_the_action_limiter_never_caps_the_fan_out(config):
+    """More actions than ``_ACTION_FANOUT`` resolve, twice, on one client.
+
+    The async twin of this test drives ``_resolve_action_bodies`` from two
+    separate event loops, because there an ``asyncio.Semaphore`` binds to the
+    first loop that contends it and a hoisted one would raise on the second.
+    Here there is no loop and nothing to bind, so that claim does not exist.
+    What must hold instead is that the stand-in really is inert: a width of
+    ``_ACTION_FANOUT`` must not cap a wider fan-out, block it, or carry state
+    from one call into the next. A stand-in that actually counted -- and never
+    released, since there is no scheduler to release into -- would hang or
+    truncate here, and every other test in the pair would stay green.
+    """
+    count = _ACTION_FANOUT + 4
+
+    def responder(request):
+        action_id = int(request.url.path.rsplit("/", 1)[-1])
+        return httpx.Response(200, json={"ACTION_ID": action_id, "DESCRIPTION": "note"})
+
+    for i in range(1, count + 1):
+        respx.get(f"{ROOT}/actions/{i}").mock(side_effect=responder)
+
+    listed = [Action.model_validate({"ACTION_ID": i}) for i in range(1, count + 1)]
+    expected = list(range(1, count + 1))
+    with EasyvistaClient(config) as client:
+        first = client._resolve_action_bodies(list(listed))
+        second = client._resolve_action_bodies(list(listed))
+
+    assert [a.action_id for a in first] == expected
+    assert [a.action_id for a in second] == expected
+    assert [a.description for a in second] == ["note"] * count
 
 
 def _branch_label(request):
