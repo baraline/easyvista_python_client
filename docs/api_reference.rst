@@ -4,9 +4,9 @@ API Reference
 Clients
 -------
 
-.. autoclass:: easyvista_python_client.client.EasyvistaClient
+.. autoclass:: easyvista_python_client.EasyvistaClient
 
-.. autoclass:: easyvista_python_client.async_client.AsyncEasyvistaClient
+.. autoclass:: easyvista_python_client.AsyncEasyvistaClient
 
 Configuration
 -------------

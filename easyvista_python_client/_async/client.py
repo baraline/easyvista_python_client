@@ -1,78 +1,118 @@
-"""Synchronous EasyVista client — a flat facade over the resource builders."""
+"""EasyVista client — a flat facade over the resource builders.
+
+The blocking and the coroutine surface are two spellings of one source: they
+differ only in the ``async``/``await`` keywords and in the few names that must
+differ (the client class, its iterator types, ``aclose``/``close``). Every
+docstring and comment in this module therefore describes both, and prose here
+must read true on either surface -- never "see the other client", and never a
+claim that holds on only one of them.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
 
-from ._transport import RequestSpec, SyncTransport
-from .config import EasyvistaConfig
-from .context import TicketContext
-from .directory import (
+from easyvista_python_client._async._concurrency import Semaphore, settle
+from easyvista_python_client._async._transport import Transport
+from easyvista_python_client._transport import RequestSpec
+from easyvista_python_client.config import EasyvistaConfig
+from easyvista_python_client.context import TicketContext
+from easyvista_python_client.directory import (
     RECENT_TICKETS_SORT,
     DepartmentContext,
     _department_matches,
     _normalize_name,
 )
-from .exceptions import EasyvistaAuthError, EasyvistaNotFound
-from .field_model import parse_memo
-from .filters import ev_equals_filter, is_safe_ev_value
-from .models.action import Action, PostAction
-from .models.asset import Asset, PostAsset
-from .models.department import Department, DepartmentUpdate, PostDepartment
-from .models.document import Document
-from .models.employee import Employee, EmployeeUpdate, PostEmployee
-from .models.request import PostRequest, Request, RequestUpdate
-from .pagination import SearchResult
-from .reporting import (
+from easyvista_python_client.exceptions import EasyvistaAuthError, EasyvistaNotFound
+from easyvista_python_client.field_model import parse_memo
+from easyvista_python_client.filters import ev_equals_filter, is_safe_ev_value
+from easyvista_python_client.models.action import Action, PostAction
+from easyvista_python_client.models.asset import Asset, PostAsset
+from easyvista_python_client.models.department import (
+    Department,
+    DepartmentUpdate,
+    PostDepartment,
+)
+from easyvista_python_client.models.document import Document
+from easyvista_python_client.models.employee import (
+    Employee,
+    EmployeeUpdate,
+    PostEmployee,
+)
+from easyvista_python_client.models.request import PostRequest, Request, RequestUpdate
+from easyvista_python_client.pagination import SearchResult
+from easyvista_python_client.reporting import (
     DEFAULT_DIMENSIONS,
     TicketStatistics,
     aggregate_tickets,
     fields_for_references,
 )
-from .resources import actions as actions_res
-from .resources import assets as assets_res
-from .resources import departments as departments_res
-from .resources import documents as documents_res
-from .resources import employees as employees_res
-from .resources import requests as requests_res
+from easyvista_python_client.resources import actions as actions_res
+from easyvista_python_client.resources import assets as assets_res
+from easyvista_python_client.resources import departments as departments_res
+from easyvista_python_client.resources import documents as documents_res
+from easyvista_python_client.resources import employees as employees_res
+from easyvista_python_client.resources import requests as requests_res
+
+# Width of the action-body fan-out: a ceiling on requests in flight at once on
+# the async surface, inert on the sync one. This is the one fan-out here whose
+# width is set by the server (a ticket can carry any number of actions); the
+# department fan-out is a fixed seven and needs no bound. Deliberately not a
+# config field: nobody has asked for it, and measured against a live instance a
+# limit of 8 costs nothing (19 actions took 5.31s at limit 8 vs 5.43s unbounded
+# -- the server, not the client, is the bottleneck).
+_ACTION_FANOUT = 8
 
 
-class EasyvistaClient:
-    """Blocking client for the EasyVista Service Manager REST API."""
+class AsyncEasyvistaClient:
+    """Client for the EasyVista Service Manager REST API.
+
+    Blocking as ``EasyvistaClient``, coroutine-returning as
+    ``AsyncEasyvistaClient``: same methods, same arguments, same results.
+    """
 
     def __init__(self, config: EasyvistaConfig) -> None:
         self.config = config
-        self._transport = SyncTransport(config)
+        self._transport = Transport(config)
 
     @classmethod
-    def from_env(cls) -> EasyvistaClient:
+    def from_env(cls) -> AsyncEasyvistaClient:
         return cls(EasyvistaConfig.from_env())
 
-    def __enter__(self) -> EasyvistaClient:
+    async def __aenter__(self) -> AsyncEasyvistaClient:
         return self
 
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
-    def close(self) -> None:
-        self._transport.close()
+    async def aclose(self) -> None:
+        await self._transport.aclose()
 
     # --- tickets -------------------------------------------------------------
-    def create_ticket(self, ticket: PostRequest) -> Request:
+    async def create_ticket(self, ticket: PostRequest) -> Request:
         spec, parse = requests_res.build_create_ticket(ticket)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def create_tickets(self, tickets: Sequence[PostRequest]) -> list[Request]:
-        # EasyVista's POST /requests creates only the first item of a multi-item
-        # body, so create each ticket with its own request.
-        return [self.create_ticket(ticket) for ticket in tickets]
+    async def create_tickets(self, tickets: Sequence[PostRequest]) -> list[Request]:
+        # One request per ticket (EasyVista creates only the first item of a
+        # multi-item body).
+        #
+        # Stays SEQUENTIAL on purpose on BOTH surfaces -- unlike the read
+        # bundles below, which fan out on the async one. These are writes:
+        # EasyVista assigns the RFC number server-side, so concurrent POSTs
+        # return in scheduling order, and a failure part-way through would
+        # leave the caller holding an exception with no way to say which tickets
+        # now exist. Sequentially a failure at item k means 0..k-1 exist and the
+        # rest do not, which is a contract a caller can act on. Do not "fix"
+        # this into a fan-out.
+        return [await self.create_ticket(ticket) for ticket in tickets]
 
-    def get_ticket(self, rfc_number: str) -> Request:
+    async def get_ticket(self, rfc_number: str) -> Request:
         spec, parse = requests_res.build_get_ticket(rfc_number)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def search_tickets(
+    async def search_tickets(
         self,
         *,
         search: str | None = None,
@@ -86,9 +126,9 @@ class EasyvistaClient:
         spec, parse = requests_res.build_search_tickets(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def iter_tickets(
+    async def iter_tickets(
         self,
         *,
         search: str | None = None,
@@ -96,7 +136,7 @@ class EasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
-    ) -> Iterator[Request]:
+    ) -> AsyncIterator[Request]:
         """Yield tickets across pages, following the API's offset pagination.
 
         Pages of ``page_size`` (default ``config.default_max_rows``) until the
@@ -107,7 +147,7 @@ class EasyvistaClient:
         offset = 0
         yielded = 0
         while max_records is None or yielded < max_records:
-            result = self.search_tickets(
+            result = await self.search_tickets(
                 search=search,
                 fields=fields,
                 sort=sort,
@@ -125,15 +165,16 @@ class EasyvistaClient:
                 return
             offset += len(result.records)
 
-    def count_tickets(self, search: str | None = None) -> int:
+    async def count_tickets(self, search: str | None = None) -> int:
         """Return the number of tickets matching ``search`` (one cheap call).
 
-        Uses ``max_rows=1`` and reads the envelope's ``total_record_count``, so it
-        does not fetch the matching records.
+        Uses ``max_rows=1`` and reads the envelope's ``total_record_count``, so
+        it does not fetch the matching records.
         """
-        return self.search_tickets(search=search, max_rows=1).total_record_count
+        result = await self.search_tickets(search=search, max_rows=1)
+        return result.total_record_count
 
-    def ticket_statistics(
+    async def ticket_statistics(
         self,
         *,
         search: str | None = None,
@@ -150,13 +191,21 @@ class EasyvistaClient:
         ``created_until`` apply an inclusive client-side window on the ticket's
         creation date. When the cap truncates, the result describes the fetched
         subset — use :meth:`count_tickets` for the true total.
+
+        Delegates to the same pure :func:`aggregate_tickets` on both surfaces.
+        The page is collected into a list first because that function consumes
+        a plain iterable, and the async surface's ``iter_tickets`` is an async
+        generator it cannot take directly.
         """
         dims = DEFAULT_DIMENSIONS if dimensions is None else dimensions
         has_date_filter = created_since is not None or created_until is not None
         fields = fields_for_references(dims, include_creation_date=has_date_filter)
-        tickets = self.iter_tickets(
-            search=search, fields=fields, max_records=max_records
-        )
+        tickets = [
+            t
+            async for t in self.iter_tickets(
+                search=search, fields=fields, max_records=max_records
+            )
+        ]
         return aggregate_tickets(
             tickets,
             dimensions=dims,
@@ -164,11 +213,11 @@ class EasyvistaClient:
             created_until=created_until,
         )
 
-    def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
+    async def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
         spec, parse = requests_res.build_update_ticket(rfc_number, update)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def close_ticket(
+    async def close_ticket(
         self,
         rfc_number: str,
         *,
@@ -182,10 +231,10 @@ class EasyvistaClient:
             delete_actions=delete_actions,
             comment=comment,
         )
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
     # --- actions -------------------------------------------------------------
-    def create_action(self, rfc_number: str, action: PostAction) -> Action:
+    async def create_action(self, rfc_number: str, action: PostAction) -> Action:
         """Create one action on a ticket.
 
         The returned :class:`Action` carries **no usable ``action_id``**: the
@@ -195,22 +244,22 @@ class EasyvistaClient:
         ``integration_tests/test_live_ticket_history.py`` for the pattern.
         """
         spec, parse = actions_res.build_create_action(rfc_number, action)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def list_actions(self, rfc_number: str) -> list[Action]:
+    async def list_actions(self, rfc_number: str) -> list[Action]:
         spec, parse = actions_res.build_list_actions(rfc_number)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def get_action(self, action_id: str | int) -> Action:
+    async def get_action(self, action_id: str | int) -> Action:
         """Fetch one action, including the Memo links ``list_actions`` omits.
 
         The note text lives behind :attr:`Action.description`'s href on this
         record; :meth:`get_ticket_context` resolves it for you.
         """
         spec, parse = actions_res.build_get_action(action_id)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def _resolve_action_body(self, action: Action) -> Action:
+    async def _resolve_action_body(self, action: Action) -> Action:
         """Return ``action`` with its note text resolved onto ``description``.
 
         Costs two requests per action (item fetch, then the Memo), so callers
@@ -220,24 +269,24 @@ class EasyvistaClient:
         if action.action_id is None:
             return action
         try:
-            full = self.get_action(action.action_id)
+            full = await self.get_action(action.action_id)
         except (EasyvistaNotFound, EasyvistaAuthError):
             return action
         if isinstance(full.description, dict):
             href = full.description.get("HREF")
-            full.description = self._safe_memo(href) if href else None
+            full.description = await self._safe_memo(href) if href else None
         return full
 
     # --- assets --------------------------------------------------------------
-    def create_asset(self, asset: PostAsset) -> Asset:
+    async def create_asset(self, asset: PostAsset) -> Asset:
         spec, parse = assets_res.build_create_asset(asset)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def get_asset(self, asset_id: str) -> Asset:
+    async def get_asset(self, asset_id: str) -> Asset:
         spec, parse = assets_res.build_get_asset(asset_id)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def search_assets(
+    async def search_assets(
         self,
         *,
         search: str | None = None,
@@ -251,9 +300,9 @@ class EasyvistaClient:
         spec, parse = assets_res.build_search_assets(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def iter_assets(
+    async def iter_assets(
         self,
         *,
         search: str | None = None,
@@ -261,14 +310,14 @@ class EasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
-    ) -> Iterator[Asset]:
+    ) -> AsyncIterator[Asset]:
         """Yield assets across pages (see :meth:`iter_tickets`)."""
         if page_size is None:
             page_size = self.config.default_max_rows
         offset = 0
         yielded = 0
         while max_records is None or yielded < max_records:
-            result = self.search_assets(
+            result = await self.search_assets(
                 search=search,
                 fields=fields,
                 sort=sort,
@@ -287,35 +336,35 @@ class EasyvistaClient:
             offset += len(result.records)
 
     # --- documents -----------------------------------------------------------
-    def add_document(
+    async def add_document(
         self, rfc_number: str, *, filename: str, content: bytes
     ) -> Document:
         spec, parse = documents_res.build_add_document(
             rfc_number, filename=filename, content=content
         )
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def list_documents(self, rfc_number: str) -> list[Document]:
+    async def list_documents(self, rfc_number: str) -> list[Document]:
         spec, parse = documents_res.build_list_documents(rfc_number)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def download_document(self, document: Document | str) -> bytes:
+    async def download_document(self, document: Document | str) -> bytes:
         """Fetch an attachment's bytes.
 
         ``document`` is a :class:`Document` from :meth:`list_documents` or a raw
         href/path. Raises :class:`ValueError` when the record carries no
         download URL, and :class:`EasyvistaError` when that URL points outside
         the configured instance (see
-        :meth:`~easyvista_python_client._transport.BaseTransport.resolve_url`).
+        :meth:`~easyvista_python_client._async._transport.BaseTransport.resolve_url`).
         """
-        return self._transport.get_bytes(documents_res.download_href(document))
+        return await self._transport.get_bytes(documents_res.download_href(document))
 
     # --- departments ----------------------------------------------------------
-    def get_department(self, department_id: str | int) -> Department:
+    async def get_department(self, department_id: str | int) -> Department:
         spec, parse = departments_res.build_get_department(department_id)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def search_departments(
+    async def search_departments(
         self,
         *,
         search: str | None = None,
@@ -329,9 +378,9 @@ class EasyvistaClient:
         spec, parse = departments_res.build_search_departments(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def iter_departments(
+    async def iter_departments(
         self,
         *,
         search: str | None = None,
@@ -339,14 +388,14 @@ class EasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
-    ) -> Iterator[Department]:
+    ) -> AsyncIterator[Department]:
         """Yield departments across pages (see :meth:`iter_tickets`)."""
         if page_size is None:
             page_size = self.config.default_max_rows
         offset = 0
         yielded = 0
         while max_records is None or yielded < max_records:
-            result = self.search_departments(
+            result = await self.search_departments(
                 search=search,
                 fields=fields,
                 sort=sort,
@@ -364,15 +413,17 @@ class EasyvistaClient:
                 return
             offset += len(result.records)
 
-    def get_department_comment(self, department_id: str | int) -> str | None:
+    async def get_department_comment(self, department_id: str | int) -> str | None:
         """Return the department's note (a Memo).
 
         ``""`` for an empty note; propagates transport errors so a 403/404 is
         distinguishable from an empty note (uses the generic ``resolve_memo``).
         """
-        return self.resolve_memo(f"departments/{department_id}/comment_department")
+        return await self.resolve_memo(
+            f"departments/{department_id}/comment_department"
+        )
 
-    def find_departments(
+    async def find_departments(
         self, name: str, *, limit: int | None = None
     ) -> list[Department]:
         """Resolve departments by a fuzzy, language-agnostic ``name``.
@@ -396,38 +447,38 @@ class EasyvistaClient:
         if is_safe_ev_value(name):
             search = ev_equals_filter(field, name)
             if search is not None:
-                fast = self.search_departments(search=search)
+                fast = await self.search_departments(search=search)
                 if fast.records:
                     return fast.records if limit is None else fast.records[:limit]
         needle = _normalize_name(name)
         if not needle:
             return []
         matches: list[Department] = []
-        for dept in self.iter_departments():
+        async for dept in self.iter_departments():
             if _department_matches(dept, needle):
                 matches.append(dept)
                 if limit is not None and len(matches) >= limit:
                     break
         return matches
 
-    def create_department(self, department: PostDepartment) -> Department:
+    async def create_department(self, department: PostDepartment) -> Department:
         """Create a department (provisional; profile-gated — spec open item O-DIR-2)."""
         spec, parse = departments_res.build_create_department(department)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def update_department(
+    async def update_department(
         self, department_id: str | int, update: DepartmentUpdate
     ) -> Department:
         """Update a department via PUT (provisional; profile-gated)."""
         spec, parse = departments_res.build_update_department(department_id, update)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
     # --- employees ------------------------------------------------------------
-    def get_employee(self, employee_id: str | int) -> Employee:
+    async def get_employee(self, employee_id: str | int) -> Employee:
         spec, parse = employees_res.build_get_employee(employee_id)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def search_employees(
+    async def search_employees(
         self,
         *,
         search: str | None = None,
@@ -441,9 +492,9 @@ class EasyvistaClient:
         spec, parse = employees_res.build_search_employees(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def iter_employees(
+    async def iter_employees(
         self,
         *,
         search: str | None = None,
@@ -451,14 +502,14 @@ class EasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
-    ) -> Iterator[Employee]:
+    ) -> AsyncIterator[Employee]:
         """Yield employees across pages (see :meth:`iter_tickets`)."""
         if page_size is None:
             page_size = self.config.default_max_rows
         offset = 0
         yielded = 0
         while max_records is None or yielded < max_records:
-            result = self.search_employees(
+            result = await self.search_employees(
                 search=search,
                 fields=fields,
                 sort=sort,
@@ -476,25 +527,25 @@ class EasyvistaClient:
                 return
             offset += len(result.records)
 
-    def create_employee(self, employee: PostEmployee) -> Employee:
+    async def create_employee(self, employee: PostEmployee) -> Employee:
         """Create an employee (provisional; profile-gated — spec open item O-DIR-2)."""
         spec, parse = employees_res.build_create_employee(employee)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
-    def update_employee(
+    async def update_employee(
         self, employee_id: str | int, update: EmployeeUpdate
     ) -> Employee:
         """Update an employee via PUT (provisional; profile-gated)."""
         spec, parse = employees_res.build_update_employee(employee_id, update)
-        return parse(self._transport.send(spec))
+        return parse(await self._transport.send(spec))
 
     # --- aggregated context --------------------------------------------------
-    def resolve_memo(self, href: str) -> str | None:
+    async def resolve_memo(self, href: str) -> str | None:
         """Fetch a Memo/link field's text from its sub-resource.
 
         ``href`` may be a full URL (as returned in a record's link) or a
-        resource-relative path. Propagates transport errors so callers can tell an
-        empty Memo (``""``) from a 403/404.
+        resource-relative path. Propagates transport errors so callers can tell
+        an empty Memo (``""``) from a 403/404.
         """
         path = href
         root = self.config.api_root
@@ -502,9 +553,9 @@ class EasyvistaClient:
             path = path[len(root) :]
         path = path.lstrip("/")
         field = path.rstrip("/").rsplit("/", 1)[-1]
-        return parse_memo(self._transport.send(RequestSpec("GET", path)), field)
+        return parse_memo(await self._transport.send(RequestSpec("GET", path)), field)
 
-    def get_ticket_context(
+    async def get_ticket_context(
         self, rfc_number: str, *, resolve_action_bodies: bool = True
     ) -> TicketContext:
         """Fetch a ticket plus its resolved narrative content as a bundle.
@@ -519,20 +570,56 @@ class EasyvistaClient:
         return it — without this the rendered Markdown has empty action bodies.
         It costs two extra requests per action; pass ``False`` to skip it when
         you only need the action list.
+
+        On the async surface the independent requests (the two memos plus the
+        actions and documents lists) are issued concurrently, in up to three
+        waves; on the sync surface they run one after another in source order,
+        costing ``4 + 2N`` serial round trips for a ticket with ``N`` actions.
+        Measured against a live instance on a 19-action ticket: 5.31s
+        concurrent, 14.65s serial.
+
+        Peak in-flight on the async surface is four sub-resource requests, then
+        up to ``_ACTION_FANOUT`` action-body resolutions; the sync surface
+        issues one request at a time throughout. On a hard failure (5xx, a
+        transport error) siblings already in flight on the async surface run to
+        completion before the error propagates, so a failing call there can
+        issue more requests than the sequential surface does. That is the
+        deliberate trade: settling every sibling is what keeps an orphaned
+        request from outliving the call that issued it, and what makes the
+        exception a caller sees the one the sequential surface would have
+        raised rather than whichever branch happened to fail soonest.
         """
-        ticket = self.get_ticket(rfc_number)
-        description = self._safe_memo(f"requests/{rfc_number}/description")
-        comment = self._safe_memo(f"requests/{rfc_number}/comment")
-        try:
-            actions = self.list_actions(rfc_number)
-        except EasyvistaAuthError:
-            actions = []
+        # Issued first, and deliberately outside the fan-out: this is the one
+        # call with no fallback, so a wrong RFC number should cost one request,
+        # not five.
+        ticket = await self.get_ticket(rfc_number)
+
+        # The asymmetry between these two except clauses is real and
+        # load-bearing: the memos degrade on 404 *and* 403, while the two list
+        # calls catch EasyvistaAuthError ONLY, so a 404 there still fails the
+        # bundle. Do not tidy them into a shared handler.
+        async def _actions() -> list[Action]:
+            try:
+                return await self.list_actions(rfc_number)
+            except EasyvistaAuthError:
+                return []
+
+        async def _documents() -> list[Document]:
+            try:
+                return await self.list_documents(rfc_number)
+            except EasyvistaAuthError:
+                return []
+
+        description, comment, actions, documents = await settle(
+            self._safe_memo(f"requests/{rfc_number}/description"),
+            self._safe_memo(f"requests/{rfc_number}/comment"),
+            _actions(),
+            _documents(),
+        )
+
         if resolve_action_bodies:
-            actions = [self._resolve_action_body(action) for action in actions]
-        try:
-            documents = self.list_documents(rfc_number)
-        except EasyvistaAuthError:
-            documents = []
+            actions = await self._resolve_action_bodies(actions)
+
         return TicketContext(
             ticket=ticket,
             description=description,
@@ -541,7 +628,34 @@ class EasyvistaClient:
             documents=documents,
         )
 
-    def get_department_context(
+    async def _resolve_action_bodies(self, actions: list[Action]) -> list[Action]:
+        """Resolve every action's note text, preserving ``list_actions`` order.
+
+        On the async surface the resolutions are issued concurrently, at most
+        ``_ACTION_FANOUT`` in flight; on the sync surface they run one after
+        another and the bound is inert. ``settle`` preserves source order on
+        either surface, so the returned list matches ``list_actions`` order
+        whichever resolution finishes first.
+
+        The limiter is built **here, per call**. On the async surface it is an
+        ``asyncio.Semaphore``, which binds to the first event loop that
+        *contends* it -- an uncontended acquire never touches the loop at all --
+        so one stored on the client or at module level would pass every
+        low-traffic test and then raise ``RuntimeError: bound to a different
+        event loop`` the first time a second loop contended it, i.e. in
+        production under load (measured on 3.10). A per-call limiter cannot do
+        that.
+        """
+        limiter = Semaphore(_ACTION_FANOUT)
+
+        async def _one(action: Action) -> Action:
+            async with limiter:
+                return await self._resolve_action_body(action)
+
+        resolved: list[Action] = await settle(*(_one(a) for a in actions))
+        return resolved
+
+    async def get_department_context(
         self,
         department_id: str | int,
         *,
@@ -561,59 +675,102 @@ class EasyvistaClient:
         ordering is best-effort: it relies on the server honoring
         ``RECENT_TICKETS_SORT`` (open item O-DIR-1) and silently degrades to the
         API's default order otherwise.
+
+        On the async surface the seven independent branches are issued
+        concurrently, costing two waves instead of eight serial steps; on the
+        sync surface they run one after another in source order. The three
+        paginating branches still page serially within themselves on either
+        surface -- offset pagination cannot be parallelised -- but on the async
+        surface they page alongside each other.
         """
-        department = self.get_department(department_id)
+        # Issued first, outside the fan-out: the department itself, plus the
+        # search guard. Kept outside because the manager lookup needs
+        # `department.manager_id`, and because a bad department_id should cost
+        # one request, not seven.
+        department = await self.get_department(department_id)
         search = ev_equals_filter("DEPARTMENT_ID", department_id)
         if search is None:
             raise ValueError("department_id is required to build a department context")
 
-        try:
-            employees = list(self.iter_employees(search=search))
-        except (EasyvistaAuthError, EasyvistaNotFound):
-            employees = []
-
-        manager: Employee | None = None
-        if resolve_manager and department.manager_id is not None:
+        # Every branch here degrades on both 403 and 404, unlike the ticket
+        # bundle above, whose two list calls catch EasyvistaAuthError only. The
+        # `include_*` / `resolve_*` flags sit inside the branch so a disabled one
+        # costs no request at all, exactly as a plain `if` around the call would.
+        async def _employees() -> list[Employee]:
             try:
-                manager = self.get_employee(department.manager_id)
+                return [e async for e in self.iter_employees(search=search)]
             except (EasyvistaAuthError, EasyvistaNotFound):
-                manager = None
+                return []
 
-        note = (
-            self._safe_memo(f"departments/{department_id}/comment_department")
-            if include_note
-            else None
-        )
-
-        try:
-            ticket_count = self.count_tickets(search=search)
-        except (EasyvistaAuthError, EasyvistaNotFound):
-            ticket_count = 0
-
-        try:
-            recent = list(
-                self.iter_tickets(
-                    search=search, sort=RECENT_TICKETS_SORT, max_records=recent_tickets
-                )
-            )
-        except (EasyvistaAuthError, EasyvistaNotFound):
-            recent = []
-
-        statistics: TicketStatistics | None = None
-        if include_statistics:
+        async def _manager() -> Employee | None:
+            if not resolve_manager or department.manager_id is None:
+                return None
             try:
-                statistics = self.ticket_statistics(
+                return await self.get_employee(department.manager_id)
+            except (EasyvistaAuthError, EasyvistaNotFound):
+                return None
+
+        async def _note() -> str | None:
+            if not include_note:
+                return None
+            return await self._safe_memo(
+                f"departments/{department_id}/comment_department"
+            )
+
+        async def _ticket_count() -> int:
+            try:
+                return await self.count_tickets(search=search)
+            except (EasyvistaAuthError, EasyvistaNotFound):
+                return 0
+
+        async def _recent() -> list[Request]:
+            try:
+                return [
+                    t
+                    async for t in self.iter_tickets(
+                        search=search,
+                        sort=RECENT_TICKETS_SORT,
+                        max_records=recent_tickets,
+                    )
+                ]
+            except (EasyvistaAuthError, EasyvistaNotFound):
+                return []
+
+        async def _statistics() -> TicketStatistics | None:
+            if not include_statistics:
+                return None
+            try:
+                return await self.ticket_statistics(
                     search=search, dimensions=dimensions
                 )
             except (EasyvistaAuthError, EasyvistaNotFound):
-                statistics = None
+                return None
 
-        assets: list[Asset] = []
-        if include_assets:
+        async def _assets() -> list[Asset]:
+            if not include_assets:
+                return []
             try:
-                assets = list(self.iter_assets(search=search))
+                return [a async for a in self.iter_assets(search=search)]
             except (EasyvistaAuthError, EasyvistaNotFound):
-                assets = []
+                return []
+
+        (
+            employees,
+            manager,
+            note,
+            ticket_count,
+            recent,
+            statistics,
+            assets,
+        ) = await settle(
+            _employees(),
+            _manager(),
+            _note(),
+            _ticket_count(),
+            _recent(),
+            _statistics(),
+            _assets(),
+        )
 
         return DepartmentContext(
             department=department,
@@ -626,8 +783,8 @@ class EasyvistaClient:
             assets=assets,
         )
 
-    def _safe_memo(self, path: str) -> str | None:
+    async def _safe_memo(self, path: str) -> str | None:
         try:
-            return self.resolve_memo(path)
+            return await self.resolve_memo(path)
         except (EasyvistaNotFound, EasyvistaAuthError):
             return None

@@ -16,3 +16,64 @@ repos:
         # needs its own alternative: pyproject's bare `tests/` matches it as a
         # substring, but the anchored `(^|/)tests/` here does not.
         exclude: (^|/)tests/|(^|/)testing/|^integration_tests/
+  - repo: local
+    hooks:
+      # Fails on a _sync/ tree left stale by an edit to _async/. Runs at
+      # commit time rather than pre-push so the generated tree is never
+      # committed out of step with its source. `language: python` (not
+      # `system`) so pre-commit builds this hook its own managed venv --
+      # bootstrapped from whatever interpreter ran pre-commit itself, never
+      # by searching PATH for a bare `python` -- so it is unaffected by a
+      # `python` on PATH that isn't this project's interpreter (as on
+      # Windows, where it commonly resolves to the Microsoft Store stub).
+      # unasync_build.py imports only the stdlib plus `unasync`, so that is
+      # the hook's entire additional_dependencies list.
+      #
+      # Both pins below are exact, not ranges: this hook is a byte-equality
+      # gate between _async/ and the checked-in _sync/, and unasync (via
+      # tokenize_rt, which actually re-tokenizes and reconstructs the source
+      # bytes) is the generator that equality is measured against. A patch
+      # release of either that changes whitespace reconstruction would fail
+      # this hook on an untouched commit with a misleading "out of date"
+      # message, and the obvious "fix" -- regenerate -- produces a large
+      # unreviewed diff. Bump these deliberately, in their own commit, with
+      # --check re-run by hand; do not relax back to a range.
+      - id: unasync-check
+        name: generated sync tree is up to date
+        entry: python unasync_build.py --check
+        language: python
+        additional_dependencies: ["unasync==0.6.0", "tokenize-rt==6.2.0"]
+        types: [python]
+        pass_filenames: false
+      # `_sync/` as a whole is excluded from ruff (see [tool.ruff]
+      # extend-exclude in pyproject.toml) because it is generated and the
+      # formatter would fight the generator forever. But two files under it
+      # are hand-written on both sides -- unasync_build.HAND_WRITTEN -- and
+      # the directory-wide exclusion silently skips them too, so nothing has
+      # ever formatted or linted them. This runs ruff on exactly those paths,
+      # read from HAND_WRITTEN itself so it stays correct if that set
+      # changes. Also `language: python` for the reason given above.
+      # `ruff==0.16.0` is pinned to match the `astral-sh/ruff-pre-commit`
+      # `rev` above exactly, so the two hand-written twins are never
+      # formatted one way by that hook's ruff and another way by this one --
+      # they just never overlap in file scope, but they use one ruff.
+      #
+      # `unasync`/`tokenize-rt` are exact-pinned here too, matching the
+      # unasync-check hook above -- this script only imports unasync_build
+      # for HAND_WRITTEN/SYNC_DIR and never calls _generate()/_check(), so it
+      # is not itself a byte-equality gate, but it still needs unasync_build's
+      # `import unasync` to succeed, and there is no reason to let a second,
+      # independently-resolved copy of either package float in this repo's
+      # hooks.
+      - id: hand-written-sync-lint
+        name: format and lint the hand-written _sync/ twins
+        entry: python scripts/lint_hand_written_sync.py
+        language: python
+        additional_dependencies:
+          ["unasync==0.6.0", "tokenize-rt==6.2.0", "ruff==0.16.0"]
+        # Mirrors unasync_build.HAND_WRITTEN by hand; there is no way to read
+        # that set before pre-commit decides which files to run hooks on, so
+        # keep this pattern in step with HAND_WRITTEN if it ever gains a
+        # third entry.
+        files: ^easyvista_python_client/_sync/(_concurrency\.py|tests/test_concurrency\.py)$
+        pass_filenames: false
