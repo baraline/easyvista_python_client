@@ -104,8 +104,13 @@ def _rewritable_names(node: ast.AST, keys: set[str]) -> list[str]:
     them), an attribute store (``self.aclose = ...``), an import alias
     (``import x as AsyncRetrying`` -- neither a ``Name`` nor covered by
     ``Store`` context, since ``ast.alias`` carries the name as a plain
-    string), an ``except ... as`` name, and a ``global``/``nonlocal``
-    declaration.
+    string), an ``except ... as`` name, a ``global``/``nonlocal``
+    declaration, and a ``match``/``case`` capture: ``case AsyncClient:``
+    (``ast.MatchAs.name``), ``case [*AsyncRetrying]:`` (``ast.MatchStar.name``)
+    and ``case {**aclose}:`` (``ast.MatchMapping.rest``) each bind a plain
+    name the same way, and none of them is an ``ast.Name`` either. ``match``
+    is valid on this project's 3.10 floor, so it is a live construct even
+    though nothing in the tree uses it today.
 
     The exemption for a deliberate rename is scoped to the *specific* role
     it is legitimate in -- a class name for ``AsyncEasyvistaClient``, a
@@ -148,6 +153,12 @@ def _rewritable_names(node: ast.AST, keys: set[str]) -> list[str]:
 
     if isinstance(node, (ast.Global, ast.Nonlocal)):
         return [n for n in node.names if n in keys]
+
+    if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name is not None:
+        return [node.name] if node.name in keys else []
+
+    if isinstance(node, ast.MatchMapping) and node.rest is not None:
+        return [node.rest] if node.rest in keys else []
 
     return []
 
