@@ -13,38 +13,47 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
 
-from ._concurrency_async import Semaphore, settle
-from ._transport import AsyncTransport, RequestSpec
-from .config import EasyvistaConfig
-from .context import TicketContext
-from .directory import (
+from easyvista_python_client._async._concurrency import Semaphore, settle
+from easyvista_python_client._async._transport import Transport
+from easyvista_python_client._transport import RequestSpec
+from easyvista_python_client.config import EasyvistaConfig
+from easyvista_python_client.context import TicketContext
+from easyvista_python_client.directory import (
     RECENT_TICKETS_SORT,
     DepartmentContext,
     _department_matches,
     _normalize_name,
 )
-from .exceptions import EasyvistaAuthError, EasyvistaNotFound
-from .field_model import parse_memo
-from .filters import ev_equals_filter, is_safe_ev_value
-from .models.action import Action, PostAction
-from .models.asset import Asset, PostAsset
-from .models.department import Department, DepartmentUpdate, PostDepartment
-from .models.document import Document
-from .models.employee import Employee, EmployeeUpdate, PostEmployee
-from .models.request import PostRequest, Request, RequestUpdate
-from .pagination import SearchResult
-from .reporting import (
+from easyvista_python_client.exceptions import EasyvistaAuthError, EasyvistaNotFound
+from easyvista_python_client.field_model import parse_memo
+from easyvista_python_client.filters import ev_equals_filter, is_safe_ev_value
+from easyvista_python_client.models.action import Action, PostAction
+from easyvista_python_client.models.asset import Asset, PostAsset
+from easyvista_python_client.models.department import (
+    Department,
+    DepartmentUpdate,
+    PostDepartment,
+)
+from easyvista_python_client.models.document import Document
+from easyvista_python_client.models.employee import (
+    Employee,
+    EmployeeUpdate,
+    PostEmployee,
+)
+from easyvista_python_client.models.request import PostRequest, Request, RequestUpdate
+from easyvista_python_client.pagination import SearchResult
+from easyvista_python_client.reporting import (
     DEFAULT_DIMENSIONS,
     TicketStatistics,
     aggregate_tickets,
     fields_for_references,
 )
-from .resources import actions as actions_res
-from .resources import assets as assets_res
-from .resources import departments as departments_res
-from .resources import documents as documents_res
-from .resources import employees as employees_res
-from .resources import requests as requests_res
+from easyvista_python_client.resources import actions as actions_res
+from easyvista_python_client.resources import assets as assets_res
+from easyvista_python_client.resources import departments as departments_res
+from easyvista_python_client.resources import documents as documents_res
+from easyvista_python_client.resources import employees as employees_res
+from easyvista_python_client.resources import requests as requests_res
 
 # Ceiling on simultaneous in-flight requests when resolving action bodies, which
 # is the one fan-out here whose width is set by the server (a ticket can carry
@@ -64,7 +73,7 @@ class AsyncEasyvistaClient:
 
     def __init__(self, config: EasyvistaConfig) -> None:
         self.config = config
-        self._transport = AsyncTransport(config)
+        self._transport = Transport(config)
 
     @classmethod
     def from_env(cls) -> AsyncEasyvistaClient:
@@ -344,7 +353,7 @@ class AsyncEasyvistaClient:
         href/path. Raises :class:`ValueError` when the record carries no
         download URL, and :class:`EasyvistaError` when that URL points outside
         the configured instance (see
-        :meth:`~easyvista_python_client._transport.BaseTransport.resolve_url`).
+        :meth:`~easyvista_python_client._async._transport.BaseTransport.resolve_url`).
         """
         return await self._transport.get_bytes(documents_res.download_href(document))
 

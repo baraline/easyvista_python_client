@@ -1,7 +1,8 @@
 """Typed Python client for the EasyVista Service Manager REST API."""
 
-from .async_client import AsyncEasyvistaClient
-from .client import EasyvistaClient
+from easyvista_python_client._async import AsyncEasyvistaClient
+from easyvista_python_client._sync import EasyvistaClient
+
 from .config import EasyvistaConfig
 from .context import TicketContext
 from .directory import DepartmentContext

@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from easyvista_python_client.client import EasyvistaClient
+from easyvista_python_client._sync.client import EasyvistaClient
 from easyvista_python_client.directory import DepartmentContext
 from easyvista_python_client.exceptions import EasyvistaError
 from easyvista_python_client.models.action import PostAction

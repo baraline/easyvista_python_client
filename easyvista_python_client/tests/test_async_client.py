@@ -5,7 +5,7 @@ import httpx
 import pytest
 import respx
 
-from easyvista_python_client.async_client import _ACTION_FANOUT, AsyncEasyvistaClient
+from easyvista_python_client._async.client import _ACTION_FANOUT, AsyncEasyvistaClient
 from easyvista_python_client.exceptions import EasyvistaError, EasyvistaNotFound
 from easyvista_python_client.models.action import PostAction
 from easyvista_python_client.models.asset import PostAsset

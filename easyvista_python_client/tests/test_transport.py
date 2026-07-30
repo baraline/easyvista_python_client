@@ -2,12 +2,14 @@ import httpx
 import pytest
 import respx
 
-from easyvista_python_client._transport import (
-    AsyncTransport,
-    BaseTransport,
-    RequestSpec,
-    SyncTransport,
-)
+# Both trees now define `Transport`, so the two executors are imported under
+# distinct local aliases and this one module keeps addressing both surfaces.
+# The aliases are local and temporary: Task 6 splits this file into
+# `_async/tests/` and `_sync/tests/`, where each side gets the bare name back.
+from easyvista_python_client._async._transport import BaseTransport
+from easyvista_python_client._async._transport import Transport as AsyncTransport
+from easyvista_python_client._sync._transport import Transport as SyncTransport
+from easyvista_python_client._transport import RequestSpec
 from easyvista_python_client.config import EasyvistaConfig
 from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
