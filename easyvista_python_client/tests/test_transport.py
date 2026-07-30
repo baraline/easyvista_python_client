@@ -226,45 +226,45 @@ def test_send_does_not_retry_590_and_raises_validation_error():
 
 
 @respx.mock
-async def test_asend_returns_json_and_sends_auth_header():
+async def test_send_returns_json_and_sends_auth_header():
     route = respx.get(f"{ROOT}/requests").mock(
         return_value=httpx.Response(200, json={"records": []})
     )
     async with AsyncTransport(_cfg()) as transport:
-        result = await transport.asend(RequestSpec("GET", "requests"))
+        result = await transport.send(RequestSpec("GET", "requests"))
     assert result == {"records": []}
     assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
 
 
 @respx.mock
-async def test_asend_retries_then_succeeds():
+async def test_send_retries_then_succeeds_async():
     route = respx.get(f"{ROOT}/requests").mock(
         side_effect=[httpx.Response(503), httpx.Response(200, json={"ok": True})]
     )
     async with AsyncTransport(_cfg(max_retries=2)) as transport:
-        result = await transport.asend(RequestSpec("GET", "requests"))
+        result = await transport.send(RequestSpec("GET", "requests"))
     assert result == {"ok": True}
     assert route.call_count == 2
 
 
 @respx.mock
-async def test_asend_exhausts_retries_raises_server_error():
+async def test_send_exhausts_retries_raises_server_error_async():
     respx.get(f"{ROOT}/requests").mock(return_value=httpx.Response(503))
     async with AsyncTransport(_cfg(max_retries=1)) as transport:
         with pytest.raises(EasyvistaServerError):
-            await transport.asend(RequestSpec("GET", "requests"))
+            await transport.send(RequestSpec("GET", "requests"))
 
 
 @respx.mock
-async def test_asend_transport_error_raises_connection_error():
+async def test_send_transport_error_raises_connection_error_async():
     respx.get(f"{ROOT}/requests").mock(side_effect=httpx.ConnectError("boom"))
     async with AsyncTransport(_cfg()) as transport:
         with pytest.raises(EasyvistaConnectionError):
-            await transport.asend(RequestSpec("GET", "requests"))
+            await transport.send(RequestSpec("GET", "requests"))
 
 
 @respx.mock
-async def test_asend_does_not_retry_590_and_raises_validation_error():
+async def test_send_does_not_retry_590_and_raises_validation_error_async():
     # Async parity for the deterministic-590 fix: raised once as a validation
     # error, never retried, even with max_retries > 0.
     route = respx.post(f"{ROOT}/requests").mock(
@@ -275,7 +275,7 @@ async def test_asend_does_not_retry_590_and_raises_validation_error():
     )
     async with AsyncTransport(_cfg(max_retries=2)) as transport:
         with pytest.raises(EasyvistaValidationError) as ei:
-            await transport.asend(
+            await transport.send(
                 RequestSpec("POST", "requests", json={"requests": [{}]})
             )
     assert ei.value.status_code == 590
@@ -425,42 +425,42 @@ def test_get_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
 
 
 @respx.mock
-async def test_aget_bytes_returns_raw_content_not_json():
+async def test_get_bytes_returns_raw_content_not_json_async():
     respx.get(f"{ROOT}/documents/1/content").mock(
         return_value=httpx.Response(200, content=b"\x00\x01\xff not json")
     )
     async with AsyncTransport(_cfg()) as transport:
-        got = await transport.aget_bytes("documents/1/content")
+        got = await transport.get_bytes("documents/1/content")
     assert got == b"\x00\x01\xff not json"
 
 
 @respx.mock
-async def test_aget_bytes_maps_403_to_auth_error():
+async def test_get_bytes_maps_403_to_auth_error_async():
     respx.get(f"{ROOT}/documents/1/content").mock(return_value=httpx.Response(403))
     async with AsyncTransport(_cfg()) as transport:
         with pytest.raises(EasyvistaAuthError):
-            await transport.aget_bytes("documents/1/content")
+            await transport.get_bytes("documents/1/content")
 
 
 @respx.mock
-async def test_aget_bytes_retries_then_succeeds():
+async def test_get_bytes_retries_then_succeeds_async():
     route = respx.get(f"{ROOT}/documents/1/content").mock(
         side_effect=[httpx.Response(503), httpx.Response(200, content=b"bytes")]
     )
     async with AsyncTransport(_cfg(max_retries=2)) as transport:
-        assert await transport.aget_bytes("documents/1/content") == b"bytes"
+        assert await transport.get_bytes("documents/1/content") == b"bytes"
     assert route.call_count == 2
 
 
 @respx.mock
-async def test_aget_bytes_rejects_a_foreign_origin():
+async def test_get_bytes_rejects_a_foreign_origin_async():
     async with AsyncTransport(_cfg()) as transport:
         with pytest.raises(EasyvistaError, match="outside the configured instance"):
-            await transport.aget_bytes("https://attacker.test/download/42")
+            await transport.get_bytes("https://attacker.test/download/42")
 
 
 @respx.mock
-async def test_aget_bytes_drops_the_bearer_token_on_a_cross_host_redirect():
+async def test_get_bytes_drops_the_bearer_token_on_a_cross_host_redirect_async():
     # Async twin of the sync pin -- the AsyncClient must strip Authorization on
     # a redirect off the instance just as the sync one does.
     respx.get("https://ev.test/download/42").mock(
@@ -472,14 +472,14 @@ async def test_aget_bytes_drops_the_bearer_token_on_a_cross_host_redirect():
         return_value=httpx.Response(200, content=b"blob")
     )
     async with AsyncTransport(_cfg()) as transport:
-        content = await transport.aget_bytes("https://ev.test/download/42")
+        content = await transport.get_bytes("https://ev.test/download/42")
     assert content == b"blob"
     leaked = "authorization" in foreign.calls.last.request.headers
     assert not leaked, "the instance token followed a redirect off the instance"
 
 
 @respx.mock
-async def test_aget_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
+async def test_get_bytes_keeps_the_bearer_token_on_a_same_host_redirect_async():
     # Control for the test above (see its sync twin).
     respx.get("https://ev.test/download/42").mock(
         return_value=httpx.Response(
@@ -490,6 +490,6 @@ async def test_aget_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
         return_value=httpx.Response(200, content=b"blob")
     )
     async with AsyncTransport(_cfg()) as transport:
-        content = await transport.aget_bytes("https://ev.test/download/42")
+        content = await transport.get_bytes("https://ev.test/download/42")
     assert content == b"blob"
     assert signed.calls.last.request.headers["Authorization"] == "Bearer tok"

@@ -101,7 +101,7 @@ class AsyncEasyvistaClient:
     # --- tickets -------------------------------------------------------------
     async def create_ticket(self, ticket: PostRequest) -> Request:
         spec, parse = requests_res.build_create_ticket(ticket)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def create_tickets(self, tickets: Sequence[PostRequest]) -> list[Request]:
         # One request per ticket (EasyVista creates only the first item of a
@@ -118,7 +118,7 @@ class AsyncEasyvistaClient:
 
     async def get_ticket(self, rfc_number: str) -> Request:
         spec, parse = requests_res.build_get_ticket(rfc_number)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def search_tickets(
         self,
@@ -134,7 +134,7 @@ class AsyncEasyvistaClient:
         spec, parse = requests_res.build_search_tickets(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def iter_tickets(
         self,
@@ -210,7 +210,7 @@ class AsyncEasyvistaClient:
 
     async def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
         spec, parse = requests_res.build_update_ticket(rfc_number, update)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def close_ticket(
         self,
@@ -226,7 +226,7 @@ class AsyncEasyvistaClient:
             delete_actions=delete_actions,
             comment=comment,
         )
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     # --- actions -------------------------------------------------------------
     async def create_action(self, rfc_number: str, action: PostAction) -> Action:
@@ -239,11 +239,11 @@ class AsyncEasyvistaClient:
         ``integration_tests/test_live_ticket_history.py`` for the pattern.
         """
         spec, parse = actions_res.build_create_action(rfc_number, action)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def list_actions(self, rfc_number: str) -> list[Action]:
         spec, parse = actions_res.build_list_actions(rfc_number)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def get_action(self, action_id: str | int) -> Action:
         """Fetch one action, including the Memo links ``list_actions`` omits.
@@ -252,7 +252,7 @@ class AsyncEasyvistaClient:
         record; :meth:`get_ticket_context` resolves it for you.
         """
         spec, parse = actions_res.build_get_action(action_id)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def _resolve_action_body(self, action: Action) -> Action:
         """Return ``action`` with its note text resolved onto ``description``.
@@ -275,11 +275,11 @@ class AsyncEasyvistaClient:
     # --- assets --------------------------------------------------------------
     async def create_asset(self, asset: PostAsset) -> Asset:
         spec, parse = assets_res.build_create_asset(asset)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def get_asset(self, asset_id: str) -> Asset:
         spec, parse = assets_res.build_get_asset(asset_id)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def search_assets(
         self,
@@ -295,7 +295,7 @@ class AsyncEasyvistaClient:
         spec, parse = assets_res.build_search_assets(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def iter_assets(
         self,
@@ -337,20 +337,20 @@ class AsyncEasyvistaClient:
         spec, parse = documents_res.build_add_document(
             rfc_number, filename=filename, content=content
         )
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def list_documents(self, rfc_number: str) -> list[Document]:
         spec, parse = documents_res.build_list_documents(rfc_number)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def download_document(self, document: Document | str) -> bytes:
         """Async twin of :meth:`EasyvistaClient.download_document`."""
-        return await self._transport.aget_bytes(documents_res.download_href(document))
+        return await self._transport.get_bytes(documents_res.download_href(document))
 
     # --- departments ----------------------------------------------------------
     async def get_department(self, department_id: str | int) -> Department:
         spec, parse = departments_res.build_get_department(department_id)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def search_departments(
         self,
@@ -366,7 +366,7 @@ class AsyncEasyvistaClient:
         spec, parse = departments_res.build_search_departments(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def iter_departments(
         self,
@@ -436,19 +436,19 @@ class AsyncEasyvistaClient:
     async def create_department(self, department: PostDepartment) -> Department:
         """Async twin of :meth:`EasyvistaClient.create_department` (provisional)."""
         spec, parse = departments_res.build_create_department(department)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def update_department(
         self, department_id: str | int, update: DepartmentUpdate
     ) -> Department:
         """Async twin of :meth:`EasyvistaClient.update_department` (provisional)."""
         spec, parse = departments_res.build_update_department(department_id, update)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     # --- employees ------------------------------------------------------------
     async def get_employee(self, employee_id: str | int) -> Employee:
         spec, parse = employees_res.build_get_employee(employee_id)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def search_employees(
         self,
@@ -464,7 +464,7 @@ class AsyncEasyvistaClient:
         spec, parse = employees_res.build_search_employees(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def iter_employees(
         self,
@@ -502,14 +502,14 @@ class AsyncEasyvistaClient:
     async def create_employee(self, employee: PostEmployee) -> Employee:
         """Async twin of :meth:`EasyvistaClient.create_employee` (provisional)."""
         spec, parse = employees_res.build_create_employee(employee)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     async def update_employee(
         self, employee_id: str | int, update: EmployeeUpdate
     ) -> Employee:
         """Async twin of :meth:`EasyvistaClient.update_employee` (provisional)."""
         spec, parse = employees_res.build_update_employee(employee_id, update)
-        return parse(await self._transport.asend(spec))
+        return parse(await self._transport.send(spec))
 
     # --- aggregated context --------------------------------------------------
     async def resolve_memo(self, href: str) -> str | None:
@@ -520,7 +520,7 @@ class AsyncEasyvistaClient:
             path = path[len(root) :]
         path = path.lstrip("/")
         field = path.rstrip("/").rsplit("/", 1)[-1]
-        return parse_memo(await self._transport.asend(RequestSpec("GET", path)), field)
+        return parse_memo(await self._transport.send(RequestSpec("GET", path)), field)
 
     async def get_ticket_context(
         self, rfc_number: str, *, resolve_action_bodies: bool = True

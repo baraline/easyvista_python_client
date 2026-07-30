@@ -1,7 +1,14 @@
 """HTTP transport for the EasyVista client.
 
-This module owns everything EasyVista-specific about talking to the API:
-URL building, auth headers, error mapping, and the sync/async executors.
+Owns everything EasyVista-specific about talking to the API: URL building,
+auth headers, error mapping, and the sync/async executors.
+
+``RequestSpec`` is the exception and stays here permanently. It is a frozen
+dataclass with no I/O and 18 importers outside the client -- six resource
+builders in ``resources/`` and twelve probe scripts -- so when the executors
+move into the generated trees it remains at the package root. A shared
+resource builder must not import from a tree, and a probe script has no
+business reaching into ``_async/`` for a pure value type.
 """
 
 from __future__ import annotations
@@ -272,7 +279,7 @@ class AsyncTransport(BaseTransport):
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _do_asend(self, spec: RequestSpec) -> Any:
+    async def _do_send(self, spec: RequestSpec) -> Any:
         response = await self._client.request(
             spec.method, self.build_url(spec.path), params=spec.params, json=spec.json
         )
@@ -280,7 +287,7 @@ class AsyncTransport(BaseTransport):
             raise _RetryableResponse(response)
         return self.finish(response)
 
-    async def asend(self, spec: RequestSpec) -> Any:
+    async def send(self, spec: RequestSpec) -> Any:
         retryer = AsyncRetrying(
             stop=stop_after_attempt(self.config.max_retries + 1),
             wait=wait_exponential(multiplier=0.5, max=10),
@@ -288,13 +295,13 @@ class AsyncTransport(BaseTransport):
             reraise=True,
         )
         try:
-            return await retryer(self._do_asend, spec)
+            return await retryer(self._do_send, spec)
         except _RetryableResponse as exc:
             return self.finish(exc.response)
         except httpx.TransportError as exc:
             raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
 
-    async def _do_aget_bytes(self, path_or_url: str) -> bytes:
+    async def _do_get_bytes(self, path_or_url: str) -> bytes:
         response = await self._client.get(
             self.resolve_url(path_or_url), follow_redirects=True
         )
@@ -304,7 +311,7 @@ class AsyncTransport(BaseTransport):
             self._raise_for_response(response)
         return response.content
 
-    async def aget_bytes(self, path_or_url: str) -> bytes:
+    async def get_bytes(self, path_or_url: str) -> bytes:
         """Async twin of :meth:`SyncTransport.get_bytes`."""
         retryer = AsyncRetrying(
             stop=stop_after_attempt(self.config.max_retries + 1),
@@ -313,7 +320,7 @@ class AsyncTransport(BaseTransport):
             reraise=True,
         )
         try:
-            result: bytes = await retryer(self._do_aget_bytes, path_or_url)
+            result: bytes = await retryer(self._do_get_bytes, path_or_url)
             return result
         except _RetryableResponse as exc:
             self._raise_for_response(exc.response)
