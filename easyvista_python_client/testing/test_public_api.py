@@ -53,3 +53,34 @@ def test_directory_public_exports():
     ):
         assert hasattr(evc, name), name
         assert name in evc.__all__
+
+
+def test_both_clients_expose_the_same_surface():
+    """Parity is a property of the package, not of one client."""
+    import inspect
+
+    from easyvista_python_client import AsyncEasyvistaClient, EasyvistaClient
+
+    def public(cls):
+        return {
+            n for n, _ in inspect.getmembers(cls, callable) if not n.startswith("_")
+        }
+
+    sync_only = public(EasyvistaClient) - public(AsyncEasyvistaClient)
+    async_only = public(AsyncEasyvistaClient) - public(EasyvistaClient)
+    assert sync_only == {"close"}
+    assert async_only == {"aclose"}
+
+
+def test_every_async_client_method_is_awaitable():
+    """A coroutine or async generator, never a plain value."""
+    import inspect
+
+    from easyvista_python_client import AsyncEasyvistaClient
+
+    for name, member in inspect.getmembers(AsyncEasyvistaClient, inspect.isfunction):
+        if name.startswith("_") or name in {"from_env"}:
+            continue
+        assert inspect.iscoroutinefunction(member) or inspect.isasyncgenfunction(
+            member
+        ), f"{name} is neither a coroutine nor an async generator"
