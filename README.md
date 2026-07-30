@@ -3,6 +3,8 @@
 Typed Python client for the EasyVista Service Manager REST API. Sync + async,
 Pydantic models, Bearer or Basic auth.
 
+While the package is preparing for 1.0, alot of potential breaking change might happen between versions. A deprecation policy will be put in place once 1.0 is out and the package have been stabilized.
+
 ## Documentation
 
 Full documentation: https://easyvista-python-client.readthedocs.io/
