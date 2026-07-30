@@ -38,8 +38,7 @@ def main() -> int:
     missing = [p for p in paths if not Path(p).is_file()]
     if missing:
         print(
-            f"hand-written twin(s) named in HAND_WRITTEN not found on disk: "
-            f"{missing}",
+            f"hand-written twin(s) named in HAND_WRITTEN not found on disk: {missing}",
             file=sys.stderr,
         )
         return 1
