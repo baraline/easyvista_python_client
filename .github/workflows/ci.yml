@@ -18,6 +18,12 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
       - run: mypy easyvista_python_client
+      # The sync client tree is generated from the async one and checked in.
+      # This catches a _sync/ left stale by an edit to _async/. It does NOT
+      # catch a token collision -- that is deterministic, so regenerating
+      # reproduces it and the diff stays clean.
+      # testing/test_unasync_codegen.py covers that case.
+      - run: python unasync_build.py --check
       # `integration_tests/` calls a real EasyVista instance using credentials the
       # user supplies; it can never run here. Excluded by marker rather than left
       # to skip on absent credentials, so a leaked secret could not make CI go
@@ -51,3 +57,22 @@ jobs:
       - run: python -m build
       - run: |
           python -c "import glob, tarfile, zipfile; w = sorted(glob.glob('dist/*.whl'))[-1]; s = sorted(glob.glob('dist/*.tar.gz'))[-1]; names = zipfile.ZipFile(w).namelist() + tarfile.open(s).getnames(); bad = [n for n in names if '/tests/' in n or '/testing/' in n or n.endswith('/tests') or n.endswith('/testing')]; print('offenders:', bad); assert not bad, bad; print('OK - no test files in either artifact')"
+      # The inverse of the assertion above: _sync/ is generated and gitignore-
+      # shaped mistakes happen, so prove the generated tree -- not just the
+      # hand-written one -- actually ships. A package missing its sync client
+      # would otherwise import fine and fail only when a caller instantiates
+      # EasyvistaClient.
+      - run: |
+          python - <<'PY'
+          import pathlib, zipfile
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          names = zipfile.ZipFile(wheel).namelist()
+          assert any(n.endswith("_sync/client.py") for n in names), (
+              "the generated sync client is missing from the wheel -- is _sync/ "
+              "gitignored or unbuilt?"
+          )
+          assert any(n.endswith("_async/client.py") for n in names), (
+              "the async client is missing from the wheel"
+          )
+          print("both client trees ship:", wheel.name)
+          PY

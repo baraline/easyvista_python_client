@@ -117,6 +117,23 @@ a deprecation policy will follow the 1.0 release.
   previously raised a validation error on that value.
 - `get_department_context` now raises `ValueError` for a blank or unrenderable `department_id`
   rather than building a malformed search (defence in depth; not a demonstrated exploitable path).
+- The synchronous client is now **generated** from the asynchronous one with
+  `unasync`. `easyvista_python_client/_async/` is the only hand-written client
+  source; `_sync/` is produced by `python unasync_build.py`, checked in, and
+  verified in CI. Sync/async parity is enforced by a build gate instead of by
+  convention.
+- **Internal module paths moved.** `easyvista_python_client.client` and
+  `easyvista_python_client.async_client` no longer exist. Import from the
+  package root instead — `from easyvista_python_client import EasyvistaClient,
+  AsyncEasyvistaClient` — which is unchanged and has always been the supported
+  surface. `easyvista_python_client._transport.RequestSpec` is also unchanged.
+- `EasyvistaClient.ticket_statistics` now collects its page of tickets into a
+  list before aggregating, rather than streaming the iterator. No behavioural
+  difference at the default `max_records=100`; at `max_records=None` peak
+  memory is now proportional to the result set.
+- `EasyvistaClient.get_ticket_context` now lists documents before resolving
+  action bodies, rather than after. The same requests are issued and the
+  result is identical; only their order on the wire changed.
 
 ## [0.1.0] - 2026-07-15
 

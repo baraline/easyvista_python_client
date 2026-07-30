@@ -16,3 +16,27 @@ repos:
         # needs its own alternative: pyproject's bare `tests/` matches it as a
         # substring, but the anchored `(^|/)tests/` here does not.
         exclude: (^|/)tests/|(^|/)testing/|^integration_tests/
+  - repo: local
+    hooks:
+      # Fails on a _sync/ tree left stale by an edit to _async/. Runs at
+      # commit time rather than pre-push so the generated tree is never
+      # committed out of step with its source.
+      - id: unasync-check
+        name: generated sync tree is up to date
+        entry: python unasync_build.py --check
+        language: system
+        types: [python]
+        pass_filenames: false
+      # `_sync/` as a whole is excluded from ruff (see [tool.ruff]
+      # extend-exclude in pyproject.toml) because it is generated and the
+      # formatter would fight the generator forever. But two files under it
+      # are hand-written on both sides -- unasync_build.HAND_WRITTEN -- and
+      # the directory-wide exclusion silently skips them too, so nothing has
+      # ever formatted or linted them. This runs ruff on exactly those paths,
+      # read from HAND_WRITTEN itself so it stays correct if that set changes.
+      - id: hand-written-sync-lint
+        name: format and lint the hand-written _sync/ twins
+        entry: python scripts/lint_hand_written_sync.py
+        language: system
+        files: ^easyvista_python_client/_sync/(_concurrency\.py|tests/test_concurrency\.py)$
+        pass_filenames: false

@@ -173,7 +173,19 @@ markers = [
 # would measure them too. They execute end to end and report ~100%, which would
 # weigh ~6,700 lines of test code against ~2,700 lines of source and dilute the
 # fail_under gate below into one that passes on almost anything.
-omit = ["*/tests/*", "*/testing/*"]
+omit = [
+    "*/tests/*",
+    "*/testing/*",
+    # The async tree is the hand-written source; the sync tree is generated
+    # from it by a token transform that only strips async/await, so every
+    # statement exists in both and measuring both would count the same logic
+    # twice behind a doubled denominator. Coverage is reported on the source,
+    # so an uncovered line always names a file someone can go edit.
+    # Correspondence between the trees is enforced elsewhere: unasync_build.py
+    # --check proves they match, mypy strict checks both, and the
+    # test_concurrency.py pair exercises what exists on only one side.
+    "easyvista_python_client/_sync/*",
+]
 
 [tool.coverage.report]
 fail_under = 95
