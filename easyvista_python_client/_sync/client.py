@@ -55,12 +55,13 @@ from easyvista_python_client.resources import documents as documents_res
 from easyvista_python_client.resources import employees as employees_res
 from easyvista_python_client.resources import requests as requests_res
 
-# Ceiling on simultaneous in-flight requests when resolving action bodies, which
-# is the one fan-out here whose width is set by the server (a ticket can carry
-# any number of actions). The department fan-out is a fixed seven and needs no
-# bound. Deliberately not a config field: nobody has asked for it, and measured
-# against a live instance a limit of 8 costs nothing (19 actions took 5.31s at
-# limit 8 vs 5.43s unbounded -- the server, not the client, is the bottleneck).
+# Width of the action-body fan-out: a ceiling on requests in flight at once on
+# the async surface, inert on the sync one. This is the one fan-out here whose
+# width is set by the server (a ticket can carry any number of actions); the
+# department fan-out is a fixed seven and needs no bound. Deliberately not a
+# config field: nobody has asked for it, and measured against a live instance a
+# limit of 8 costs nothing (19 actions took 5.31s at limit 8 vs 5.43s unbounded
+# -- the server, not the client, is the bottleneck).
 _ACTION_FANOUT = 8
 
 
@@ -97,13 +98,14 @@ class EasyvistaClient:
         # One request per ticket (EasyVista creates only the first item of a
         # multi-item body).
         #
-        # Stays SEQUENTIAL on purpose, unlike the read bundles below. These are
-        # writes: EasyVista assigns the RFC number server-side, so concurrent
-        # POSTs return in scheduling order, and a failure part-way through would
+        # Stays SEQUENTIAL on purpose on BOTH surfaces -- unlike the read
+        # bundles below, which fan out on the async one. These are writes:
+        # EasyVista assigns the RFC number server-side, so concurrent POSTs
+        # return in scheduling order, and a failure part-way through would
         # leave the caller holding an exception with no way to say which tickets
         # now exist. Sequentially a failure at item k means 0..k-1 exist and the
         # rest do not, which is a contract a caller can act on. Do not "fix"
-        # this into a gather.
+        # this into a fan-out.
         return [self.create_ticket(ticket) for ticket in tickets]
 
     def get_ticket(self, rfc_number: str) -> Request:
@@ -581,11 +583,15 @@ class EasyvistaClient:
         issues one request at a time throughout. On a hard failure (5xx, a
         transport error) siblings already in flight on the async surface run to
         completion before the error propagates, so a failing call there can
-        issue more requests than the sequential surface does; the ``settle``
-        helper's own docstring explains why that is the right trade.
+        issue more requests than the sequential surface does. That is the
+        deliberate trade: settling every sibling is what keeps an orphaned
+        request from outliving the call that issued it, and what makes the
+        exception a caller sees the one the sequential surface would have
+        raised rather than whichever branch happened to fail soonest.
         """
-        # Wave 0, deliberately outside the fan-out: this is the one call with no
-        # fallback, so a wrong RFC number should cost one request, not five.
+        # Issued first, and deliberately outside the fan-out: this is the one
+        # call with no fallback, so a wrong RFC number should cost one request,
+        # not five.
         ticket = self.get_ticket(rfc_number)
 
         # The asymmetry between these two except clauses is real and
@@ -623,7 +629,13 @@ class EasyvistaClient:
         )
 
     def _resolve_action_bodies(self, actions: list[Action]) -> list[Action]:
-        """Resolve every action's note text concurrently, bounded and in order.
+        """Resolve every action's note text, preserving ``list_actions`` order.
+
+        On the async surface the resolutions are issued concurrently, at most
+        ``_ACTION_FANOUT`` in flight; on the sync surface they run one after
+        another and the bound is inert. ``settle`` preserves source order on
+        either surface, so the returned list matches ``list_actions`` order
+        whichever resolution finishes first.
 
         The limiter is built **here, per call**. On the async surface it is an
         ``asyncio.Semaphore``, which binds to the first event loop that
@@ -633,9 +645,6 @@ class EasyvistaClient:
         event loop`` the first time a second loop contended it, i.e. in
         production under load (measured on 3.10). A per-call limiter cannot do
         that.
-
-        ``settle`` preserves source order, so the returned list matches
-        ``list_actions`` order regardless of which resolutions finish first.
         """
         limiter = Semaphore(_ACTION_FANOUT)
 
@@ -674,9 +683,10 @@ class EasyvistaClient:
         surface -- offset pagination cannot be parallelised -- but on the async
         surface they page alongside each other.
         """
-        # Wave 0: the department itself, plus the search guard. Kept outside the
-        # fan-out because the manager lookup needs `department.manager_id`, and
-        # because a bad department_id should cost one request, not seven.
+        # Issued first, outside the fan-out: the department itself, plus the
+        # search guard. Kept outside because the manager lookup needs
+        # `department.manager_id`, and because a bad department_id should cost
+        # one request, not seven.
         department = self.get_department(department_id)
         search = ev_equals_filter("DEPARTMENT_ID", department_id)
         if search is None:

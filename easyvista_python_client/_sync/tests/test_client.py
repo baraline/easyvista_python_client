@@ -1,9 +1,22 @@
+"""Client tests, hand-written here and generated into the sync tree.
+
+``unasync_build.py`` produces the twin of this module from it, so every test
+name is spelled identically on both surfaces and every comment and docstring
+is copied verbatim. Prose must therefore read true whichever tree the reader
+has open -- never "the twin of ...", and never a claim that holds on only one
+surface.
+
+Claims that *are* about one surface only live in ``test_concurrency.py``,
+which is hand-written on both sides and never generated.
+"""
+
 import json
 
 import httpx
 import pytest
 import respx
 
+from easyvista_python_client._sync import client as client_module
 from easyvista_python_client._sync.client import EasyvistaClient
 from easyvista_python_client.directory import DepartmentContext
 from easyvista_python_client.exceptions import EasyvistaError
@@ -15,10 +28,17 @@ from easyvista_python_client.models.department import (
     PostDepartment,
 )
 from easyvista_python_client.models.document import Document
-from easyvista_python_client.models.employee import Employee, PostEmployee
+from easyvista_python_client.models.employee import (
+    Employee,
+    EmployeeUpdate,
+    PostEmployee,
+)
 from easyvista_python_client.models.request import PostRequest, RequestUpdate
 
 ROOT = "https://ev.test/api/v1/acme"
+
+
+# --- tickets -----------------------------------------------------------------
 
 
 @respx.mock
@@ -95,6 +115,19 @@ def test_update_and_close_ticket(config):
 
 
 @respx.mock
+def test_update_ticket_sends_title(config):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(
+            200, json={"RFC_NUMBER": "I1", "TITLE": "New title"}
+        )
+    )
+    with EasyvistaClient(config) as client:
+        updated = client.update_ticket("I1", RequestUpdate(title="New title"))
+    assert json.loads(route.calls.last.request.content) == {"title": "New title"}
+    assert updated.title == "New title"
+
+
+@respx.mock
 def test_create_and_list_actions(config):
     respx.post(f"{ROOT}/requests/I1/actions").mock(
         return_value=httpx.Response(200, json={"records": [{"ACTION_ID": 5}]})
@@ -110,6 +143,23 @@ def test_create_and_list_actions(config):
 
 
 @respx.mock
+def test_get_action_fetches_the_item_level_record(config):
+    respx.get(f"{ROOT}/actions/52990").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 52990,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/52990/description"},
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        action = client.get_action(52990)
+    assert action.action_id == 52990
+    assert action.description == {"HREF": f"{ROOT}/actions/52990/description"}
+
+
+@respx.mock
 def test_from_env_constructs_working_client(monkeypatch):
     monkeypatch.setenv("EASYVISTA_URL", "https://ev.test")
     monkeypatch.setenv("EASYVISTA_ACCOUNT", "acme")
@@ -118,7 +168,31 @@ def test_from_env_constructs_working_client(monkeypatch):
         return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
     )
     with EasyvistaClient.from_env() as client:
-        assert client.get_ticket("I1").rfc_number == "I1"
+        ticket = client.get_ticket("I1")
+    assert ticket.rfc_number == "I1"
+
+
+@respx.mock
+def test_count_tickets_returns_total_record_count(config):
+    route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [{"RFC_NUMBER": "I1"}],
+                "record_count": 1,
+                "total_record_count": 42,
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        total = client.count_tickets(search='STATUS_ID:"3"')
+    assert total == 42  # the full match count, not the page's record_count
+    assert route.call_count == 1
+    assert route.calls.last.request.url.params["max_rows"] == "1"
+    assert route.calls.last.request.url.params["search"] == 'STATUS_ID:"3"'
+
+
+# --- assets and documents ----------------------------------------------------
 
 
 @respx.mock
@@ -179,10 +253,41 @@ def test_add_and_list_documents(config):
         listed = client.list_documents("I1")
     assert doc.href.endswith("/requests/I1")
     assert listed[0].href == "u1"
-    import json as _json
-
-    body = _json.loads(add_route.calls.last.request.content)
+    body = json.loads(add_route.calls.last.request.content)
     assert body["documents"][0]["filename"] == "a.txt"
+
+
+@respx.mock
+def test_download_document_fetches_the_ddl_href(config):
+    route = respx.get("https://ev.test/dl/7").mock(
+        return_value=httpx.Response(200, content=b"\x89PNG\r\n\x1a\n binary")
+    )
+    doc = Document.model_validate(
+        {"DOCUMENT": "shot.png", "DDL_HREF": "https://ev.test/dl/7"}
+    )
+    with EasyvistaClient(config) as client:
+        content = client.download_document(doc)
+    assert content == b"\x89PNG\r\n\x1a\n binary"
+    assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+@respx.mock
+def test_download_document_accepts_a_relative_path(config):
+    respx.get(f"{ROOT}/documents/7/content").mock(
+        return_value=httpx.Response(200, content=b"bytes")
+    )
+    with EasyvistaClient(config) as client:
+        assert client.download_document("documents/7/content") == b"bytes"
+
+
+def test_download_document_refuses_a_foreign_download_url(config):
+    doc = Document.model_validate({"DDL_HREF": "https://attacker.test/dl/7"})
+    with EasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaError, match="outside the configured instance"):
+            client.download_document(doc)
+
+
+# --- pagination --------------------------------------------------------------
 
 
 def _paged_tickets_responder(request):
@@ -219,7 +324,9 @@ def test_iter_tickets_follows_pages(config):
 def test_iter_tickets_respects_max_records(config):
     route = respx.get(f"{ROOT}/requests").mock(side_effect=_paged_tickets_responder)
     with EasyvistaClient(config) as client:
-        rfcs = [t.rfc_number for t in client.iter_tickets(page_size=2, max_records=1)]
+        rfcs = [
+            t.rfc_number for t in client.iter_tickets(page_size=2, max_records=1)
+        ]
     assert rfcs == ["I1"]
     # Stops after the first page once the cap is hit (no second request).
     assert route.calls.last.request.url.params["offset"] == "0"
@@ -233,7 +340,7 @@ def test_iter_tickets_stops_on_empty_page(config):
         )
     )
     with EasyvistaClient(config) as client:
-        assert list(client.iter_tickets(page_size=2)) == []
+        assert [t for t in client.iter_tickets(page_size=2)] == []
 
 
 @respx.mock
@@ -266,79 +373,75 @@ def test_iter_assets_follows_pages(config):
 
 
 @respx.mock
-def test_get_ticket_context_assembles_bundle(config):
-    from easyvista_python_client import TicketContext
+def test_iter_employees_follows_pages(config):
+    def responder(request):
+        offset = int(request.url.params.get("offset", "0"))
+        if offset == 0:
+            return httpx.Response(
+                200,
+                json={
+                    "records": [{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
+                    "record_count": 2,
+                    "total_record_count": 3,
+                    "@next": f"{ROOT}/employees?offset=2&max_rows=2",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "records": [{"EMPLOYEE_ID": 3}],
+                "record_count": 1,
+                "total_record_count": 3,
+            },
+        )
 
-    respx.get(f"{ROOT}/requests/I1").mock(
-        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1", "TITLE": "T"})
-    )
-    respx.get(f"{ROOT}/requests/I1/description").mock(
-        return_value=httpx.Response(200, json={"DESCRIPTION": "<p>hi</p>"})
-    )
-    respx.get(f"{ROOT}/requests/I1/comment").mock(
-        return_value=httpx.Response(200, json={"COMMENT": "note"})
-    )
-    respx.get(f"{ROOT}/actions").mock(
-        return_value=httpx.Response(200, json={"actions": []})
-    )
-    respx.get(f"{ROOT}/requests/I1/documents").mock(
-        return_value=httpx.Response(200, json={"documents": []})
-    )
-
+    respx.get(f"{ROOT}/employees").mock(side_effect=responder)
     with EasyvistaClient(config) as client:
-        ctx = client.get_ticket_context("I1")
-
-    assert isinstance(ctx, TicketContext)
-    assert ctx.ticket.rfc_number == "I1"
-    assert ctx.description == "<p>hi</p>"
-    assert ctx.comment == "note"
-    assert ctx.to_markdown().startswith("# Ticket")
-    assert "/api/" not in ctx.to_markdown()
+        ids = [e.employee_id for e in client.iter_employees(page_size=2)]
+    assert ids == [1, 2, 3]
 
 
 @respx.mock
-def test_get_ticket_context_degrades_on_missing_subresources(config):
-    respx.get(f"{ROOT}/requests/I1").mock(
-        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
-    )
-    respx.get(f"{ROOT}/requests/I1/description").mock(
-        return_value=httpx.Response(404, json={})
-    )
-    respx.get(f"{ROOT}/requests/I1/comment").mock(
-        return_value=httpx.Response(404, json={})
-    )
-    respx.get(f"{ROOT}/actions").mock(return_value=httpx.Response(403, json={}))
-    respx.get(f"{ROOT}/requests/I1/documents").mock(
-        return_value=httpx.Response(403, json={})
-    )
-
-    with EasyvistaClient(config) as client:
-        ctx = client.get_ticket_context("I1")
-
-    assert ctx.description is None
-    assert ctx.comment is None
-    assert ctx.actions == []
-    assert ctx.documents == []
-
-
-@respx.mock
-def test_count_tickets_returns_total_record_count(config):
-    route = respx.get(f"{ROOT}/requests").mock(
+def test_iter_employees_respects_max_records(config):
+    respx.get(f"{ROOT}/employees").mock(
         return_value=httpx.Response(
             200,
             json={
-                "records": [{"RFC_NUMBER": "I1"}],
-                "record_count": 1,
-                "total_record_count": 42,
+                "records": [{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
+                "record_count": 2,
+                "total_record_count": 5,
+                "@next": f"{ROOT}/employees?offset=2&max_rows=2",
             },
         )
     )
     with EasyvistaClient(config) as client:
-        total = client.count_tickets(search='STATUS_ID:"3"')
-    assert total == 42  # the full match count, not the page's record_count
-    assert route.call_count == 1
-    assert route.calls.last.request.url.params["max_rows"] == "1"
-    assert route.calls.last.request.url.params["search"] == 'STATUS_ID:"3"'
+        ids = [
+            e.employee_id
+            for e in client.iter_employees(page_size=2, max_records=1)
+        ]
+    assert ids == [1]
+
+
+@respx.mock
+def test_iter_departments_paginates(config):
+    respx.get(f"{ROOT}/departments").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "records": [{"DEPARTMENT_ID": 1}],
+                    "@next": f"{ROOT}/departments?offset=1",
+                },
+            ),
+            httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 2}]}),
+        ]
+    )
+    with EasyvistaClient(config) as client:
+        ids = [d.department_id for d in client.iter_departments(page_size=1)]
+    assert ids == [1, 2]
+
+
+# --- statistics --------------------------------------------------------------
 
 
 def _stats_responder(request):
@@ -402,6 +505,46 @@ def test_ticket_statistics_requests_field_projection(config):
 
 
 @respx.mock
+def test_ticket_statistics_materialises_the_page_before_aggregating(
+    config, monkeypatch
+):
+    """``aggregate_tickets`` is handed a real list, never a live stream.
+
+    The page is collected first because ``aggregate_tickets`` consumes a plain
+    iterable, and on one surface ``iter_tickets`` is an async generator it
+    cannot take at all. Asserting on ``stats.total`` alone would pass against a
+    streaming form too -- the number comes out the same either way -- so this
+    spies on what the function was actually handed.
+    """
+    handed: list[object] = []
+    real = client_module.aggregate_tickets
+
+    def spy(tickets, **kwargs):
+        handed.append(tickets)
+        return real(tickets, **kwargs)
+
+    monkeypatch.setattr(client_module, "aggregate_tickets", spy)
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [{"RFC_NUMBER": "I1"}],
+                "record_count": 1,
+                "total_record_count": 1,
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        stats = client.ticket_statistics(max_records=1)
+    assert stats.total == 1
+    assert isinstance(handed[0], list)
+    assert [t.rfc_number for t in handed[0]] == ["I1"]
+
+
+# --- memos, departments, employees -------------------------------------------
+
+
+@respx.mock
 def test_resolve_memo_relative_path_and_full_url(config):
     respx.get(f"{ROOT}/requests/I1/description").mock(
         return_value=httpx.Response(200, json={"DESCRIPTION": "<p>hi</p>", "HREF": "x"})
@@ -412,7 +555,8 @@ def test_resolve_memo_relative_path_and_full_url(config):
     with EasyvistaClient(config) as client:
         assert client.resolve_memo("requests/I1/description") == "<p>hi</p>"
         # Full URL (as returned in a record's link) resolves too; empty note -> "".
-        assert client.resolve_memo(f"{ROOT}/departments/60/comment_department") == ""
+        note = client.resolve_memo(f"{ROOT}/departments/60/comment_department")
+    assert note == ""
 
 
 @respx.mock
@@ -431,25 +575,6 @@ def test_get_department_and_comment(config):
     assert isinstance(dept, Department)
     assert dept.name == "ACME CORP"
     assert note == ""  # empty note distinguished from a 403
-
-
-@respx.mock
-def test_iter_departments_paginates(config):
-    respx.get(f"{ROOT}/departments").mock(
-        side_effect=[
-            httpx.Response(
-                200,
-                json={
-                    "records": [{"DEPARTMENT_ID": 1}],
-                    "@next": f"{ROOT}/departments?offset=1",
-                },
-            ),
-            httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 2}]}),
-        ]
-    )
-    with EasyvistaClient(config) as client:
-        ids = [d.department_id for d in client.iter_departments(page_size=1)]
-    assert ids == [1, 2]
 
 
 @respx.mock
@@ -593,6 +718,35 @@ def test_find_departments_empty_needle_returns_empty_not_everything(config):
 
 
 @respx.mock
+def test_find_departments_rejects_comma_injection(config):
+    """A ',' injection must not silently widen the result set.
+
+    ',' is a live EasyVista combinator (OR within one field), so
+    find_departments('A",DEPARTMENT_CODE:"B') would emit
+    DEPARTMENT_CODE:"A",DEPARTMENT_CODE:"B" and return BOTH departments.
+    Verified live: returns 2 instead of 1, with no error.
+    """
+    route = respx.get(f"{ROOT}/departments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"DEPARTMENT_ID": 1, "DEPARTMENT_CODE": "ALPHA"},
+                    {"DEPARTMENT_ID": 2, "DEPARTMENT_CODE": "BETA"},
+                ]
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        found = client.find_departments('ALPHA",DEPARTMENT_CODE:"BETA')
+    # The injected name matches no real department, so nothing should come back.
+    assert found == []
+    # The unsafe value must never reach the server as a filter.
+    for call in route.calls:
+        assert '"' not in (call.request.url.params.get("search") or "")
+
+
+@respx.mock
 def test_get_and_search_employees(config):
     respx.get(f"{ROOT}/employees/6087").mock(
         return_value=httpx.Response(
@@ -613,54 +767,18 @@ def test_get_and_search_employees(config):
 
 
 @respx.mock
-def test_iter_employees_follows_pages(config):
-    def responder(request):
-        offset = int(request.url.params.get("offset", "0"))
-        if offset == 0:
-            return httpx.Response(
-                200,
-                json={
-                    "records": [{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
-                    "record_count": 2,
-                    "total_record_count": 3,
-                    "@next": f"{ROOT}/employees?offset=2&max_rows=2",
-                },
-            )
-        return httpx.Response(
-            200,
-            json={
-                "records": [{"EMPLOYEE_ID": 3}],
-                "record_count": 1,
-                "total_record_count": 3,
-            },
-        )
-
-    respx.get(f"{ROOT}/employees").mock(side_effect=responder)
-    with EasyvistaClient(config) as client:
-        ids = [e.employee_id for e in client.iter_employees(page_size=2)]
-    assert ids == [1, 2, 3]
-
-
-@respx.mock
-def test_iter_employees_respects_max_records(config):
-    respx.get(f"{ROOT}/employees").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "records": [{"EMPLOYEE_ID": 1}, {"EMPLOYEE_ID": 2}],
-                "record_count": 2,
-                "total_record_count": 5,
-                "@next": f"{ROOT}/employees?offset=2&max_rows=2",
-            },
-        )
+def test_update_employee(config):
+    respx.put(f"{ROOT}/employees/9001").mock(
+        return_value=httpx.Response(200, json={"records": [{"EMPLOYEE_ID": 9001}]})
     )
     with EasyvistaClient(config) as client:
-        ids = [e.employee_id for e in client.iter_employees(page_size=2, max_records=1)]
-    assert ids == [1]
+        emp = client.update_employee(9001, EmployeeUpdate(phone_number="0102"))
+    assert emp.employee_id == 9001
 
 
 @respx.mock
 def test_create_department_and_employee(config):
+    # Envelope-wrapped POST bodies for create, a bare payload for the PUT update.
     dep_route = respx.post(f"{ROOT}/departments").mock(
         return_value=httpx.Response(200, json={"HREF": f"{ROOT}/departments/61"})
     )
@@ -684,6 +802,251 @@ def test_create_department_and_employee(config):
     assert json.loads(emp_route.calls.last.request.content) == {
         "employees": [{"last_name": "Doe"}]
     }
+
+
+# --- ticket context ----------------------------------------------------------
+
+
+@respx.mock
+def test_get_ticket_context_assembles_bundle(config):
+    from easyvista_python_client import TicketContext
+
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1", "TITLE": "T"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "<p>hi</p>"})
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(
+        return_value=httpx.Response(200, json={"COMMENT": "note"})
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": []})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"documents": []})
+    )
+
+    with EasyvistaClient(config) as client:
+        ctx = client.get_ticket_context("I1")
+
+    assert isinstance(ctx, TicketContext)
+    assert ctx.ticket.rfc_number == "I1"
+    assert ctx.description == "<p>hi</p>"
+    assert ctx.comment == "note"
+    assert ctx.to_markdown().startswith("# Ticket")
+    assert "/api/" not in ctx.to_markdown()
+
+
+@respx.mock
+def test_get_ticket_context_degrades_on_missing_subresources(config):
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(404, json={})
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(
+        return_value=httpx.Response(404, json={})
+    )
+    respx.get(f"{ROOT}/actions").mock(return_value=httpx.Response(403, json={}))
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(403, json={})
+    )
+
+    with EasyvistaClient(config) as client:
+        ctx = client.get_ticket_context("I1")
+
+    assert ctx.description is None
+    assert ctx.comment is None
+    assert ctx.actions == []
+    assert ctx.documents == []
+
+
+@respx.mock
+def test_ticket_context_resolves_action_bodies(config):
+    # The defect this fixes: list_actions never returns DESCRIPTION, so the
+    # rendered Markdown had empty action bodies. The context now fetches each
+    # action item-level and resolves its DESCRIPTION memo.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1", "TITLE": "T"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "the ticket body"})
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
+    )
+    respx.get(f"{ROOT}/actions/7").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 7,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/7/description"},
+            },
+        )
+    )
+    respx.get(f"{ROOT}/actions/7/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "<p>the note</p>"})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert context.actions[0].description == "<p>the note</p>"
+    assert "the note" in context.to_markdown()
+
+
+@respx.mock
+def test_ticket_context_can_skip_resolving_action_bodies(config):
+    # Opt-out: resolving costs two extra requests per action, and a ticket on
+    # this instance carries ~11 workflow-generated actions.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    item = respx.get(f"{ROOT}/actions/7").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 7})
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1", resolve_action_bodies=False)
+    assert item.call_count == 0
+    assert [a.action_id for a in context.actions] == [7]
+
+
+@respx.mock
+def test_ticket_context_tolerates_an_unreadable_action(config):
+    # A 403 on one action must not fail the whole bundle -- the same degradation
+    # rule the rest of get_ticket_context follows. The unreadable action stays
+    # in the bundle unresolved (a profile restriction must never silently
+    # shorten a ticket's history) and its readable neighbour still resolves.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200, json={"actions": [{"ACTION_ID": 7}, {"ACTION_ID": 8}]}
+        )
+    )
+    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(403))
+    respx.get(f"{ROOT}/actions/8").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 8,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/8/description"},
+            },
+        )
+    )
+    respx.get(f"{ROOT}/actions/8/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "the note"})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert [a.action_id for a in context.actions] == [7, 8]
+    assert context.actions[0].description is None
+    assert context.actions[1].description == "the note"
+
+
+@respx.mock
+def test_ticket_context_tolerates_an_action_that_has_vanished(config):
+    # The 404 arm of the same except clause -- an action listed but deleted
+    # before we fetch it item-level. Without this case the clause could be
+    # narrowed to EasyvistaAuthError alone and the suite would stay green.
+    # The vanished action keeps its slot: degrading must never shorten a
+    # ticket's history behind the caller's back.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200, json={"actions": [{"ACTION_ID": 7}, {"ACTION_ID": 8}]}
+        )
+    )
+    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions/8").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 8})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert [a.action_id for a in context.actions] == [7, 8]
+    assert context.actions[0].description is None
+
+
+@respx.mock
+def test_ticket_context_keeps_an_action_that_has_no_id(config):
+    # A listed action with neither ACTION_ID nor a numeric HREF tail has
+    # nothing to fetch item-level, so it passes through untouched. Without the
+    # short-circuit the client would request `actions/None` (here: an unmocked
+    # route) instead of degrading.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"actions": [{"HREF": f"{ROOT}/requests/I1"}, {"ACTION_ID": 8}]},
+        )
+    )
+    item = respx.get(f"{ROOT}/actions/8").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 8})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert [a.action_id for a in context.actions] == [None, 8]
+    assert item.call_count == 1
+
+
+@respx.mock
+def test_ticket_context_lists_documents_before_resolving_action_bodies(config):
+    """The documents list is fetched inside the bundle, not after it.
+
+    ``_resolve_action_bodies`` runs strictly after the bundle settles, so the
+    documents request is always on the wire before the first action-body one.
+    The pre-migration sequential client fetched documents last, after every
+    action was resolved: same requests, same results, different order on the
+    wire. That reordering is the accepted delta, and this pins it.
+    """
+    seen: list[str] = []
+
+    def record(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"records": [{"ACTION_ID": 7}]})
+
+    respx.route().mock(side_effect=record)
+    with EasyvistaClient(config) as client:
+        client.get_ticket_context("I1")
+
+    documents = next(i for i, p in enumerate(seen) if p.endswith("/documents"))
+    actions_item = next(i for i, p in enumerate(seen) if p.endswith("/actions/7"))
+    assert documents < actions_item
+
+
+# --- department context ------------------------------------------------------
 
 
 @respx.mock
@@ -883,242 +1246,3 @@ def test_get_department_context_rejects_blank_department_id(config):
         with pytest.raises(ValueError, match="department_id is required"):
             client.get_department_context(department_id)
     assert employees_route.call_count == 0
-
-
-@respx.mock
-def test_update_ticket_sends_title(config):
-    route = respx.put(f"{ROOT}/requests/I1").mock(
-        return_value=httpx.Response(
-            200, json={"RFC_NUMBER": "I1", "TITLE": "New title"}
-        )
-    )
-    with EasyvistaClient(config) as client:
-        updated = client.update_ticket("I1", RequestUpdate(title="New title"))
-    assert json.loads(route.calls.last.request.content) == {"title": "New title"}
-    assert updated.title == "New title"
-
-
-@respx.mock
-def test_find_departments_rejects_comma_injection(config):
-    """A ',' injection must not silently widen the result set.
-
-    ',' is a live EasyVista combinator (OR within one field), so
-    find_departments('A",DEPARTMENT_CODE:"B') would emit
-    DEPARTMENT_CODE:"A",DEPARTMENT_CODE:"B" and return BOTH departments.
-    Verified live: returns 2 instead of 1, with no error.
-    """
-    route = respx.get(f"{ROOT}/departments").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "records": [
-                    {"DEPARTMENT_ID": 1, "DEPARTMENT_CODE": "ALPHA"},
-                    {"DEPARTMENT_ID": 2, "DEPARTMENT_CODE": "BETA"},
-                ]
-            },
-        )
-    )
-    with EasyvistaClient(config) as client:
-        found = client.find_departments('ALPHA",DEPARTMENT_CODE:"BETA')
-    # The injected name matches no real department, so nothing should come back.
-    assert found == []
-    # The unsafe value must never reach the server as a filter.
-    for call in route.calls:
-        assert '"' not in (call.request.url.params.get("search") or "")
-
-
-@respx.mock
-def test_download_document_fetches_the_ddl_href(config):
-    route = respx.get("https://ev.test/dl/7").mock(
-        return_value=httpx.Response(200, content=b"\x89PNG\r\n\x1a\n binary")
-    )
-    doc = Document.model_validate(
-        {"DOCUMENT": "shot.png", "DDL_HREF": "https://ev.test/dl/7"}
-    )
-    with EasyvistaClient(config) as client:
-        content = client.download_document(doc)
-    assert content == b"\x89PNG\r\n\x1a\n binary"
-    assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
-
-
-@respx.mock
-def test_download_document_accepts_a_relative_path(config):
-    respx.get(f"{ROOT}/documents/7/content").mock(
-        return_value=httpx.Response(200, content=b"bytes")
-    )
-    with EasyvistaClient(config) as client:
-        assert client.download_document("documents/7/content") == b"bytes"
-
-
-def test_download_document_refuses_a_foreign_download_url(config):
-    doc = Document.model_validate({"DDL_HREF": "https://attacker.test/dl/7"})
-    with EasyvistaClient(config) as client:
-        with pytest.raises(EasyvistaError, match="outside the configured instance"):
-            client.download_document(doc)
-
-
-@respx.mock
-def test_get_action_fetches_the_item_level_record(config):
-    respx.get(f"{ROOT}/actions/52990").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "ACTION_ID": 52990,
-                "DESCRIPTION": {"HREF": f"{ROOT}/actions/52990/description"},
-            },
-        )
-    )
-    with EasyvistaClient(config) as client:
-        action = client.get_action(52990)
-    assert action.action_id == 52990
-    assert action.description == {"HREF": f"{ROOT}/actions/52990/description"}
-
-
-@respx.mock
-def test_ticket_context_resolves_action_bodies(config):
-    # The defect this fixes: list_actions never returns DESCRIPTION, so the
-    # rendered Markdown had empty action bodies. The context now fetches each
-    # action item-level and resolves its DESCRIPTION memo.
-    respx.get(f"{ROOT}/requests/I1").mock(
-        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1", "TITLE": "T"})
-    )
-    respx.get(f"{ROOT}/requests/I1/description").mock(
-        return_value=httpx.Response(200, json={"DESCRIPTION": "the ticket body"})
-    )
-    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
-    respx.get(f"{ROOT}/actions").mock(
-        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
-    )
-    respx.get(f"{ROOT}/actions/7").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "ACTION_ID": 7,
-                "DESCRIPTION": {"HREF": f"{ROOT}/actions/7/description"},
-            },
-        )
-    )
-    respx.get(f"{ROOT}/actions/7/description").mock(
-        return_value=httpx.Response(200, json={"DESCRIPTION": "<p>the note</p>"})
-    )
-    respx.get(f"{ROOT}/requests/I1/documents").mock(
-        return_value=httpx.Response(200, json={"Documents": []})
-    )
-    with EasyvistaClient(config) as client:
-        context = client.get_ticket_context("I1")
-    assert context.actions[0].description == "<p>the note</p>"
-    assert "the note" in context.to_markdown()
-
-
-@respx.mock
-def test_ticket_context_can_skip_resolving_action_bodies(config):
-    # Opt-out: resolving costs two extra requests per action, and a ticket on
-    # this instance carries ~11 workflow-generated actions.
-    respx.get(f"{ROOT}/requests/I1").mock(
-        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
-    )
-    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
-    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
-    item = respx.get(f"{ROOT}/actions/7").mock(
-        return_value=httpx.Response(200, json={"ACTION_ID": 7})
-    )
-    respx.get(f"{ROOT}/actions").mock(
-        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
-    )
-    respx.get(f"{ROOT}/requests/I1/documents").mock(
-        return_value=httpx.Response(200, json={"Documents": []})
-    )
-    with EasyvistaClient(config) as client:
-        client.get_ticket_context("I1", resolve_action_bodies=False)
-    assert item.call_count == 0
-
-
-@respx.mock
-def test_ticket_context_tolerates_an_unreadable_action(config):
-    # A 403 on one action must not fail the whole bundle -- same degradation
-    # rule the rest of get_ticket_context follows.
-    respx.get(f"{ROOT}/requests/I1").mock(
-        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
-    )
-    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
-    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
-    respx.get(f"{ROOT}/actions").mock(
-        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 7}]})
-    )
-    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(403))
-    respx.get(f"{ROOT}/requests/I1/documents").mock(
-        return_value=httpx.Response(200, json={"Documents": []})
-    )
-    with EasyvistaClient(config) as client:
-        context = client.get_ticket_context("I1")
-    assert context.actions[0].action_id == 7
-    assert context.actions[0].description is None
-
-
-@respx.mock
-def test_ticket_context_tolerates_an_action_that_has_vanished(config):
-    # The 404 arm of the same except clause -- an action listed but deleted
-    # before we fetch it item-level. Without this case the clause could be
-    # narrowed to EasyvistaAuthError alone and the suite would stay green.
-    # The vanished action keeps its slot: degrading must never shorten a
-    # ticket's history behind the caller's back.
-    respx.get(f"{ROOT}/requests/I1").mock(
-        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
-    )
-    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
-    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
-    respx.get(f"{ROOT}/actions").mock(
-        return_value=httpx.Response(
-            200, json={"actions": [{"ACTION_ID": 7}, {"ACTION_ID": 8}]}
-        )
-    )
-    respx.get(f"{ROOT}/actions/7").mock(return_value=httpx.Response(404))
-    respx.get(f"{ROOT}/actions/8").mock(
-        return_value=httpx.Response(200, json={"ACTION_ID": 8})
-    )
-    respx.get(f"{ROOT}/requests/I1/documents").mock(
-        return_value=httpx.Response(200, json={"Documents": []})
-    )
-    with EasyvistaClient(config) as client:
-        context = client.get_ticket_context("I1")
-    assert [a.action_id for a in context.actions] == [7, 8]
-    assert context.actions[0].description is None
-
-
-@respx.mock
-def test_ticket_context_lists_documents_before_resolving_action_bodies(config):
-    """The generated shape fetches documents in the fan-out, not after it.
-
-    Accepted delta: same requests, same results, different order on the wire.
-    """
-    seen: list[str] = []
-
-    def record(request):
-        seen.append(request.url.path)
-        return httpx.Response(200, json={"records": [{"ACTION_ID": 7}]})
-
-    respx.route().mock(side_effect=record)
-    with EasyvistaClient(config) as client:
-        client.get_ticket_context("I1")
-
-    documents = next(i for i, p in enumerate(seen) if p.endswith("/documents"))
-    actions_item = next(i for i, p in enumerate(seen) if p.endswith("/actions/7"))
-    assert documents < actions_item
-
-
-@respx.mock
-def test_ticket_statistics_materialises_the_page(config):
-    """Accepted delta: the tickets are collected into a list before aggregating."""
-    respx.route().mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "records": [{"RFC_NUMBER": "I1"}],
-                "record_count": "1",
-                "total_record_count": "1",
-            },
-        )
-    )
-    with EasyvistaClient(config) as client:
-        stats = client.ticket_statistics(max_records=1)
-    assert stats.total == 1
