@@ -174,7 +174,11 @@ class AsyncEasyvistaClient:
             offset += len(result.records)
 
     async def count_tickets(self, search: str | None = None) -> int:
-        """Async twin of :meth:`EasyvistaClient.count_tickets`."""
+        """Return the number of tickets matching ``search`` (one cheap call).
+
+        Uses ``max_rows=1`` and reads the envelope's ``total_record_count``, so
+        it does not fetch the matching records.
+        """
         result = await self.search_tickets(search=search, max_rows=1)
         return result.total_record_count
 
@@ -187,10 +191,18 @@ class AsyncEasyvistaClient:
         created_until: datetime | str | None = None,
         max_records: int | None = 100,
     ) -> TicketStatistics:
-        """Async twin of :meth:`EasyvistaClient.ticket_statistics`.
+        """Aggregate matching tickets into a total plus per-dimension breakdowns.
 
-        Collects the ``iter_tickets`` async generator into a list, then delegates to
-        the same pure :func:`aggregate_tickets`.
+        Fetches up to ``max_records`` tickets matching ``search`` (default cap 100;
+        pass ``None`` to aggregate all) and groups them by each name in
+        ``dimensions`` (default: all of ``DEFAULT_DIMENSIONS``). ``created_since`` /
+        ``created_until`` apply an inclusive client-side window on the ticket's
+        creation date. When the cap truncates, the result describes the fetched
+        subset — use :meth:`count_tickets` for the true total.
+
+        Delegates to the same pure :func:`aggregate_tickets` on both surfaces;
+        the async surface collects ``iter_tickets``'s async generator into a
+        list first, since :func:`aggregate_tickets` consumes a plain iterable.
         """
         dims = DEFAULT_DIMENSIONS if dimensions is None else dimensions
         has_date_filter = created_since is not None or created_until is not None
@@ -344,7 +356,14 @@ class AsyncEasyvistaClient:
         return parse(await self._transport.send(spec))
 
     async def download_document(self, document: Document | str) -> bytes:
-        """Async twin of :meth:`EasyvistaClient.download_document`."""
+        """Fetch an attachment's bytes.
+
+        ``document`` is a :class:`Document` from :meth:`list_documents` or a raw
+        href/path. Raises :class:`ValueError` when the record carries no
+        download URL, and :class:`EasyvistaError` when that URL points outside
+        the configured instance (see
+        :meth:`~easyvista_python_client._transport.BaseTransport.resolve_url`).
+        """
         return await self._transport.get_bytes(documents_res.download_href(document))
 
     # --- departments ----------------------------------------------------------
@@ -402,7 +421,11 @@ class AsyncEasyvistaClient:
             offset += len(result.records)
 
     async def get_department_comment(self, department_id: str | int) -> str | None:
-        """Async twin of :meth:`EasyvistaClient.get_department_comment`."""
+        """Return the department's note (a Memo).
+
+        ``""`` for an empty note; propagates transport errors so a 403/404 is
+        distinguishable from an empty note (uses the generic ``resolve_memo``).
+        """
         return await self.resolve_memo(
             f"departments/{department_id}/comment_department"
         )
@@ -410,7 +433,19 @@ class AsyncEasyvistaClient:
     async def find_departments(
         self, name: str, *, limit: int | None = None
     ) -> list[Department]:
-        """Async twin of :meth:`EasyvistaClient.find_departments`."""
+        """Resolve departments by a fuzzy, language-agnostic ``name``.
+
+        Fast path (neutral): an all-digit ``name`` matches ``DEPARTMENT_ID`` exactly,
+        otherwise ``DEPARTMENT_CODE`` exactly; a hit returns immediately. Fuzzy
+        fallback: scan every department and match ``name`` — normalized so
+        ``"Acme Corp" == "ACME-CORP" == "acmecorp"`` — as a substring of any
+        string field. ``limit`` caps the result count. Returns ``[]`` on no match.
+
+        A ``name`` that cannot be expressed in EasyVista's search grammar (see
+        :func:`~easyvista_python_client.is_safe_ev_value`) skips the server fast
+        path and falls back directly to the client-side scan, so this method
+        returns correct results rather than raising.
+        """
         # The server fast path is only an optimization, and a name that cannot be
         # expressed server-side would otherwise be interpolated raw — where a ','
         # silently widens the result set. Such names skip straight to the local
@@ -434,14 +469,14 @@ class AsyncEasyvistaClient:
         return matches
 
     async def create_department(self, department: PostDepartment) -> Department:
-        """Async twin of :meth:`EasyvistaClient.create_department` (provisional)."""
+        """Create a department (provisional; profile-gated — spec open item O-DIR-2)."""
         spec, parse = departments_res.build_create_department(department)
         return parse(await self._transport.send(spec))
 
     async def update_department(
         self, department_id: str | int, update: DepartmentUpdate
     ) -> Department:
-        """Async twin of :meth:`EasyvistaClient.update_department` (provisional)."""
+        """Update a department via PUT (provisional; profile-gated)."""
         spec, parse = departments_res.build_update_department(department_id, update)
         return parse(await self._transport.send(spec))
 
@@ -500,20 +535,25 @@ class AsyncEasyvistaClient:
             offset += len(result.records)
 
     async def create_employee(self, employee: PostEmployee) -> Employee:
-        """Async twin of :meth:`EasyvistaClient.create_employee` (provisional)."""
+        """Create an employee (provisional; profile-gated — spec open item O-DIR-2)."""
         spec, parse = employees_res.build_create_employee(employee)
         return parse(await self._transport.send(spec))
 
     async def update_employee(
         self, employee_id: str | int, update: EmployeeUpdate
     ) -> Employee:
-        """Async twin of :meth:`EasyvistaClient.update_employee` (provisional)."""
+        """Update an employee via PUT (provisional; profile-gated)."""
         spec, parse = employees_res.build_update_employee(employee_id, update)
         return parse(await self._transport.send(spec))
 
     # --- aggregated context --------------------------------------------------
     async def resolve_memo(self, href: str) -> str | None:
-        """Async twin of :meth:`EasyvistaClient.resolve_memo`."""
+        """Fetch a Memo/link field's text from its sub-resource.
+
+        ``href`` may be a full URL (as returned in a record's link) or a
+        resource-relative path. Propagates transport errors so callers can tell
+        an empty Memo (``""``) from a 403/404.
+        """
         path = href
         root = self.config.api_root
         if path.startswith(root):
@@ -525,20 +565,33 @@ class AsyncEasyvistaClient:
     async def get_ticket_context(
         self, rfc_number: str, *, resolve_action_bodies: bool = True
     ) -> TicketContext:
-        """Async twin of :meth:`EasyvistaClient.get_ticket_context`.
+        """Fetch a ticket plus its resolved narrative content as a bundle.
 
-        Same requests and the same degradation as the sync twin, but the
-        independent ones are issued **concurrently** rather than one after
-        another. The sync version costs ``4 + 2N`` serial round trips for a
-        ticket with ``N`` actions; this costs three waves. Measured against a
-        live instance on a 19-action ticket: 14.65s serial, 5.31s here.
+        Resolves the href-only ``description``/``comment`` sub-resources and
+        lists actions/documents. Missing sub-resources (404) or
+        profile-restricted lists (403) degrade to ``None`` / ``[]`` rather than
+        failing the whole call.
 
-        Peak in-flight is four sub-resource requests, then up to
-        ``_ACTION_FANOUT`` action-body resolutions. On a hard failure (5xx, a
-        transport error) the siblings already in flight run to completion before
-        the error propagates, so a failing call can issue more requests than the
-        sequential version did; see :func:`_settle` for why that is the right
-        trade.
+        ``resolve_action_bodies`` (default on) additionally fetches each action
+        item-level and resolves its note text, because ``list_actions`` does not
+        return it — without this the rendered Markdown has empty action bodies.
+        It costs two extra requests per action; pass ``False`` to skip it when
+        you only need the action list.
+
+        On the async surface the independent requests (the two memos plus the
+        actions and documents lists) are issued concurrently, in up to three
+        waves; on the sync surface they run one after another in source order,
+        costing ``4 + 2N`` serial round trips for a ticket with ``N`` actions.
+        Measured against a live instance on a 19-action ticket: 5.31s
+        concurrent, 14.65s serial.
+
+        Peak in-flight on the async surface is four sub-resource requests, then
+        up to ``_ACTION_FANOUT`` action-body resolutions; the sync surface
+        issues one request at a time throughout. On a hard failure (5xx, a
+        transport error) siblings already in flight on the async surface run to
+        completion before the error propagates, so a failing call there can
+        issue more requests than the sequential surface does; see
+        :func:`_settle` for why that is the right trade.
         """
         # Wave 0, deliberately outside the fan-out: this is the one call with no
         # fallback, so a wrong RFC number should cost one request, not five.
@@ -613,17 +666,22 @@ class AsyncEasyvistaClient:
         resolve_manager: bool = True,
         include_note: bool = True,
     ) -> DepartmentContext:
-        """Async twin of :meth:`EasyvistaClient.get_department_context`.
+        """Assemble a department plus its employees, manager, note, tickets and assets.
 
-        ``recent_tickets`` ordering is best-effort: it relies on the server
-        honoring ``RECENT_TICKETS_SORT`` (open item O-DIR-1) and silently
-        degrades to the API's default order otherwise.
+        Only :meth:`get_department` is required; every related part is wrapped so a
+        403/404 degrades it to ``[]`` / ``None`` / ``0`` (same pattern as
+        :meth:`get_ticket_context`). The flags trim the heavier related calls.
+        Tickets and assets filter on ``DEPARTMENT_ID:"<id>"``. ``recent_tickets``
+        ordering is best-effort: it relies on the server honoring
+        ``RECENT_TICKETS_SORT`` (open item O-DIR-1) and silently degrades to the
+        API's default order otherwise.
 
-        Same requests and the same degradation as the sync twin, but the seven
-        independent branches are issued **concurrently** rather than serially,
-        so this costs two waves instead of eight steps. The three paginating
-        branches still page serially *within* themselves -- offset pagination
-        cannot be parallelised -- but they now page alongside each other.
+        On the async surface the seven independent branches are issued
+        concurrently, costing two waves instead of eight serial steps; on the
+        sync surface they run one after another in source order. The three
+        paginating branches still page serially within themselves on either
+        surface -- offset pagination cannot be parallelised -- but on the async
+        surface they page alongside each other.
         """
         # Wave 0: the department itself, plus the search guard. Kept outside the
         # fan-out because the manager lookup needs `department.manager_id`, and
