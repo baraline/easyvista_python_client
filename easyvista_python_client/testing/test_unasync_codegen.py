@@ -13,6 +13,18 @@ is silently incorrect. No amount of diffing finds that.
 
 These tests find it, by scanning the source for identifiers the substitution
 map would rewrite and failing on any that are not an intentional rename.
+
+The keys scanned are ``unasync``'s complete *effective* substitution map:
+its own defaults (``unasync._ASYNC_TO_SYNC`` -- ``__aenter__``, ``aiter``/
+``anext`` dunders, ``asynccontextmanager``, the ``Async*`` ``abc``/
+``StopAsyncIteration`` names) unioned with this project's additions
+(``unasync_build.TOKEN_REPLACEMENTS``). Scanning only the latter would miss
+every collision with a default-map name, which is exactly the gap this file
+used to have. Left out on purpose is ``unasync``'s ``Async[A-Z]...`` ->
+``Sync...`` fallback convention (``unasync/__init__.py``): a bad fallback
+rewrite names something that does not exist in the sync tree, so it fails
+loudly as an ``ImportError`` at collection instead of silently succeeding,
+which is the failure category this file exists to catch.
 """
 
 from __future__ import annotations
@@ -23,7 +35,7 @@ import pathlib
 
 import pytest
 
-pytest.importorskip(
+unasync = pytest.importorskip(
     "unasync",
     reason="unasync is a dev-only dependency; codegen guards need it installed",
 )
@@ -38,9 +50,12 @@ _BUILD_SCRIPT = _REPO_ROOT / "unasync_build.py"
 #: bare-name allowlist would wave through any binding that happens to share
 #: the spelling, not just the one legitimate site. ``AsyncEasyvistaClient``
 #: is legitimately introduced only as a class name; ``__aenter__``,
-#: ``__aexit__`` and ``aclose`` only as a method name. Scoping the exemption
-#: to that construct means a local variable, parameter, or attribute
-#: elsewhere named e.g. ``aclose`` still trips the scan.
+#: ``__aexit__``, ``__aiter__``, ``__anext__`` and ``aclose`` only as a
+#: method name -- the last four are the async-protocol dunders, exempted as
+#: def names only, exactly as ``unasync`` itself only ever rewrites them in
+#: that role. Scoping the exemption to that construct means a local
+#: variable, parameter, or attribute elsewhere named e.g. ``aclose`` still
+#: trips the scan.
 #:
 #: ``AsyncClient`` and ``AsyncRetrying`` need no entry at all: they are
 #: third-party names this tree only ever *uses* -- as a bare import name
@@ -52,7 +67,7 @@ _BUILD_SCRIPT = _REPO_ROOT / "unasync_build.py"
 #: through undetected, exempted only because the *real* ``AsyncRetrying``
 #: import happens to share its spelling.
 _INTENTIONAL_CLASS_NAMES = {"AsyncEasyvistaClient"}
-_INTENTIONAL_DEF_NAMES = {"__aenter__", "__aexit__", "aclose"}
+_INTENTIONAL_DEF_NAMES = {"__aenter__", "__aexit__", "__aiter__", "__anext__", "aclose"}
 
 
 def _build_module():
@@ -165,7 +180,22 @@ def _rewritable_names(node: ast.AST, keys: set[str]) -> list[str]:
 
 def test_no_source_identifier_collides_with_a_substitution_key(build):
     """Every rewritable identifier we define is a deliberate, scoped rename."""
-    keys = set(build.TOKEN_REPLACEMENTS) - {"_async"}
+    # unasync's *effective* map for this build is its own defaults
+    # (unasync._ASYNC_TO_SYNC) plus this project's additions
+    # (TOKEN_REPLACEMENTS) -- Rule.__init__ copies the former and merges the
+    # latter on top. Scanning only TOKEN_REPLACEMENTS, as this used to, is
+    # blind to a collision with any of the nine default-map names.
+    #
+    # "_async" is deliberately NOT excluded here (it once was): the exclusion
+    # was dead weight, not a guard -- running the scan with it included
+    # reports zero offenders against this tree, because every legitimate
+    # "_async" token is a segment of an intra-tree import path, which is
+    # never an ast.Store/def/parameter/alias-with-`as`/etc. binding this scan
+    # treats as a new definition. A binding actually named "_async" (e.g. a
+    # local or parameter) is exactly the kind of collision this file exists
+    # to catch, and excluding it would recreate the same blind spot this fix
+    # closes for the other nine names.
+    keys = set(build.TOKEN_REPLACEMENTS) | set(unasync._ASYNC_TO_SYNC)
     offenders: list[str] = []
 
     for path in build._source_files():

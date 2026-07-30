@@ -93,7 +93,24 @@ dev = [
     "sphinx-rtd-theme>=2.0",
     "tomli>=2.0; python_version < '3.11'",
     "twine>=5.1",
-    "unasync>=0.6",
+    # Exact-pinned, not a range: unasync_build.py --check is a byte-equality
+    # gate between _async/ and the checked-in _sync/, and a different
+    # generator version can regenerate byte-different-but-equally-"correct"
+    # output (e.g. via a tokenize_rt whitespace-reconstruction change, which
+    # unasync 0.6.0 depends on with no version bound of its own -- see the
+    # matching pin below). That would fail --check on an untouched PR with a
+    # misleading "_sync/ is out of date" message and an unreviewed-diff
+    # "fix". A future contributor: widening this back to a range reopens
+    # exactly that failure mode; bump it deliberately, in its own commit,
+    # with --check re-run and any resulting _sync/ diff reviewed by hand.
+    "unasync==0.6.0",
+    # Pinned for the same reason as unasync above: it is the library that
+    # actually re-tokenizes and reconstructs source bytes on unasync's
+    # behalf (unasync.Rule._unasync_file calls tokenize_rt.src_to_tokens /
+    # tokens_to_src directly), and unasync 0.6.0's own dependency on it is
+    # unbounded. Pinning only unasync would still leave the byte-equality
+    # gate resting on an unpinned transitive dependency.
+    "tokenize-rt==6.2.0",
 ]
 
 docs = [

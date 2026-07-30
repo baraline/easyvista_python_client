@@ -61,18 +61,26 @@ jobs:
       # shaped mistakes happen, so prove the generated tree -- not just the
       # hand-written one -- actually ships. A package missing its sync client
       # would otherwise import fine and fail only when a caller instantiates
-      # EasyvistaClient.
+      # EasyvistaClient. Checked against both artifacts, not just the wheel:
+      # a downstream packager can build from the sdist, and the wheel-only
+      # version of this assertion would miss a _sync/ that never made it into
+      # the sdist in the first place.
       - run: |
           python - <<'PY'
-          import pathlib, zipfile
+          import pathlib, tarfile, zipfile
           wheel = next(pathlib.Path("dist").glob("*.whl"))
-          names = zipfile.ZipFile(wheel).namelist()
-          assert any(n.endswith("_sync/client.py") for n in names), (
-              "the generated sync client is missing from the wheel -- is _sync/ "
-              "gitignored or unbuilt?"
-          )
-          assert any(n.endswith("_async/client.py") for n in names), (
-              "the async client is missing from the wheel"
-          )
-          print("both client trees ship:", wheel.name)
+          sdist = next(pathlib.Path("dist").glob("*.tar.gz"))
+          artifacts = {
+              wheel.name: zipfile.ZipFile(wheel).namelist(),
+              sdist.name: tarfile.open(sdist).getnames(),
+          }
+          for name, names in artifacts.items():
+              assert any(n.endswith("_sync/client.py") for n in names), (
+                  f"the generated sync client is missing from {name} -- is "
+                  "_sync/ gitignored or unbuilt?"
+              )
+              assert any(n.endswith("_async/client.py") for n in names), (
+                  f"the async client is missing from {name}"
+              )
+          print("both client trees ship:", ", ".join(artifacts))
           PY
