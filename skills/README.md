@@ -14,6 +14,7 @@ installed wheel, which carries only the `easyvista_python_client` package.
 | Skill | Use when the agent needs to | Main public API |
 | --- | --- | --- |
 | `easyvista-client-setup` | Build and configure an authenticated client | `EasyvistaConfig`, `EasyvistaClient`, `AsyncEasyvistaClient` |
+| `easyvista-search-syntax` | Write or debug any `search=` expression | `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, `is_safe_ev_value` |
 
 ## Sync and async
 
