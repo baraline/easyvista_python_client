@@ -16,6 +16,7 @@ installed wheel, which carries only the `easyvista_python_client` package.
 | `easyvista-client-setup` | Build and configure an authenticated client | `EasyvistaConfig`, `EasyvistaClient`, `AsyncEasyvistaClient` |
 | `easyvista-search-syntax` | Write or debug any `search=` expression | `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, `is_safe_ev_value` |
 | `easyvista-ticket-workflow` | Create, read, search, update or close tickets | `PostRequest`, `Request`, `RequestUpdate`, `SearchResult` |
+| `easyvista-ticket-actions` | Read or write a ticket's action log | `PostAction`, `Action`, `resolve_memo` |
 
 ## Sync and async
 
