@@ -179,13 +179,15 @@ with EasyvistaClient.from_env() as client:
 - Mandatory fields are per-catalog. HTTP 590 with code 2013 means a missing
   mandatory field or an invalid catalog reference — it is **not** retried,
   because it is deterministic.
-- Some punctuation in title/description text has produced a 590 in ad hoc
-  content probing — the project's own content-fidelity probe script
-  deliberately keeps its create payload free of `--`, `[`, `]`, `/` and `.`
-  for exactly that reason. This is not covered by the tracked automated test
-  suite, so treat it as a lead rather than a confirmed rule: if a create
-  590s and every id above checks out, retrying with punctuation stripped
-  from the title/description is worth trying before concluding the catalog
-  is misconfigured.
+- The project's own content-fidelity probe script
+  (`scripts/validate_live_content_fidelity.py`) keeps its create payload to
+  plain ASCII, avoiding `--`, `[`, `]`, `/` and `.`, as a **precaution**
+  against a server-side content rejection (HTTP 590) — its own comment
+  reasons that the create call "is not wrapped, so a server-side content
+  rejection (HTTP 590) here would abort the whole run." No tracked test has
+  actually observed such a rejection, so treat this as a precaution worth
+  copying, not a documented rule: if a create 590s and every id above checks
+  out, stripping punctuation from the title/description before concluding
+  the catalog is misconfigured is a reasonable next thing to try.
 - The accepted **write** format for the date fields is unverified; both a
   string and an int probe returned 590. Do not attempt to set them.
