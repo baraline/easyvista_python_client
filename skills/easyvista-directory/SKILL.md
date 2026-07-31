@@ -18,7 +18,9 @@ Departments: `get_department`, `search_departments`, `iter_departments`,
 `find_departments`, `get_department_comment`, `create_department`,
 `update_department`. Employees: `get_employee`, `search_employees`,
 `iter_employees`, `create_employee`, `update_employee`. Reads are the
-well-trodden path; writes are provisional (see Gotchas).
+well-trodden path; writes are provisional (see Gotchas). Filtering any
+`search=` argument follows the grammar in `easyvista-search-syntax` — see that
+skill for the rules; they are not repeated here.
 
 ## Resolving a department by name
 
@@ -41,6 +43,13 @@ the right thing in one call:
 `[BRACKETED]` placeholders, falling back to `department_code` then
 `department_path`. For anything else, use `record.reference(name)` and
 `record.classify_fields()`.
+
+`reference(name)` resolves a reference attribute — nested object or bare id —
+to a `Reference` with `.id`, `.label` and `.display`. `classify_fields()`
+partitions the record into a `FieldClassification` with `.official`, `.custom`
+(the instance's `e_*` columns), `.available` and `.links` buckets. Both are
+available on every record type this client returns;
+`easyvista-ticket-workflow` covers them in full.
 
 ## Procedure
 
@@ -131,9 +140,10 @@ with EasyvistaClient.from_env() as client:
 - `find_departments`' fuzzy fallback scans **every** department. On a large
   instance it pages the whole table; pass `limit=` and prefer an exact code
   when you have one.
-- `DEPARTMENT_PATH` is returned but **not searchable** — filtering it
-  returns the whole table. Filter `DEPARTMENT_ID` or `DEPARTMENT_CODE`.
-  `DEPARTMENT_FR` *is* a top-level column and does filter.
+- `DEPARTMENT_PATH` is returned but **not searchable** — filter
+  `DEPARTMENT_ID` or `DEPARTMENT_CODE` instead. What EasyVista does with a
+  condition it will not honour, and which other directory columns are
+  affected, is `easyvista-search-syntax`'s subject.
 - `E_MAIL` is a **declared official** field on `Employee`, not a custom
   `e_*` column; `classify_fields()` knows this and will not misfile it.
 - Numeric directory columns come back as `""` when unset; the models

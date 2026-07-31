@@ -74,8 +74,8 @@ with EasyvistaClient.from_env() as client:
     print(action.href)
 ```
 
-With a note under it: both ids are placeholders — use the ones the discovery
-block printed.
+`action_type_id=1` and `group_id=1` above are placeholders — use the ids the
+discovery block printed for your instance.
 
 ```python
 from easyvista_python_client import EasyvistaClient, PostAction

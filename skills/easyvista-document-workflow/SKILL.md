@@ -33,6 +33,10 @@ client.
 observed shape), `name`, `document`, `document_id`, `download_href` (the API's
 `DDL_HREF`, the direct-download URL), `href`.
 
+`download_document` resolves the URL as `download_href or href` — it prefers
+`DDL_HREF` and **falls back to `HREF`**. Either field on its own is enough, so
+a record with an empty `download_href` may still be perfectly downloadable.
+
 ## Examples
 
 ```python
@@ -64,7 +68,9 @@ from easyvista_python_client import EasyvistaClient
 
 with EasyvistaClient.from_env() as client:
     for document in client.list_documents("YOUR_RFC_NUMBER"):
-        if document.download_href is None:
+        # Both fields must be empty for the download to be impossible:
+        # download_document falls back to href when DDL_HREF is unset.
+        if document.download_href is None and document.href is None:
             continue
         payload = client.download_document(document)
         Path(document.filename or "attachment.bin").write_bytes(payload)
@@ -73,8 +79,11 @@ with EasyvistaClient.from_env() as client:
 ## Gotchas
 
 - `content` must be `bytes`. Read files in binary mode.
-- `download_document` raises `ValueError` when the record carries no download
-  URL — check `download_href` first, or catch it.
+- `download_document` raises `ValueError` only when **neither** `DDL_HREF` nor
+  `HREF` is set. Guard on both (`download_href is None and href is None`), or
+  catch the `ValueError`. Skipping a record because `download_href` alone is
+  unset silently drops attachments the client would have fetched through
+  `href`.
 - A download URL pointing outside the configured instance raises
   `EasyvistaError`. Downloads follow redirects (signed URLs are common), and
   httpx strips the `Authorization` header on a cross-origin redirect, so a

@@ -68,7 +68,10 @@ deployment needs before you build a payload for it.
 5. To set body text you can read back afterwards, follow the create with
    `update_ticket(rfc, RequestUpdate(description=...))`.
 6. Read one ticket with `get_ticket(rfc)`; search a page with
-   `search_tickets(...)`; walk every match with `iter_tickets(...)`.
+   `search_tickets(...)`, which returns a `SearchResult` carrying `.records`,
+   `.record_count` (this page) and `.total_record_count` (every match on the
+   server); walk every match with `iter_tickets(...)`, which yields `Request`
+   objects directly and pages for you.
 7. Close with `close_ticket(rfc, status_guid=..., delete_actions=...,
    comment=...)`.
 

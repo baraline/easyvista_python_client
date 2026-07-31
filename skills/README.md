@@ -15,11 +15,11 @@ installed wheel, which carries only the `easyvista_python_client` package.
 | --- | --- | --- |
 | `easyvista-client-setup` | Build and configure an authenticated client | `EasyvistaConfig`, `EasyvistaClient`, `AsyncEasyvistaClient` |
 | `easyvista-search-syntax` | Write or debug any `search=` expression | `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, `is_safe_ev_value` |
-| `easyvista-ticket-workflow` | Create, read, search, update or close tickets | `PostRequest`, `Request`, `RequestUpdate`, `SearchResult` |
+| `easyvista-ticket-workflow` | Create, read, search, update or close tickets, or read instance-specific columns off any record | `PostRequest`, `Request`, `RequestUpdate`, `SearchResult`, `Reference`, `FieldClassification` |
 | `easyvista-ticket-actions` | Read or write a ticket's action log | `PostAction`, `Action`, `resolve_memo` |
 | `easyvista-document-workflow` | Attach, list or download ticket files | `Document`, `add_document`, `download_document` |
 | `easyvista-asset-workflow` | Create, fetch, search or iterate assets | `PostAsset`, `Asset` |
-| `easyvista-directory` | Resolve or provision departments and employees | `Department`, `Employee`, `Reference`, `FieldClassification` |
+| `easyvista-directory` | Resolve or provision departments and employees | `Department`, `Employee`, `find_departments` |
 | `easyvista-reporting-and-context` | Count and break down tickets, or build one context bundle | `TicketStatistics`, `aggregate_tickets`, `TicketContext`, `DepartmentContext` |
 
 ## Sync and async

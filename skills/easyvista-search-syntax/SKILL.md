@@ -15,9 +15,10 @@ metadata:
 
 Every `search_*` and `iter_*` method takes the same `search` string. The
 grammar is small and two of its three failure modes are silent, so this skill
-is a prerequisite for any filtering work. Everything below was characterized
-against a live instance by `integration_tests/test_live_search_syntax.py` —
-that file is the authority when something here looks wrong.
+is a prerequisite for any filtering work. Except where a claim below is
+explicitly flagged as unconfirmed, everything here was characterized against a
+live instance by `integration_tests/test_live_search_syntax.py` — that file is
+the authority when something here looks wrong.
 
 ## The grammar
 
@@ -36,8 +37,6 @@ that file is the authority when something here looks wrong.
 
 ## Three fates of a condition
 
-The core of this skill:
-
 1. **Honoured.**
 2. **Silently dropped** — no error. EasyVista removes any condition it cannot
    honour and applies what is left; with nothing left, it returns **every**
@@ -50,9 +49,9 @@ The core of this skill:
    value's *type* does not match the column, e.g. sending a status name to
    the integer `STATUS_ID`. This is the friendly failure.
 
-State the counter-intuitive case explicitly: a **broken quote does not**
-return the table. `DEPARTMENT_CODE:"X""` still parses as a field expression,
-the value swallows the junk, and it matches nothing (0 rows).
+The counter-intuitive case: a **broken quote does not** return the table.
+`DEPARTMENT_CODE:"X""` still parses as a field expression, the value swallows
+the junk, and it matches nothing (0 rows).
 
 ## What is searchable
 
