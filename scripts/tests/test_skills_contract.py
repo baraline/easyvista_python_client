@@ -14,6 +14,7 @@ credentials, no network, nothing instantiated that would open a socket.
 from __future__ import annotations
 
 import ast
+import inspect
 import re
 from pathlib import Path
 from typing import Any
@@ -155,3 +156,137 @@ def test_readme_lists_every_skill() -> None:
         f"not listed in README: {sorted(present - listed)}"
     )
     assert listed - present == set(), f"listed but missing: {sorted(listed - present)}"
+
+
+# Snippets address a client through a variable with one of these names, or
+# through the class itself for classmethods like ``from_env``.
+_CLIENT_NAMES = {"client", "EasyvistaClient", "AsyncEasyvistaClient"}
+
+# Write payloads a snippet may construct, checked against their real fields.
+_WRITE_MODELS = {
+    "PostRequest": ev.PostRequest,
+    "RequestUpdate": ev.RequestUpdate,
+    "PostAction": ev.PostAction,
+    "PostAsset": ev.PostAsset,
+    "PostDepartment": ev.PostDepartment,
+    "DepartmentUpdate": ev.DepartmentUpdate,
+    "PostEmployee": ev.PostEmployee,
+    "EmployeeUpdate": ev.EmployeeUpdate,
+}
+
+# Files that are gitignored: a skill naming one is a dead link for every
+# reader who only has the published repository.
+_UNPUBLISHED = (
+    "API_Info.md",
+    "easyvista-field-inventory.md",
+    "easyvista-test-profile-blocked-operations.md",
+    "docs/superpowers",
+    "secrets/",
+)
+
+_URL_LITERAL = re.compile(r"https?://[^\s\"']+")
+
+
+def _client_calls(tree: ast.AST) -> list[ast.Call]:
+    """Every ``client.<method>(...)`` call in a parsed snippet."""
+    calls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        target = node.func.value
+        if isinstance(target, ast.Name) and target.id in _CLIENT_NAMES:
+            calls.append(node)
+    return calls
+
+
+def _snippet_trees(skill: Path) -> list[ast.Module]:
+    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+    return [ast.parse(block) for block in _python_blocks(text)]
+
+
+@pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
+def test_imported_symbols_are_public(skill: Path) -> None:
+    exported = set(ev.__all__)
+    for tree in _snippet_trees(skill):
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            module = node.module or ""
+            assert not module.startswith("easyvista_python_client."), (
+                f"{skill.name} imports from the private module {module!r}; "
+                "skills use the package root only"
+            )
+            if module != "easyvista_python_client":
+                continue
+            for alias in node.names:
+                assert alias.name in exported, (
+                    f"{skill.name} imports {alias.name!r}, which is not in "
+                    "easyvista_python_client.__all__"
+                )
+
+
+@pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
+def test_client_methods_and_keywords_exist(skill: Path) -> None:
+    for tree in _snippet_trees(skill):
+        for call in _client_calls(tree):
+            method = call.func.attr
+            for cls in (ev.EasyvistaClient, ev.AsyncEasyvistaClient):
+                bound = getattr(cls, method, None)
+                assert bound is not None, (
+                    f"{skill.name} calls client.{method}(), which does not exist "
+                    f"on {cls.__name__}"
+                )
+            signature = inspect.signature(getattr(ev.EasyvistaClient, method))
+            accepted = set(signature.parameters) - {"self"}
+            for keyword in call.keywords:
+                if keyword.arg is None:  # **kwargs splat
+                    continue
+                assert keyword.arg in accepted, (
+                    f"{skill.name} passes {keyword.arg}= to client.{method}(), "
+                    f"which accepts {sorted(accepted)}"
+                )
+
+
+@pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
+def test_write_model_keywords_exist(skill: Path) -> None:
+    for tree in _snippet_trees(skill):
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            model = _WRITE_MODELS.get(node.func.id)
+            if model is None:
+                continue
+            fields = set(model.model_fields)
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    continue
+                assert keyword.arg in fields, (
+                    f"{skill.name} sets {keyword.arg}= on {node.func.id}, whose "
+                    f"fields are {sorted(fields)}"
+                )
+
+
+@pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
+def test_no_unpublished_or_private_references(skill: Path) -> None:
+    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+    for needle in _UNPUBLISHED:
+        assert needle not in text, (
+            f"{skill.name} references {needle!r}, which is gitignored and "
+            "invisible to anyone reading the published repository"
+        )
+    assert "easyvista_python_client._" not in text, (
+        f"{skill.name} names a private module; skills document the public surface"
+    )
+
+
+@pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
+def test_snippet_hosts_are_synthetic(skill: Path) -> None:
+    for tree in _snippet_trees(skill):
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            for url in _URL_LITERAL.findall(node.value):
+                assert "example.com" in url, (
+                    f"{skill.name} carries a non-synthetic URL {url!r}; every "
+                    "host in a skill must sit under example.com"
+                )
