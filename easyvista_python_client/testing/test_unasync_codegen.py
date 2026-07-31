@@ -245,3 +245,51 @@ def test_no_substitution_key_is_a_dotted_name(build):
     assert not dotted, (
         f"dotted substitution keys never match and fail silently: {dotted}"
     )
+
+
+def test_coverage_omits_the_generated_modules_and_nothing_else(build):
+    """The coverage ``omit`` list must name every generated ``_sync/`` module.
+
+    ``[tool.coverage.run] omit`` used to carry a blanket ``_sync/*``, which
+    also swallowed ``_sync/_concurrency.py`` -- hand-written, not generated,
+    and therefore the one module in the package measured by nothing. Listing
+    the generated modules one by one fixes that but introduces a list someone
+    must maintain, so this test maintains it for them: add a module to
+    ``_async/`` and the omit list is stale until it is updated here too.
+
+    The two directions fail differently and both are worth catching. A
+    generated module missing from ``omit`` is counted twice and dilutes the
+    ratio. A *hand-written* module wrongly listed in ``omit`` is measured by
+    nothing, which is the defect this test was written for.
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
+
+    config = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    omit = set(config["tool"]["coverage"]["run"]["omit"])
+
+    # Generated modules outside tests/ -- the tests/ ones are already covered
+    # by the broader "*/tests/*" entry, so they are not expected here.
+    generated = {
+        f"easyvista_python_client/_sync/{rel.as_posix()}"
+        for rel in (p.relative_to(build.ASYNC_DIR) for p in build._source_files())
+        if "tests" not in rel.parts
+    }
+    hand_written = {
+        f"easyvista_python_client/_sync/{rel}" for rel in build.HAND_WRITTEN
+    }
+
+    assert not generated - omit, (
+        "generated sync modules missing from [tool.coverage.run] omit -- they "
+        f"are being counted twice: {sorted(generated - omit)}"
+    )
+    assert not omit & hand_written, (
+        "hand-written sync twins listed in [tool.coverage.run] omit -- they "
+        f"are measured by nothing: {sorted(omit & hand_written)}"
+    )
+    assert "easyvista_python_client/_sync/*" not in omit, (
+        "the blanket _sync/* omit also hides the hand-written twins; list the "
+        "generated modules individually instead"
+    )

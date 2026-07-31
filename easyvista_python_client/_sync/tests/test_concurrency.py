@@ -115,8 +115,12 @@ def _branch_label(request):
     """Name the department-context branch a recorded request belongs to.
 
     Three of the seven branches hit ``/requests`` and are told apart by what
-    they ask for: ``count_tickets`` caps at one row, ``recent_tickets`` sorts,
-    and ``ticket_statistics`` projects a field list.
+    they ask for: ``count_tickets`` caps at one row and ``recent_tickets``
+    sorts. ``ticket_statistics`` is identified by elimination -- it is the
+    ``/requests`` call that is neither capped nor sorted. That is a fall-back,
+    not a positive test, so a future eighth branch hitting ``/requests``
+    without either marker would be mislabelled "statistics" here; the exact
+    list assert below is what would catch it.
     """
     path = request.url.path
     params = request.url.params

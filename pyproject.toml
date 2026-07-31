@@ -193,15 +193,30 @@ markers = [
 omit = [
     "*/tests/*",
     "*/testing/*",
-    # The async tree is the hand-written source; the sync tree is generated
-    # from it by a token transform that only strips async/await, so every
-    # statement exists in both and measuring both would count the same logic
-    # twice behind a doubled denominator. Coverage is reported on the source,
-    # so an uncovered line always names a file someone can go edit.
+    # The async tree is the hand-written source; the sync modules below are
+    # generated from it by a token transform that only strips async/await, so
+    # every statement exists in both and measuring both would count the same
+    # logic twice behind a doubled denominator. Coverage is reported on the
+    # source, so an uncovered line always names a file someone can go edit.
     # Correspondence between the trees is enforced elsewhere: unasync_build.py
     # --check proves they match, mypy strict checks both, and the
     # test_concurrency.py pair exercises what exists on only one side.
-    "easyvista_python_client/_sync/*",
+    #
+    # These are listed one by one rather than as `_sync/*` on purpose. That
+    # glob also swallowed _sync/_concurrency.py, which is NOT generated -- it
+    # is one of the two HAND_WRITTEN twins, the one module here that is
+    # genuinely different code rather than a transform of its async twin. It
+    # was the only hand-written module in the package measured by nothing.
+    # (_sync/tests/* is already covered by the */tests/* entry above.)
+    #
+    # An added generated module that nobody lists here is a safe failure: it
+    # dilutes the ratio slightly. It is not the ruff situation, where a missed
+    # entry would put the formatter back in a fight with the generator. Even
+    # so, test_unasync_codegen.py asserts this list matches what
+    # unasync_build._source_files() actually generates, so the drift is caught.
+    "easyvista_python_client/_sync/__init__.py",
+    "easyvista_python_client/_sync/_transport.py",
+    "easyvista_python_client/_sync/client.py",
 ]
 
 [tool.coverage.report]

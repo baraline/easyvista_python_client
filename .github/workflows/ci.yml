@@ -24,6 +24,12 @@ jobs:
       # reproduces it and the diff stays clean.
       # testing/test_unasync_codegen.py covers that case.
       - run: python unasync_build.py --check
+      # `ruff check .` above skips easyvista_python_client/_sync/ wholesale, so
+      # the two HAND_WRITTEN twins living in that tree are linted by nothing
+      # else in CI. --check makes this report rather than reformat: the plain
+      # form calls `ruff format`, which writes, and a job that silently fixes
+      # the tree it is auditing would pass on files it had just repaired.
+      - run: python scripts/lint_hand_written_sync.py --check
       # `integration_tests/` calls a real EasyVista instance using credentials the
       # user supplies; it can never run here. Excluded by marker rather than left
       # to skip on absent credentials, so a leaked secret could not make CI go
