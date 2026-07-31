@@ -106,7 +106,17 @@ jobs:
               "skills/ is missing from the sdist -- is '/skills' still in the "
               "[tool.hatch.build.targets.sdist] include allowlist?"
           )
+          # The index alone shipping would satisfy the assertion above while
+          # every skill it indexes was missing, so count them: one SKILL.md
+          # per skill directory on disk, no more and no fewer.
+          skills_dir = pathlib.Path("skills")
+          on_disk = sorted(p.name for p in skills_dir.iterdir() if p.is_dir())
+          shipped = sorted(n for n in sdist_names if n.endswith("/SKILL.md"))
+          assert len(shipped) == len(on_disk), (
+              f"the sdist carries {len(shipped)} SKILL.md files but skills/ has "
+              f"{len(on_disk)} directories on disk ({on_disk}); shipped: {shipped}"
+          )
           leaked = [n for n in wheel_names if "skills/" in n]
           assert not leaked, f"skills/ leaked into the wheel: {leaked}"
-          print("skills/ ships in the sdist only")
+          print(f"skills/ ships in the sdist only ({len(shipped)} SKILL.md)")
           PY

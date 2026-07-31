@@ -9,6 +9,30 @@ instance.
 
 Offline by construction: it imports the package and reads files. No
 credentials, no network, nothing instantiated that would open a socket.
+
+What this does *not* check, so that a green run is not over-trusted. It is a
+name-and-keyword gate over ``python`` code blocks, not a semantic one:
+
+- **No prose claim is verified.** The Configuration and Errors tables, every
+  Procedure step and every Gotcha in every skill are unchecked text. A
+  behavioural claim that goes stale fails nothing here.
+- **No attribute read on a returned object.** ``ticket.rfc_numbr`` passes;
+  only names imported from the package root and keywords passed to a client
+  method or a write model are looked up.
+- **No positional arguments and no arity.** Only ``keyword=`` arguments are
+  matched against the signature.
+- **No required fields and no value types.** ``PostAsset(catalog_id="1")``
+  passes even though the field is an ``int``, and a write model missing a
+  mandatory field passes too -- nothing is ever instantiated.
+- **No call through an unrecognized receiver.** A method call is only checked
+  when its receiver is named in ``_CLIENT_NAMES``; ``svc.get_ticket(...)``
+  is invisible.
+- **No code block tagged anything but ``python``/``py``.** A block with
+  another tag, or none, skips every snippet check silently.
+- **Nothing about the repository beyond existence** for the two link checks
+  below: a referenced path is checked to exist, not to still contain the
+  symbol or test the prose attributes to it, and a cross-referenced skill is
+  checked to exist, not to still cover the topic it is cited for.
 """
 
 from __future__ import annotations
@@ -30,7 +54,9 @@ SKILLS_DIR = REPO_ROOT / "skills"
 # truncated by the loader, which would hide the trigger conditions.
 _MAX_DESCRIPTION = 1024
 
-_PY_BLOCK = re.compile(r"^```python\n(.*?)^```", re.MULTILINE | re.DOTALL)
+# Both tags render identically, so a block tagged ``py`` would otherwise skip
+# every snippet check below without any visible difference in the document.
+_PY_BLOCK = re.compile(r"^```(?:python|py)\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
 
 def _skill_dirs() -> list[Path]:
@@ -182,9 +208,46 @@ _UNPUBLISHED = (
     "easyvista-test-profile-blocked-operations.md",
     "docs/superpowers",
     "secrets/",
+    # `.gitignore` ignores `scripts/probe_*.py` as a glob; the prefix is the
+    # substring every one of those paths shares. It deliberately does not
+    # match `scripts/validate_live_content_fidelity.py`, which is tracked and
+    # which easyvista-ticket-workflow cites.
+    "scripts/probe_",
+    # Local agent/tooling state, ignored by the same root .gitignore block.
+    ".claude/",
+    ".superpowers/",
 )
 
 _URL_LITERAL = re.compile(r"https?://[^\s\"']+")
+
+# Repo paths a skill cites, extracted deliberately narrowly: an inline-code
+# span whose *entire* content is a slash-bearing relative path ending in a
+# known source extension, optionally followed by a pytest node id
+# (``file.py::test_name``). Three restrictions do the work:
+#
+# * whole-span match -- prose that merely mentions a filename is never a
+#   candidate, only a span the author fenced as a path;
+# * a `/` is required -- so a bare `SKILL.md` or `README.md` written about
+#   documents in general is not read as a path relative to the repo root;
+# * the character class excludes `{`, `<` and spaces -- so API route
+#   templates (`{server}/api/{api_version}/{account}`, `requests/{rfc}/comment`,
+#   `/api/v1/<account>`) cannot be mistaken for files on disk.
+#
+# The cost is that a genuinely broken bare-filename reference goes unnoticed.
+# That is the intended trade: a false failure here would block a correct
+# commit over prose, which is worse than missing one class of dead link.
+_REPO_PATH = re.compile(
+    r"`([A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]*"
+    r"\.(?:py|md|toml|yml|yaml|cfg|ini|txt))(?:::[A-Za-z0-9_]+)*`"
+)
+
+# A cross-referenced sibling skill, always written as an inline-code span.
+_SKILL_REF = re.compile(r"`(easyvista-[a-z][a-z-]*)`")
+
+# The distribution name shares the `easyvista-` prefix with every skill name
+# but is not one, so a skill that backticks it must not be read as citing a
+# missing sibling.
+_NOT_A_SKILL_REF = frozenset({"easyvista-python-client"})
 
 # unasync generates the sync client from the async source and renames
 # ``aclose`` to ``close`` as part of that transform, so this one pair is
@@ -340,6 +403,46 @@ def test_no_unpublished_or_private_references(skill: Path) -> None:
     assert "easyvista_python_client._" not in text, (
         f"{skill.name} names a private module; skills document the public surface"
     )
+
+
+@pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
+def test_referenced_repo_paths_exist(skill: Path) -> None:
+    """Every repo path a skill cites still exists.
+
+    Skills point at live-suite modules and package sources as their evidence
+    ("that file is the authority when something here looks wrong"). A rename
+    turns those into dead links that nothing else in the repository notices,
+    because no import or tool reads a Markdown citation.
+    """
+    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+    for match in _REPO_PATH.finditer(text):
+        relative = match.group(1)
+        assert (REPO_ROOT / relative).exists(), (
+            f"{skill.name} cites {relative!r}, which does not exist under "
+            f"{REPO_ROOT}; a rename left the citation pointing at nothing"
+        )
+
+
+@pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
+def test_cross_referenced_skills_exist(skill: Path) -> None:
+    """Every sibling skill a skill routes the agent to is really there.
+
+    The skills form a graph: each one delegates the grammar, the client setup
+    or the context bundles to a named peer rather than repeating it. A rename
+    or a removal breaks the delegation silently -- the agent is sent to a
+    skill that cannot be loaded, and the fact lives nowhere else.
+    """
+    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+    present = {p.name for p in _skill_dirs()}
+    for match in _SKILL_REF.finditer(text):
+        name = match.group(1)
+        if name in _NOT_A_SKILL_REF:
+            continue
+        assert name in present, (
+            f"{skill.name} cross-references the skill {name!r}, which is not "
+            f"a directory under {SKILLS_DIR}; skills present are "
+            f"{sorted(present)}"
+        )
 
 
 @pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
