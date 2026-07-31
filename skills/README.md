@@ -18,6 +18,7 @@ installed wheel, which carries only the `easyvista_python_client` package.
 | `easyvista-ticket-workflow` | Create, read, search, update or close tickets | `PostRequest`, `Request`, `RequestUpdate`, `SearchResult` |
 | `easyvista-ticket-actions` | Read or write a ticket's action log | `PostAction`, `Action`, `resolve_memo` |
 | `easyvista-document-workflow` | Attach, list or download ticket files | `Document`, `add_document`, `download_document` |
+| `easyvista-asset-workflow` | Create, fetch, search or iterate assets | `PostAsset`, `Asset` |
 
 ## Sync and async
 
