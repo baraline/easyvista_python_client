@@ -22,14 +22,19 @@ are not repeated here.
 ## Discover the catalog id first
 
 `PostAsset.catalog_id` is **required** and identifies the equipment model on
-your instance. On `Request`, the ticket-workflow skill discovers ids like this
-with `reference()`, because fields such as `STATUS_ID` are declared and
-`reference()` can resolve a nested label around them. `Asset` is different:
-it declares only five fields (`asset_id`, `asset_tag`, `serial_number`,
-`status_id`, `href` — see Gotchas), none of them a catalog, so there is
-nothing for `reference()` to resolve a catalog id against out of the box.
-Print the raw fields on a real asset instead, and find whatever key this
-instance uses:
+your instance. `reference()` resolves declared and undeclared fields equally
+well: it works from `self.model_dump(by_alias=True)`, and `extra="allow"`
+folds every raw API key -- named in the model or not -- into that dump. This
+is exactly how `easyvista-ticket-workflow` resolves `reference("STATUS")` and
+`reference("CATALOG_REQUEST")` on `Request`, neither of which is a field
+`Request` declares either. The reason `reference()` does not help with the
+catalog here is different: no tracked source confirms an AM_ASSET payload
+carries any key resembling `CATALOG` or `CATALOG_ID` at all, declared or
+not -- there is simply nothing known yet to point it at. Print the raw
+fields (and the href-only `links` bucket, in case the catalog comes back as
+a bare `{"HREF": ...}` sub-resource rather than an inline value) on a real
+asset instead, and read the id straight off whichever key turns out to be
+the catalog on your instance:
 
 ```python
 from easyvista_python_client import EasyvistaClient
@@ -39,14 +44,17 @@ with EasyvistaClient.from_env() as client:
     for asset in page.records:
         print(asset.asset_id, asset.asset_tag, asset.serial_number)
         # Asset declares only five fields (see Gotchas); everything else the
-        # instance returns -- including whatever key carries the catalog --
-        # is preserved here and visible through classify_fields().
-        print("raw fields:", sorted(asset.classify_fields().official))
+        # instance returns -- including whatever field carries the catalog --
+        # is preserved here, keys and values both.
+        buckets = asset.classify_fields()
+        print("raw fields:", buckets.official)
+        print("href-only fields:", buckets.links)
 ```
 
-Look through `raw fields` for whatever this instance calls the catalog (or
-ask whoever administers catalogs on it) and read its id from there; that is
-the value `catalog_id` needs.
+Look through `raw fields` (and `href-only fields`, if the catalog turns out
+to be a link rather than an inline value) for whatever this instance calls
+the catalog, and read its id straight off the printed value; that is what
+`catalog_id` needs.
 
 ## Procedure
 
@@ -109,9 +117,11 @@ with EasyvistaClient.from_env() as client:
   (`integration_tests/test_live_search_syntax.py::test_tilde_on_asset_tag_is_exact_match`).
 - The `Asset` model declares only `asset_id`, `asset_tag`, `serial_number`,
   `status_id` and `href`; everything else the instance returns is preserved
-  by `extra="allow"` and reachable through `classify_fields()`. There is no
-  declared catalog field, which is why the discovery block above prints raw
-  keys instead of calling `reference()`.
+  by `extra="allow"` and reachable through `classify_fields()`. `reference()`
+  resolves declared and undeclared fields equally well (see the discovery
+  section above) -- the reason it is not used for the catalog is that no
+  tracked source confirms an AM_ASSET payload carries a `CATALOG`-shaped key
+  at all, not that the field is undeclared.
 - Asset field names beyond those five are pending live validation — that is
   the module's own framing, not just this skill's caution. Verify a column
   filters (baseline check, `easyvista-search-syntax`) before relying on it.
