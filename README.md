@@ -100,6 +100,17 @@ Set `EASYVISTA_URL` (or `EASYVISTA_SERVER`), `EASYVISTA_ACCOUNT`, and either
 `EASYVISTA_TOKEN` / `EASYVISTA_TOKEN_FILE` or `EASYVISTA_LOGIN` + `EASYVISTA_PASSWORD`,
 then call `EasyvistaConfig.from_env()`.
 
+## Agent skills
+
+`skills/` holds Agent Skills for driving this client from an AI agent — one per
+domain (client setup, search syntax, tickets, actions, documents, assets,
+directory, reporting and context). Each is a directory with a `SKILL.md`
+following the Agent Skills specification; see [skills/README.md](skills/README.md)
+for the index.
+
+They are source-tree material: present in the git repository and the source
+distribution, absent from the installed wheel.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and quality checks.

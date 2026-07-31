@@ -90,3 +90,23 @@ jobs:
               )
           print("both client trees ship:", ", ".join(artifacts))
           PY
+      # The sdist manifest is an allowlist, so `/skills` shipping is a single
+      # line someone can delete without noticing -- and the wheel boundary is
+      # the only thing keeping the skills OUT of an installed package. Assert
+      # both directions here, next to the assertions that already guard the
+      # test suite and the generated sync tree.
+      - run: |
+          python - <<'PY'
+          import pathlib, tarfile, zipfile
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          sdist = next(pathlib.Path("dist").glob("*.tar.gz"))
+          sdist_names = tarfile.open(sdist).getnames()
+          wheel_names = zipfile.ZipFile(wheel).namelist()
+          assert any(n.endswith("skills/README.md") for n in sdist_names), (
+              "skills/ is missing from the sdist -- is '/skills' still in the "
+              "[tool.hatch.build.targets.sdist] include allowlist?"
+          )
+          leaked = [n for n in wheel_names if "skills/" in n]
+          assert not leaked, f"skills/ leaked into the wheel: {leaked}"
+          print("skills/ ships in the sdist only")
+          PY

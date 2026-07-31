@@ -141,6 +141,7 @@ packages = ["easyvista_python_client"]
 include = [
     "/easyvista_python_client",
     "/docs",
+    "/skills",
     "/CHANGELOG.md",
     "/CONTRIBUTING.md",
     "/LICENSE",

@@ -81,3 +81,14 @@ Never commit an instance host, account id, or token — see the note below.
   example a model asserted only via the resource and client tests that build
   it) does not need its own near-empty test file. Check coverage before adding
   one.
+
+## Agent skills
+
+A change to the public API must update the affected `skills/*/SKILL.md`, and a
+release that bumps `__version__` must bump every skill's `metadata.version`.
+`scripts/tests/test_skills_contract.py` is the gate: it parses every `SKILL.md`
+and asserts each symbol, client method, keyword argument and model field the
+skill names still exists on the public surface. Run it with
+`pytest scripts/tests/test_skills_contract.py --no-cov` (see the coverage note
+above — a single-file run without `--no-cov` fails the 95% gate even when
+every test passes).
