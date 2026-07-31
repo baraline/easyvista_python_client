@@ -61,9 +61,9 @@ searchable, and naming one matches everything:
 
 - the denormalized `*_PATH` display columns (`SD_CATALOG_PATH`,
   `DEPARTMENT_PATH`) — filter the `*_ID` sibling instead;
-- the sub-keys of a nested reference object (`STATUS_EN` / `STATUS_FR` /
-  `STATUS_GUID` inside `STATUS`) — they are not top-level columns at all.
-  Filter `STATUS_ID`.
+- the sub-keys of a nested reference object (`STATUS_EN` / `STATUS_FR`
+  inside `STATUS`) — they are not top-level columns at all. Filter
+  `STATUS_ID`.
 
 The rule is about **nesting, not language**: `DEPARTMENT_FR` is a top-level
 column on `departments` and filters correctly. `CATALOG_GUID` is not an
@@ -162,8 +162,12 @@ with EasyvistaClient.from_env() as client:
   `escape_ev_value` does.
 - `ev_equals_filter` returns `None` for a blank value; passing that straight
   through as `search=` silently means "no filter".
-- An unknown `sort` token is ignored, not rejected — the server falls back to
-  its default order.
+- An unknown `sort` token is believed to be ignored, not rejected, falling
+  back to the default order — but unlike the rest of this skill, that is
+  **not** covered by the live suite. It is what
+  `easyvista_python_client/directory.py`'s `RECENT_TICKETS_SORT` relies on
+  (open item O-DIR-1); treat it as unconfirmed until checked against your
+  own instance.
 - `count_tickets` is the cheap way to check a filter: it sends `max_rows=1`
   and reads the envelope total without fetching records.
 - `search_*` returns one page; `iter_*` pages until the server reports no
