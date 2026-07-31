@@ -186,6 +186,27 @@ _UNPUBLISHED = (
 
 _URL_LITERAL = re.compile(r"https?://[^\s\"']+")
 
+# unasync generates the sync client from the async source and renames
+# ``aclose`` to ``close`` as part of that transform, so this one pair is
+# deliberately asymmetric: only ``EasyvistaClient`` has ``close``, only
+# ``AsyncEasyvistaClient`` has ``aclose``. Every other client method is
+# expected to exist on both classes; this is the sole exemption from that
+# rule, not a general relaxation of it.
+_ASYMMETRIC_METHODS = {"close", "aclose"}
+
+
+def _is_client_expr(node: ast.expr) -> bool:
+    """True for a bare client name or an attribute chain ending in one.
+
+    Covers both ``client.foo()`` and ``ctx.client.foo()`` -- the receiver
+    does not have to be a bare name for the call to be a real client call.
+    """
+    if isinstance(node, ast.Name):
+        return node.id in _CLIENT_NAMES
+    if isinstance(node, ast.Attribute):
+        return node.attr in _CLIENT_NAMES
+    return False
+
 
 def _client_calls(tree: ast.AST) -> list[ast.Call]:
     """Every ``client.<method>(...)`` call in a parsed snippet."""
@@ -193,10 +214,22 @@ def _client_calls(tree: ast.AST) -> list[ast.Call]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
-        target = node.func.value
-        if isinstance(target, ast.Name) and target.id in _CLIENT_NAMES:
+        if _is_client_expr(node.func.value):
             calls.append(node)
     return calls
+
+
+def _write_model_name(func: ast.expr) -> str | None:
+    """The write-model name a call targets, bare or module-qualified.
+
+    Covers both ``PostRequest(...)`` and ``ev.PostRequest(...)`` -- the
+    callee does not have to be a bare name for the call to be checkable.
+    """
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
 
 
 def _snippet_trees(skill: Path) -> list[ast.Module]:
@@ -209,6 +242,19 @@ def test_imported_symbols_are_public(skill: Path) -> None:
     exported = set(ev.__all__)
     for tree in _snippet_trees(skill):
         for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    qualifies = alias.name == "easyvista_python_client" or (
+                        alias.name.startswith("easyvista_python_client.")
+                    )
+                    as_clause = f" as {alias.asname}" if alias.asname else ""
+                    assert not qualifies, (
+                        f"{skill.name} does `import {alias.name}{as_clause}`; "
+                        "snippets must `from easyvista_python_client import "
+                        "...` instead, so every name they touch through the "
+                        "module is checkable against __all__"
+                    )
+                continue
             if not isinstance(node, ast.ImportFrom):
                 continue
             module = node.module or ""
@@ -227,33 +273,50 @@ def test_imported_symbols_are_public(skill: Path) -> None:
 
 @pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
 def test_client_methods_and_keywords_exist(skill: Path) -> None:
-    for tree in _snippet_trees(skill):
-        for call in _client_calls(tree):
-            method = call.func.attr
+    all_calls = [call for tree in _snippet_trees(skill) for call in _client_calls(tree)]
+    assert all_calls, f"{skill.name} has no client.<method>() call in any example"
+    for call in all_calls:
+        method = call.func.attr
+        if method in _ASYMMETRIC_METHODS:
+            owners = [
+                cls
+                for cls in (ev.EasyvistaClient, ev.AsyncEasyvistaClient)
+                if getattr(cls, method, None) is not None
+            ]
+            assert owners, (
+                f"{skill.name} calls client.{method}(), which does not exist "
+                "on EasyvistaClient or AsyncEasyvistaClient"
+            )
+            signature_owner = owners[0]
+        else:
             for cls in (ev.EasyvistaClient, ev.AsyncEasyvistaClient):
                 bound = getattr(cls, method, None)
                 assert bound is not None, (
                     f"{skill.name} calls client.{method}(), which does not exist "
                     f"on {cls.__name__}"
                 )
-            signature = inspect.signature(getattr(ev.EasyvistaClient, method))
-            accepted = set(signature.parameters) - {"self"}
-            for keyword in call.keywords:
-                if keyword.arg is None:  # **kwargs splat
-                    continue
-                assert keyword.arg in accepted, (
-                    f"{skill.name} passes {keyword.arg}= to client.{method}(), "
-                    f"which accepts {sorted(accepted)}"
-                )
+            signature_owner = ev.EasyvistaClient
+        signature = inspect.signature(getattr(signature_owner, method))
+        accepted = set(signature.parameters) - {"self"}
+        for keyword in call.keywords:
+            if keyword.arg is None:  # **kwargs splat
+                continue
+            assert keyword.arg in accepted, (
+                f"{skill.name} passes {keyword.arg}= to client.{method}(), "
+                f"which accepts {sorted(accepted)}"
+            )
 
 
 @pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
 def test_write_model_keywords_exist(skill: Path) -> None:
     for tree in _snippet_trees(skill):
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            if not isinstance(node, ast.Call):
                 continue
-            model = _WRITE_MODELS.get(node.func.id)
+            name = _write_model_name(node.func)
+            if name is None:
+                continue
+            model = _WRITE_MODELS.get(name)
             if model is None:
                 continue
             fields = set(model.model_fields)
@@ -261,7 +324,7 @@ def test_write_model_keywords_exist(skill: Path) -> None:
                 if keyword.arg is None:
                     continue
                 assert keyword.arg in fields, (
-                    f"{skill.name} sets {keyword.arg}= on {node.func.id}, whose "
+                    f"{skill.name} sets {keyword.arg}= on {name}, whose "
                     f"fields are {sorted(fields)}"
                 )
 
