@@ -7,8 +7,10 @@ note text is ever compared or printed -- ``any(...)`` over identity fields
 yields a boolean, and every message names a field, not a value.
 
 Reads the shared session ticket for every party assertion and mutates nothing.
-The module still needs write credentials, because the shared ticket is created
-by this suite -- it skips entirely without them.
+Five of the six tests depend on the shared ticket (and thus need write
+credentials); one test (``test_consigne_is_readable_and_reduces_to_text``) needs
+only read access, depending on ``consigne_department_id`` which requires no
+``live_write_config``.
 """
 
 from __future__ import annotations
