@@ -105,13 +105,29 @@ class _StubResult:
 
 
 class _StubSearchClient:
+    """Also asserts the reconciliation search's ``fields=`` projection.
+
+    ``_adopt_by_title`` must always request ``["RFC_NUMBER", "TITLE"]``: the
+    default list projection returns TITLE present but EMPTY (measured live), so
+    without this projection the byte-equal comparison against the queried title
+    can never match and every reconciliation is inconclusive forever. Asserting
+    it here, rather than merely accepting whatever is passed, turns a future
+    accidental removal of the projection into an immediate offline failure on
+    every adoption test instead of a silent revert to permanently-dead adoption
+    that only a live run would ever surface.
+    """
+
     def __init__(self, result: object = None, error: Exception | None = None) -> None:
         self._result = result
         self._error = error
         self.calls = 0
 
-    def search_tickets(self, *, search=None, max_rows=None):
+    def search_tickets(self, *, search=None, max_rows=None, fields=None):
         self.calls += 1
+        assert fields == ["RFC_NUMBER", "TITLE"], (
+            "the reconciliation search must always project RFC_NUMBER and TITLE "
+            f"explicitly (got fields={fields!r}) -- see the class docstring"
+        )
         if self._error is not None:
             raise self._error
         return self._result

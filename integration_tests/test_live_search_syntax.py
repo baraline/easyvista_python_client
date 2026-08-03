@@ -791,3 +791,67 @@ def test_title_is_an_exactly_searchable_column(
     assert matched_rfc == rich_ticket.rfc, (
         "the TITLE search matched a ticket other than the one it names"
     )
+
+
+def test_title_search_requires_the_fields_projection_to_return_a_value(
+    live_client: EasyvistaClient, rich_ticket
+):
+    """The projection ``_adopt_by_title`` sends is what makes it satisfiable.
+
+    ``test_title_is_an_exactly_searchable_column`` above proves the filter is
+    honoured, but it never reads the returned row's TITLE back -- and that gap
+    hid a real defect: the default list projection returns the TITLE key present
+    but EMPTY (measured live: 400 tickets scanned via a plain ``search_tickets``,
+    zero with a populated title). ``_adopt_by_title``'s ``row.title == title``
+    byte-equal check was therefore unsatisfiable against this instance until it
+    started requesting ``fields=["RFC_NUMBER", "TITLE"]`` explicitly -- every
+    inconclusive create fell through to the "not the intended one" branch and
+    stopped loudly rather than adopting. Fails safe, but the lost-response-after-
+    commit orphan path this whole helper exists to close did not actually work.
+
+    This test sends the exact same projection ``_adopt_by_title`` does and checks
+    what that test above did not: that the returned row's TITLE is populated and
+    byte-equal to the queried value, not merely that the row count is right.
+
+    Placed after ``test_title_is_an_exactly_searchable_column`` (itself already
+    last, deliberately, per that test's own docstring): both instantiate
+    ``rich_ticket``, which is session-scoped, so this reuses the same ticket
+    rather than creating a second one, and both sort after every
+    baseline-equality assertion in this module for the same reason that one does.
+    """
+    search = ev_equals_filter("TITLE", rich_ticket.title)
+    assert search is not None, "the fixture title did not yield a filter"
+    result = live_client.search_tickets(
+        search=search, max_rows=2, fields=["RFC_NUMBER", "TITLE"]
+    )
+
+    # Bound first, and compare counts rather than reprs (P2).
+    returned = len(result.records)
+    honoured = result.total_record_count == returned
+    assert honoured, (
+        f"the TITLE condition was dropped under the fields= projection: "
+        f"EasyVista reports {result.total_record_count} total against {returned} "
+        f"returned rows, which is the whole table"
+    )
+    assert result.total_record_count == 1, (
+        f"expected exactly the 1 ticket authored with this nonce title, got "
+        f"{result.total_record_count}"
+    )
+
+    row = result.records[0]
+    assert row.rfc_number == rich_ticket.rfc, (
+        "the TITLE search matched a ticket other than the one it names"
+    )
+
+    # The assertion the module-level test above never made: the projected TITLE
+    # itself must come back populated, and byte-equal to what this suite wrote --
+    # not merely present-but-empty, which is exactly the shape that made
+    # _adopt_by_title unsatisfiable before this projection was added.
+    returned_title = row.title
+    assert returned_title, (
+        "the fields= projection returned no usable TITLE -- the projection this "
+        "test and _adopt_by_title both request has stopped working"
+    )
+    assert returned_title == rich_ticket.title, (
+        "the projected TITLE does not byte-equal the title this suite authored"
+    )

@@ -362,7 +362,16 @@ def _adopt_by_title(search_client: EasyvistaClient, title: str) -> str | None:
     if search is None:
         raise _InconclusiveCreate("the intended title is blank")
     try:
-        result = search_client.search_tickets(search=search, max_rows=2)
+        # fields= is REQUIRED, not optional: the default list projection returns
+        # the TITLE key present but EMPTY (measured live -- 400 tickets scanned via
+        # a plain search_tickets, zero with a populated title), so without this
+        # projection `row.title == title` below can never be true and every
+        # reconciliation would be inconclusive. See
+        # test_title_search_requires_the_fields_projection_to_return_a_value in
+        # test_live_search_syntax.py for the live regression guard.
+        result = search_client.search_tickets(
+            search=search, max_rows=2, fields=["RFC_NUMBER", "TITLE"]
+        )
     except Exception as exc:
         # Broad on purpose: an unmodelled failure (e.g. a response body that fails
         # the client's own pydantic validation) is exactly as unreconcilable as a
