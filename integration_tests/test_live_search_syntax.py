@@ -66,6 +66,7 @@ from easyvista_python_client import (
     EasyvistaClient,
     EasyvistaError,
     EasyvistaValidationError,
+    ev_equals_filter,
 )
 
 pytestmark = pytest.mark.integration
@@ -749,3 +750,44 @@ def test_type_mismatch_on_an_int_column_raises_rather_than_being_ignored(
     # *type* was what got rejected. `== 0` also rules out a silent ignore, since
     # requests_baseline is >= 2 by that fixture's own guard.
     assert _count_tickets(live_client, 'STATUS_ID:"999999999"') == 0
+
+
+# --- does TITLE filter at all? this gates create-reconciliation ------------
+
+
+def test_title_is_an_exactly_searchable_column(
+    live_client: EasyvistaClient, rich_ticket
+):
+    """TITLE filters exactly, which is what makes create reconciliation possible.
+
+    Placed last in this module deliberately: it instantiates ``rich_ticket``,
+    which creates a ticket, and four assertions above compare live counts for
+    EQUALITY against ``requests_baseline``.
+
+    The check is an exact count against a title this suite authored from a uuid4
+    nonce, never ``> 0``. On this API a condition that cannot be honoured is
+    silently dropped and the whole table comes back, so ``> 0`` would pass for the
+    wrong reason -- the defect shape this module exists to document.
+    """
+    search = ev_equals_filter("TITLE", rich_ticket.title)
+    assert search is not None, "the fixture title did not yield a filter"
+    result = live_client.search_tickets(search=search, max_rows=2)
+
+    # Bound first, and compare counts rather than reprs: asserting on the records
+    # list would render every live Request in it (P2).
+    returned = len(result.records)
+    honoured = result.total_record_count == returned
+    assert honoured, (
+        f"the TITLE condition was dropped: EasyVista reports "
+        f"{result.total_record_count} total against {returned} returned rows, "
+        f"which is the whole table -- TITLE is not a searchable column, so "
+        f"create reconciliation cannot use it"
+    )
+    assert result.total_record_count == 1, (
+        f"expected exactly the 1 ticket authored with this nonce title, got "
+        f"{result.total_record_count}"
+    )
+    matched_rfc = result.records[0].rfc_number
+    assert matched_rfc == rich_ticket.rfc, (
+        "the TITLE search matched a ticket other than the one it names"
+    )
