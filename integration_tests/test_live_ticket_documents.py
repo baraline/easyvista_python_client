@@ -25,16 +25,24 @@ def _nonce() -> str:
 
 
 def _upload(
-    live_client: EasyvistaClient, rfc: str, suffix: str, payload: bytes
+    live_client: EasyvistaClient,
+    live_write_client: EasyvistaClient,
+    rfc: str,
+    suffix: str,
+    payload: bytes,
 ) -> Document:
     """Attach ``payload`` under a synthetic filename; return the listed record.
 
     Goes back through ``list_documents`` rather than trusting the upload
     response, because the two shapes differ: the POST returns an HREF-only body
     on some instances.
+
+    The upload uses the ZERO-retry client. This function verifies by MEMBERSHIP,
+    not by delta, so a duplicated upload would pass here silently -- which is
+    exactly why the POST must never be retried.
     """
     filename = f"evcli-{_nonce()}{suffix}"
-    live_client.add_document(rfc, filename=filename, content=payload)
+    live_write_client.add_document(rfc, filename=filename, content=payload)
     documents = live_client.list_documents(rfc)
     match = next((d for d in documents if d.filename == filename), None)
     assert match is not None, (
@@ -44,17 +52,21 @@ def _upload(
 
 
 def test_upload_appears_in_the_document_list(
-    live_client: EasyvistaClient, ticket_factory
+    live_client: EasyvistaClient, live_write_client: EasyvistaClient, ticket_factory
 ):
     rfc = ticket_factory()
-    document = _upload(live_client, rfc, ".txt", b"capability-suite probe payload\n")
+    document = _upload(
+        live_client, live_write_client, rfc, ".txt", b"capability-suite probe payload\n"
+    )
     assert_populated(document.filename, "document filename")
 
 
-def test_download_round_trips_text_bytes(live_client: EasyvistaClient, ticket_factory):
+def test_download_round_trips_text_bytes(
+    live_client: EasyvistaClient, live_write_client: EasyvistaClient, ticket_factory
+):
     rfc = ticket_factory()
     payload = f"EVCLI{_nonce()} capability-suite payload\n".encode()
-    document = _upload(live_client, rfc, ".txt", payload)
+    document = _upload(live_client, live_write_client, rfc, ".txt", payload)
     # Bound first: an inline `assert live_client.download_document(document)
     # == payload` makes the rewriter print the call's arguments, and `document`
     # is a server-returned extra="allow" record, not a value this module
@@ -64,35 +76,37 @@ def test_download_round_trips_text_bytes(live_client: EasyvistaClient, ticket_fa
 
 
 def test_download_round_trips_non_utf8_bytes(
-    live_client: EasyvistaClient, ticket_factory
+    live_client: EasyvistaClient, live_write_client: EasyvistaClient, ticket_factory
 ):
     # Documents go up as base64 inside a JSON body. Every byte value plus a few
     # that are invalid UTF-8 on their own -- if anything in that path decodes
     # and re-encodes as text, this is what catches it.
     rfc = ticket_factory()
     payload = bytes(range(256)) + b"\xff\xfe\x00\x01"
-    document = _upload(live_client, rfc, ".bin", payload)
+    document = _upload(live_client, live_write_client, rfc, ".bin", payload)
     round_trips = live_client.download_document(document) == payload
     assert round_trips, "downloaded bytes differ from the uploaded binary payload"
 
 
 def test_document_identifier_fields_are_present(
-    live_client: EasyvistaClient, ticket_factory
+    live_client: EasyvistaClient, live_write_client: EasyvistaClient, ticket_factory
 ):
     # DOCUMENT_ID and DDL_HREF are what Phase 0 (U2) settled; each is gated
     # separately so an instance exposing one shape and not the other skips the
     # half it lacks rather than failing (P1).
     rfc = ticket_factory()
-    document = _upload(live_client, rfc, ".txt", b"identifier probe\n")
+    document = _upload(
+        live_client, live_write_client, rfc, ".txt", b"identifier probe\n"
+    )
     require_field(document, "DOCUMENT_ID")
     require_field(document, "DDL_HREF")
 
 
 def test_documents_reach_the_ticket_context(
-    live_client: EasyvistaClient, ticket_factory
+    live_client: EasyvistaClient, live_write_client: EasyvistaClient, ticket_factory
 ):
     rfc = ticket_factory()
-    document = _upload(live_client, rfc, ".txt", b"context probe\n")
+    document = _upload(live_client, live_write_client, rfc, ".txt", b"context probe\n")
     context = live_client.get_ticket_context(rfc)
     assert any(d.filename == document.filename for d in context.documents), (
         "the uploaded attachment is missing from get_ticket_context().documents"

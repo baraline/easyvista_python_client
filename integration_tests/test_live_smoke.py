@@ -89,7 +89,7 @@ def test_classify_fields_live_ticket(
 
 
 def test_missing_mandatory_field_raises_validation_error(
-    live_client: EasyvistaClient, sample_catalog_code: str
+    live_write_client: EasyvistaClient, sample_catalog_code: str
 ) -> None:
     # Creating with a catalog but no title is rejected by EasyVista (no ticket
     # created), so this stays read-only-safe by construction. The catalog code
@@ -97,7 +97,7 @@ def test_missing_mandatory_field_raises_validation_error(
     # defect in the payload, or the 590 can't be attributed to it -- an unknown
     # catalog would raise 590 too, and the assertion would prove nothing.
     with pytest.raises(EasyvistaValidationError) as ei:
-        live_client.create_ticket(PostRequest(catalog_code=sample_catalog_code))
+        live_write_client.create_ticket(PostRequest(catalog_code=sample_catalog_code))
     # Bound first: asserting on `ei.value.status_code` makes the rewriter render
     # the ExceptionInfo, and that prints the exception's own message -- server
     # prose this suite did not author, on a payload naming a real catalog (P2).

@@ -44,6 +44,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -146,6 +147,12 @@ _SECRETS_DIR = Path(__file__).resolve().parents[1] / "secrets"
 # Bounded so the Consigne fixture cannot walk a large instance's whole directory.
 CONSIGNE_SCAN_LIMIT = 50
 
+# A transient network fault must not read as a defect, so reads, PUTs and closes
+# get three attempts with the transport's exponential backoff (0.5s, 1s, capped
+# at 10s). Non-idempotent POSTs deliberately do NOT: see live_write_client.
+LIVE_TIMEOUT = 30.0
+LIVE_MAX_RETRIES = 2
+
 
 def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
     for name in env_names:
@@ -188,17 +195,46 @@ def live_config() -> EasyvistaConfig:
                 "(expected .../api/{version}/{account})"
             )
         return EasyvistaConfig(
-            server=server, account=account, token=token, api_version=version
+            server=server,
+            account=account,
+            token=token,
+            api_version=version,
+            timeout=LIVE_TIMEOUT,
+            max_retries=LIVE_MAX_RETRIES,
         )
     # url is a bare host; the account comes from the user value.
     if not user:
         pytest.skip("URL has no /api/ segment, so a user/account value is required")
-    return EasyvistaConfig(server=root, account=user, token=token)
+    return EasyvistaConfig(
+        server=root,
+        account=user,
+        token=token,
+        timeout=LIVE_TIMEOUT,
+        max_retries=LIVE_MAX_RETRIES,
+    )
 
 
 @pytest.fixture(scope="session")
 def live_client(live_config: EasyvistaConfig) -> Iterator[EasyvistaClient]:
     with EasyvistaClient(live_config) as client:
+        yield client
+
+
+@pytest.fixture(scope="session")
+def live_write_client(live_config: EasyvistaConfig) -> Iterator[EasyvistaClient]:
+    """A ZERO-retry client, for the POSTs that duplicate when retried.
+
+    ``retry_if_exception_type`` in the transport is method-blind, so it cannot
+    tell a safe GET from a ``create_action``. Rather than weaken the retry that
+    makes reads trustworthy, the non-idempotent verbs get their own client with
+    retries off: ``create_ticket``, ``create_action`` and ``add_document``.
+    ``update_ticket`` (fixed-value PUTs) and ``close_ticket`` are idempotent and
+    stay on ``live_client``.
+
+    ``replace`` on a frozen dataclass re-runs ``__post_init__``, which is required
+    because ``_server_normalized`` is ``field(init=False)``.
+    """
+    with EasyvistaClient(replace(live_config, max_retries=0)) as client:
         yield client
 
 
@@ -278,7 +314,9 @@ def live_write_config() -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def probe_tickets(live_client, live_write_config) -> Iterator[tuple[str, str, str]]:
+def probe_tickets(
+    live_client, live_write_client, live_write_config
+) -> Iterator[tuple[str, str, str]]:
     """Create two probe tickets; always close both.
 
     Yields (nonce, rfc_control, rfc_quoted):
@@ -291,7 +329,7 @@ def probe_tickets(live_client, live_write_config) -> Iterator[tuple[str, str, st
     nonce = uuid.uuid4().hex[:10].upper()
 
     def _create(title: str) -> str:
-        ticket = live_client.create_ticket(
+        ticket = live_write_client.create_ticket(
             PostRequest(
                 catalog_code=cfg["catalog_code"],
                 title=title,
@@ -371,7 +409,9 @@ def live_action_config() -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def rich_ticket(live_client, live_write_config) -> Iterator[RichTicket]:
+def rich_ticket(
+    live_client, live_write_client, live_write_config
+) -> Iterator[RichTicket]:
     """One ticket created with every settable field; closed in teardown.
 
     All-synthetic content, so any round-trip assertion compares our own strings
@@ -386,7 +426,7 @@ def rich_ticket(live_client, live_write_config) -> Iterator[RichTicket]:
     nonce = uuid.uuid4().hex[:10].upper()
     title = f"EVCLI{nonce}RICH"
     description = f"EVCLI{nonce} capability-suite fixture ticket; safe to close"
-    ticket = live_client.create_ticket(
+    ticket = live_write_client.create_ticket(
         PostRequest(
             catalog_code=cfg["catalog_code"],
             title=title,
@@ -411,7 +451,9 @@ def rich_ticket(live_client, live_write_config) -> Iterator[RichTicket]:
 
 
 @pytest.fixture
-def ticket_factory(live_client, live_write_config) -> Iterator[Callable[[], str]]:
+def ticket_factory(
+    live_client, live_write_client, live_write_config
+) -> Iterator[Callable[[], str]]:
     """Create fresh tickets for mutating tests; close every one in teardown.
 
     Returns a zero-argument callable that creates one ticket and returns its
@@ -426,7 +468,7 @@ def ticket_factory(live_client, live_write_config) -> Iterator[Callable[[], str]
 
     def _make() -> str:
         nonce = uuid.uuid4().hex[:10].upper()
-        ticket = live_client.create_ticket(
+        ticket = live_write_client.create_ticket(
             PostRequest(
                 catalog_code=cfg["catalog_code"],
                 title=f"EVCLI{nonce}",

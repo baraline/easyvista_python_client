@@ -24,7 +24,10 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def ticket_with_action(
-    live_client: EasyvistaClient, ticket_factory, live_action_config
+    live_client: EasyvistaClient,
+    live_write_client: EasyvistaClient,
+    ticket_factory,
+    live_action_config,
 ):
     """A fresh ticket plus one action we created. Yields ``(rfc, marker, action_id)``.
 
@@ -37,7 +40,7 @@ def ticket_with_action(
     rfc = ticket_factory()
     marker = f"EVCLI{uuid.uuid4().hex[:10].upper()}ACTIONBODY"
     before = {a.action_id for a in live_client.list_actions(rfc)}
-    live_client.create_action(
+    live_write_client.create_action(
         rfc,
         PostAction(
             action_type_id=int(live_action_config["action_type_id"]),
@@ -60,7 +63,10 @@ def ticket_with_action(
 
 
 def test_list_actions_filters_to_the_requested_ticket(
-    live_client: EasyvistaClient, ticket_factory, live_action_config
+    live_client: EasyvistaClient,
+    live_write_client: EasyvistaClient,
+    ticket_factory,
+    live_action_config,
 ):
     # THE decisive assertion of this module, and it has to be SPATIAL rather
     # than temporal to be worth anything. An earlier before/after delta on a
@@ -78,7 +84,7 @@ def test_list_actions_filters_to_the_requested_ticket(
     rfc_a = ticket_factory()
     rfc_b = ticket_factory()
     before_a = {a.action_id for a in live_client.list_actions(rfc_a)}
-    live_client.create_action(
+    live_write_client.create_action(
         rfc_a,
         PostAction(
             action_type_id=int(live_action_config["action_type_id"]),

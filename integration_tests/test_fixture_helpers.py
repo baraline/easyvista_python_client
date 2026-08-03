@@ -38,3 +38,35 @@ def test_401_is_not_a_per_record_gap():
 def test_a_missing_status_code_is_not_a_per_record_gap():
     """Absent evidence is not evidence of a gap."""
     assert _is_per_record_gap(EasyvistaAuthError("no code")) is False
+
+
+# --- the retry/idempotence boundary, enforced structurally --------------------
+
+_NON_IDEMPOTENT_METHODS = ("create_ticket", "create_action", "add_document")
+
+
+def test_non_idempotent_posts_never_use_the_retrying_client():
+    """These three duplicate on retry, so they must not touch ``live_client``.
+
+    ``retry_if_exception_type`` in the transport is method-blind, so a retried
+    ``create_action`` yields two actions and a retried ``add_document`` yields two
+    uploads. The suite asserts exactly one of each -- and the document check
+    verifies by membership rather than by delta, so a duplicate upload passes
+    SILENTLY. A grep is the only guard that survives someone adding a new call
+    site later.
+    """
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    offenders = []
+    for path in sorted(here.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        for method in _NON_IDEMPOTENT_METHODS:
+            needle = "live_client." + method + "("
+            if needle in source:
+                offenders.append(f"{path.name}: {needle}")
+
+    assert not offenders, (
+        "these calls duplicate on retry and must go through live_write_client "
+        "instead: " + ", ".join(offenders)
+    )
