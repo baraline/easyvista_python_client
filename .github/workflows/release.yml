@@ -1,0 +1,264 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Not cancel-in-progress: a run that has reached publish-pypi must be left
+  # alone. A cancelled upload can leave a release half-published on PyPI, and
+  # a version already on PyPI cannot be re-uploaded.
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Release tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # The whole matrix reports, so a release blocked on one interpreter shows
+      # whether the others are healthy before anyone starts bisecting.
+      fail-fast: false
+      matrix:
+        # Mirrors ci.yml and the `Programming Language :: Python` classifiers in
+        # pyproject.toml. requires-python is >=3.10; the upper end is bounded by
+        # what the suite is verified on, not by anything in the code. The
+        # generated-_sync/ gate is the reason a new interpreter is not just
+        # added on faith: it is a byte-equality check whose output comes from
+        # tokenize-rt re-tokenizing the source, so a tokenizer change can fail
+        # it on one version alone. The suite and that gate were both run on
+        # 3.13.14 and 3.14.6 before either was listed here (600 passed, same
+        # coverage as 3.10, _sync/ regenerated identical under both).
+        # These entries are minor versions, not pinned patches: setup-python
+        # resolves a bare "3.14" to the newest STABLE 3.14.x and never to a
+        # pre-release, which needs allow-prereleases.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+
+      # `integration_tests/` calls a real EasyVista instance using credentials
+      # the user supplies; it can never run here. Excluded by marker rather
+      # than left to skip on absent credentials, so a leaked secret could not
+      # make a release run go live. --strict-markers/--strict-config must be
+      # passed here, not in addopts, where pytest 9 silently ignores them.
+      # Coverage runs implicitly: --cov lives in pyproject's addopts and
+      # [tool.coverage.report] fail_under = 95 gates it.
+      - name: Run tests
+        run: python -m pytest -m "not integration" --strict-markers --strict-config
+
+  quality:
+    name: Release quality checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+
+      - name: Run Ruff
+        run: python -m ruff check .
+
+      - name: Run mypy
+        run: python -m mypy easyvista_python_client
+
+      # The sync client tree is generated from the async one and checked in, so
+      # a stale _sync/ is a shippable artifact: it builds, imports, and is only
+      # wrong at the call site. Re-checked here rather than trusted from ci.yml
+      # because this is the run that uploads to PyPI, and a version published
+      # with a stale sync client cannot be replaced -- only yanked.
+      - name: Check the generated sync tree is up to date
+        run: python unasync_build.py --check
+
+      # `ruff check .` above skips easyvista_python_client/_sync/ wholesale, so
+      # the two HAND_WRITTEN twins living in that tree are linted by nothing
+      # else. --check makes this report rather than reformat.
+      - name: Lint the hand-written modules inside the generated tree
+        run: python scripts/lint_hand_written_sync.py --check
+
+      # Read the Docs builds with fail_on_warning (.readthedocs.yaml), so a
+      # docs warning breaks the published documentation for a release that is
+      # otherwise fine. -W here turns that into a pre-publish failure instead.
+      - name: Build documentation
+        run: python -m sphinx -W --keep-going -b html docs docs/_build/html
+
+  build:
+    name: Build distributions
+    needs:
+      - tests
+      - quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+
+      # The version lives in two places -- pyproject.toml and
+      # easyvista_python_client.__version__ -- and the git tag is a third. PyPI
+      # takes whatever pyproject says, so a tag that disagrees publishes a
+      # release nobody can find by version, and a __version__ that disagrees
+      # misreports at runtime. Both are unfixable after upload. Tags in this
+      # repo are v-prefixed (see the CHANGELOG compare links), so the leading v
+      # is stripped before comparing.
+      - name: Validate release tag matches package version
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="${{ github.event.release.tag_name }}"
+          normalized_tag="${release_tag#v}"
+          pyproject_version="$(python - <<'PY'
+          from pathlib import Path
+          try:
+              from tomllib import loads as toml_loads
+          except ModuleNotFoundError:
+              from tomli import loads as toml_loads
+
+          pyproject = toml_loads(Path('pyproject.toml').read_text(encoding='utf-8'))
+          print(pyproject['project']['version'])
+          PY
+          )"
+          package_version="$(python - <<'PY'
+          import easyvista_python_client
+          print(easyvista_python_client.__version__)
+          PY
+          )"
+
+          if [ "${pyproject_version}" != "${package_version}" ]; then
+            echo "pyproject.toml version (${pyproject_version}) does not match easyvista_python_client.__version__ (${package_version})." >&2
+            exit 1
+          fi
+
+          if [ "${normalized_tag}" != "${pyproject_version}" ]; then
+            echo "GitHub release tag (${release_tag}) does not match package version (${pyproject_version})." >&2
+            exit 1
+          fi
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Check distribution metadata
+        run: python -m twine check dist/*
+
+      # publish-pypi uploads exactly these files. Building there would make the
+      # audited artifact and the uploaded one two different builds.
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: easyvista-python-client-dist
+          path: dist/*
+
+  publish-pypi:
+    name: Upload release to PyPI
+    # workflow_dispatch runs everything above as a rehearsal and stops here:
+    # only a published GitHub release uploads.
+    if: github.event_name == 'release'
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    # The environment is what a PyPI Trusted Publisher is scoped to, and it is
+    # where a required-reviewer gate would be attached.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/easyvista-python-client/
+    permissions:
+      # IMPORTANT: this permission is mandatory for Trusted Publishing. There
+      # is no PyPI API token in this repository's secrets -- PyPI mints a
+      # short-lived credential from this job's OIDC identity instead.
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: easyvista-python-client-dist
+          path: dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  publish-readthedocs:
+    name: Publish release docs
+    # Docs follow the package: on a release, only after PyPI accepted the
+    # upload, so the documented version is one that exists. On
+    # workflow_dispatch there is no upload to wait for, hence the
+    # event_name branch -- and `always()` because a skipped publish-pypi would
+    # otherwise skip this job with it.
+    if: ${{ always() && needs.build.result == 'success' && (github.event_name != 'release' || needs.publish-pypi.result == 'success') }}
+    needs:
+      - build
+      - publish-pypi
+    runs-on: ubuntu-latest
+    env:
+      READTHEDOCS_BASE_URL: ${{ vars.READTHEDOCS_BASE_URL }}
+      READTHEDOCS_PROJECT: ${{ secrets.READTHEDOCS_PROJECT }}
+      READTHEDOCS_TOKEN: ${{ secrets.READTHEDOCS_TOKEN }}
+      READTHEDOCS_VERSION: ${{ vars.READTHEDOCS_RELEASE_VERSION }}
+
+    steps:
+      # Read the Docs is optional: with no token configured this exits 0 rather
+      # than failing a release whose package already published successfully.
+      - name: Sync versions and trigger Read the Docs release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${READTHEDOCS_TOKEN:-}" ] || [ -z "${READTHEDOCS_PROJECT:-}" ]; then
+            echo "Read the Docs secrets are not configured; skipping release build."
+            exit 0
+          fi
+
+          base_url="${READTHEDOCS_BASE_URL:-https://app.readthedocs.org}"
+          version="${READTHEDOCS_VERSION:-stable}"
+
+          # sync-versions first: the tag this release created is not a Read the
+          # Docs version until RTD has seen it.
+          curl --fail --silent --show-error --location \
+            --request POST \
+            --header "Authorization: Token ${READTHEDOCS_TOKEN}" \
+            "${base_url}/api/v3/projects/${READTHEDOCS_PROJECT}/sync-versions/"
+
+          curl --fail --silent --show-error --location \
+            --request POST \
+            --header "Authorization: Token ${READTHEDOCS_TOKEN}" \
+            "${base_url}/api/v3/projects/${READTHEDOCS_PROJECT}/versions/${version}/builds/"
