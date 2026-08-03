@@ -282,13 +282,60 @@ def test_debug_flags_cannot_reinstate_the_leak(tmp_path, flag):
     assert "LEAKED_INSTANCE_DATA" not in output
 
 
+# A fixture that raises during SETUP, taking another fixture whose repr is
+# recognisable. This is the phase the redaction never covered: pytest consults
+# `item.repr_failure` only for the call phase (_pytest/reports.py:262-263) and
+# calls `item._repr_failure_py` directly for setup and teardown (:266-267), so a
+# patch installed on the public name was bypassed for exactly the fixtures that
+# hold credentials-derived values.
+_SETUP_FAILING_CONFTEST = (
+    _LEAKY_CONFTEST
+    + """
+@pytest.fixture
+def failing_record(live_record):
+    raise RuntimeError("the instance did not answer")
+
+from integration_tests.conftest import _force_short_traceback
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        _force_short_traceback(item)
+"""
+)
+
+_SETUP_TEST = """
+def test_needs_a_record(failing_record):
+    assert True
+"""
+
+
+def test_a_fixture_setup_failure_does_not_render_its_arguments(tmp_path):
+    """The phase the call-only patch missed, and where it actually bit.
+
+    A session fixture that creates a live record does its work in SETUP, so the
+    frame pytest renders is the fixture's -- and its arguments are the
+    credentials-derived values it was handed. Observed for real on 2026-08-03: a
+    timed-out create printed the whole request payload, catalog code included.
+    """
+    output = _run_nested_pytest(tmp_path, _SETUP_FAILING_CONFTEST, _SETUP_TEST)
+    assert "test_needs_a_record" in output, (
+        f"the nested run did not execute:\n{output}"
+    )
+    assert "LEAKED_INSTANCE_DATA" not in output
+
+
+def _unpatched(*_args, **_kwargs):  # pragma: no cover - identity sentinel only
+    """Stands in for pytest's real ``_repr_failure_py`` on a stub item."""
+    return "not overridden"
+
+
 class _StubItem:
     """Enough of a pytest item for the collection hook to act on."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.markers: list[object] = []
-        self.repr_failure = "not overridden"
+        self._repr_failure_py = _unpatched
 
     def add_marker(self, marker: object) -> None:
         self.markers.append(marker)
@@ -307,8 +354,11 @@ def test_collection_hook_forces_short_tracebacks_in_this_directory(tmp_path):
     pytest_collection_modifyitems([inside, outside])
 
     assert inside.markers, "an item in this directory was not marked integration"
-    assert callable(inside.repr_failure), "repr_failure was not overridden"
+    assert inside._repr_failure_py is not _unpatched, (
+        "_repr_failure_py was not overridden for an item in this directory"
+    )
+    assert callable(inside._repr_failure_py)
     assert not outside.markers, "an item outside this directory was marked"
-    assert outside.repr_failure == "not overridden", (
-        "the hook overrode repr_failure for an item outside this directory"
+    assert outside._repr_failure_py is _unpatched, (
+        "the hook overrode _repr_failure_py for an item outside this directory"
     )

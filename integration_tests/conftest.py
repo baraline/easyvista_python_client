@@ -76,14 +76,22 @@ def _force_short_traceback(item: pytest.Item) -> None:
     ``--showlocals`` and ``--full-trace`` both defeat a short style on their own
     (measured: each puts the reprs back), so they are neutralized for the
     duration of this one report and restored immediately -- the unit suite still
-    honours them. Delegating to ``_repr_failure_py`` rather than calling
-    ``excinfo.getrepr`` directly keeps pytest's own handling of fixture-lookup
-    errors and ``pytest.fail(pytrace=False)``, which a hand-rolled version would
-    silently lose. It is pytest-private but long-stable, and it would fail loudly
-    (AttributeError) rather than quietly start leaking.
+    honours them.
+
+    Patched at ``_repr_failure_py`` rather than the public ``repr_failure``
+    because pytest consults the public name ONLY for the call phase
+    (``_pytest/reports.py:262-263``) and calls this one directly for setup and
+    teardown (``:266-267``). A session fixture that creates a live record does its
+    work in setup, so patching the public name left exactly the credential-bearing
+    frames uncovered -- measured on 2026-08-03, when a timed-out create printed its
+    whole request payload. One patch here covers all three phases, because both
+    ``Function.repr_failure`` and ``Node.repr_failure`` delegate to this method and
+    an instance attribute shadows it.
     """
 
-    def repr_failure(excinfo, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+    original = item._repr_failure_py
+
+    def _repr_failure_py(excinfo, style=None, *_args, **_kwargs):  # type: ignore[no-untyped-def]
         option = item.config.option
         saved = (
             getattr(option, "showlocals", False),
@@ -92,11 +100,11 @@ def _force_short_traceback(item: pytest.Item) -> None:
         option.showlocals = False
         option.fulltrace = False
         try:
-            return item._repr_failure_py(excinfo, style="short")
+            return original(excinfo, style="short")
         finally:
             option.showlocals, option.fulltrace = saved
 
-    item.repr_failure = repr_failure  # type: ignore[method-assign]
+    item._repr_failure_py = _repr_failure_py  # type: ignore[method-assign]
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
