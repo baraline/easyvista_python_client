@@ -112,7 +112,16 @@ class BaseTransport:
     def _raise_for_response(self, response: httpx.Response) -> NoReturn:
         status = response.status_code
         ev_code, ev_message = self._extract_error(response)
-        message = f"EasyVista request failed ({status}): {ev_message or response.text}"
+        # Never interpolate the raw body: no layer redacts exception TEXT, and a
+        # short traceback still emits `E <Type>: <msg>` while the `-r` summary
+        # reuses it verbatim -- so an unrecognized body prints wherever the
+        # exception surfaces. The byte count keeps the diagnostic ("the server
+        # said something we do not parse, and it was this big") without the
+        # content; `.ev_message` and `.ev_code` carry the parsed values.
+        detail = ev_message or (
+            f"<{len(response.content)}-byte body with no recognized error key>"
+        )
+        message = f"EasyVista request failed ({status}): {detail}"
         kwargs: dict[str, Any] = {
             "status_code": status,
             "ev_code": ev_code,

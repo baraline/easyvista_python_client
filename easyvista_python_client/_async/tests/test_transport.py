@@ -108,6 +108,13 @@ def test_finish_with_non_json_error_body():
     assert info.value.status_code == 500
     assert info.value.ev_code is None
     assert info.value.ev_message is None
+    # The body is NOT interpolated into the message. Nothing redacts exception
+    # text -- short tracebacks still emit the `E <Type>: <msg>` line and the `-r`
+    # summary reuses it -- so an unrecognized body would print verbatim wherever
+    # the exception surfaces, live instance content included (P2).
+    message = str(info.value)
+    assert "Internal Server Error" not in message
+    assert "21-byte body" in message
 
 
 def test_is_retryable_status():
