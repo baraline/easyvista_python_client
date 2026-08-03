@@ -5,7 +5,11 @@ compared directly; instance content is asserted by shape only, and every
 instance-specific field routes through ``require_field`` so an instance without
 it skips rather than fails (design principles P1 and P2).
 
-Reads a shared session ticket -- it mutates nothing.
+Reads the shared session ticket for every metadata assertion. One test
+(``test_description_round_trips_through_the_comment_memo``) takes a FRESH ticket
+from ``ticket_factory`` and mutates that instead, so the shared one stays
+read-only regardless of collection order. The whole module needs write
+credentials and skips without them.
 """
 
 from __future__ import annotations

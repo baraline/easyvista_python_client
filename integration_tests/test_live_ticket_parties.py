@@ -6,7 +6,9 @@ against ids, and everything else by shape. No name, e-mail, department label or
 note text is ever compared or printed -- ``any(...)`` over identity fields
 yields a boolean, and every message names a field, not a value.
 
-Reads a shared session ticket -- it mutates nothing.
+Reads the shared session ticket for every party assertion and mutates nothing.
+The module still needs write credentials, because the shared ticket is created
+by this suite -- it skips entirely without them.
 """
 
 from __future__ import annotations
