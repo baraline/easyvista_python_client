@@ -11,6 +11,18 @@ a deprecation policy will follow the 1.0 release.
 
 ### Added
 
+- Python 3.13 and 3.14 are now tested and declared supported (classifiers, and
+  the CI/release matrices, now span 3.10--3.14). No code changed: the suite
+  passes unmodified on both, with the same statement count and coverage as on
+  3.10, and the generated `_sync/` tree regenerates byte-identically under each
+  interpreter's tokenizer.
+- `.github/workflows/release.yml`: releases are built and published to PyPI by
+  CI when a GitHub release is published, using Trusted Publishing (no API token
+  in the repository). The workflow re-runs the test matrix and the quality gates,
+  refuses to build when the release tag, `pyproject.toml` and
+  `easyvista_python_client.__version__` disagree, runs `twine check`, and then
+  triggers a Read the Docs build for the release. `workflow_dispatch` rehearses
+  everything except the upload. See `docs/publishing.rst`.
 - `skills/`: eight Agent Skills covering client setup, search syntax, tickets,
   ticket actions, documents, assets, the directory and reporting/context, with
   an index in `skills/README.md`. Shipped in the source distribution, not in
