@@ -339,9 +339,15 @@ def _adopt_by_title(search_client: EasyvistaClient, title: str) -> str | None:
     Raises :class:`_InconclusiveCreate` when the question cannot be answered, which
     is the only safe third outcome: on this API a condition it cannot honour is
     silently dropped and **every** record comes back, so "no answer" and "no match"
-    must never collapse into each other. The honoured-search check below is what
-    keeps that distinction, and it is why this is safe even if ``TITLE`` were not a
-    searchable column at all.
+    must never collapse into each other. The honoured-search check below catches
+    exactly that shape: a server-reported total that disagrees with the number of
+    rows actually returned, which is what a genuine whole-table response looks
+    like. It does NOT catch every way an empty answer could be spurious -- a bare
+    JSON ``null`` or ``[]`` search body would parse to zero records with no
+    reported total, which folds into ``total_record_count == len(records) == 0``
+    indistinguishably from a real honoured-and-empty search. This API has never
+    been observed to return either shape, so that gap is accepted rather than
+    guarded against; revisit if it ever is.
     """
     __tracebackhide__ = True
     if not is_safe_ev_value(title):
@@ -355,10 +361,17 @@ def _adopt_by_title(search_client: EasyvistaClient, title: str) -> str | None:
         raise _InconclusiveCreate("the intended title is blank")
     try:
         result = search_client.search_tickets(search=search, max_rows=2)
-    except EasyvistaError as exc:
+    except Exception as exc:
+        # Broad on purpose: an unmodelled failure (e.g. a response body that fails
+        # the client's own pydantic validation) is exactly as unreconcilable as a
+        # transport error -- every unknown failure must become a no-resend stop,
+        # which is this helper's whole thesis. `from None`, never `from exc`:
+        # EasyvistaError.__str__ interpolates server prose and a pydantic
+        # ValidationError embeds the offending input_value, and pytest's chain
+        # repr renders __cause__/__context__ even under --tb=short (P2).
         raise _InconclusiveCreate(
             f"the reconciliation search itself failed ({type(exc).__name__})"
-        ) from exc
+        ) from None
 
     returned = len(result.records)
     if result.total_record_count != returned:
@@ -377,6 +390,13 @@ def _adopt_by_title(search_client: EasyvistaClient, title: str) -> str | None:
                 f"intended one"
             )
         return None
+    if len(matches) > 1:
+        # Two rows can legitimately share one exact title (max_rows=2 admits it).
+        # Adopting matches[0] would silently orphan the other -- the same class of
+        # bug this whole helper exists to close, just one row later.
+        raise _InconclusiveCreate(
+            f"reconciliation matched {len(matches)} rows with the intended title"
+        )
     rfc = matches[0].rfc_number
     if not rfc:
         raise _InconclusiveCreate("the reconciled row carries no RFC_NUMBER")

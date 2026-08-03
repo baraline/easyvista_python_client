@@ -144,6 +144,23 @@ def test_adopt_raises_when_the_condition_was_dropped():
         _adopt_by_title(client, "EVCLIABCRICH")
 
 
+def test_adopt_raises_when_the_reported_total_disagrees_with_an_empty_page():
+    """Isolates the honoured-search check itself, not the non-matching-row branch.
+
+    ``test_adopt_raises_when_the_condition_was_dropped`` above supplies non-empty,
+    non-matching rows, so it still raises via the "returned rows are not ours"
+    branch even with the ``total_record_count != returned`` check deleted -- it
+    passes for the wrong reason and has no mutation that turns it red. This one
+    supplies ZERO rows with a nonzero total: the ONLY thing that can flag that
+    shape is the honoured-search check. Without it, an empty ``result.records``
+    falls straight through to ``return None`` -- a licensed re-send against a
+    search the server never actually answered.
+    """
+    client = _StubSearchClient(_StubResult([], total=3843))
+    with pytest.raises(_InconclusiveCreate):
+        _adopt_by_title(client, "EVCLIABCRICH")
+
+
 def test_adopt_never_searches_an_unquotable_title():
     """probe_tickets' second title carries a literal double quote.
 
@@ -158,9 +175,28 @@ def test_adopt_never_searches_an_unquotable_title():
 
 
 def test_adopt_raises_when_the_search_itself_fails():
+    """Confirms the exception is sanitized, not merely that its str() looks clean.
+
+    `EasyvistaConnectionError.__str__` interpolates the transport's message (P2),
+    and a bare `str(info.value)` assertion cannot see a leak carried on the
+    exception's ``__cause__``/``__context__`` chain rather than in its own message
+    -- exactly how `raise ... from exc` leaked before this fix. ``__context__`` is
+    NOT asserted to be ``None``: raising from inside an active ``except`` block
+    always populates it with the exception being handled, regardless of the
+    ``from`` clause (verified: even explicitly pre-clearing it does not survive the
+    ``raise`` statement). ``__suppress_context__`` is the flag ``from None`` sets
+    and the one pytest's chain repr actually honours -- with it True, the
+    suppressed exception's text is never rendered even though the object is still
+    reachable via ``.__context__`` for anyone introspecting live rather than
+    reading a report (verified against real pytest ``--tb=short`` output: the
+    marker text of the inner exception never appears).
+    """
     client = _StubSearchClient(error=EasyvistaConnectionError("connection failed"))
-    with pytest.raises(_InconclusiveCreate):
+    with pytest.raises(_InconclusiveCreate) as info:
         _adopt_by_title(client, "EVCLIABCRICH")
+
+    assert info.value.__cause__ is None
+    assert info.value.__suppress_context__ is True
 
 
 def test_adopt_raises_on_a_non_matching_row():
@@ -172,6 +208,21 @@ def test_adopt_raises_on_a_non_matching_row():
 
 def test_adopt_raises_when_the_matched_row_has_no_rfc():
     client = _StubSearchClient(_StubResult([_StubRow("EVCLIABCRICH", None)]))
+    with pytest.raises(_InconclusiveCreate):
+        _adopt_by_title(client, "EVCLIABCRICH")
+
+
+def test_adopt_raises_when_two_rows_share_the_exact_title():
+    """Adopting the first of two exact matches would silently orphan the other.
+
+    ``max_rows=2`` legitimately admits this shape: two rows both titled exactly
+    ``title``. Picking ``matches[0]`` and returning would register only one RFC for
+    cleanup -- the same failure mode this whole helper exists to close, one row
+    later.
+    """
+    client = _StubSearchClient(
+        _StubResult([_StubRow("EVCLIABCRICH", "I1"), _StubRow("EVCLIABCRICH", "I2")])
+    )
     with pytest.raises(_InconclusiveCreate):
         _adopt_by_title(client, "EVCLIABCRICH")
 
@@ -277,6 +328,27 @@ def test_create_tracked_does_not_absorb_a_validation_error():
     assert write.calls == 1, "a validation error must not be retried"
 
 
+def test_create_tracked_exhausts_all_attempts_then_stops():
+    """Pins the spec's headline constraint: N attempts, at most one ticket, ever.
+
+    Three transients, each followed by an honoured-and-empty reconciliation --
+    every attempt is licensed to re-send, and the helper uses all three before
+    giving up. Without this test, changing `_CREATE_ATTEMPTS`'s consumption (the
+    `range(_CREATE_ATTEMPTS)` bound) or swapping the terminal `raise
+    AssertionError` for a silent `return None` (making the `-> str` annotation a
+    lie) would break nothing else here.
+    """
+    write = _StubWriteClient([EasyvistaConnectionError("connection failed")] * 3)
+    search = _StubSearchClient(_StubResult([]))
+    tracked: list[str] = []
+
+    with pytest.raises(AssertionError):
+        _create_tracked(write, search, _CFG, tracked, title="EVCLIAAA", description="d")
+
+    assert write.calls == 3
+    assert tracked == []
+
+
 class _StubCloseClient:
     """Records closes; raises for any RFC in ``failing``."""
 
@@ -304,7 +376,15 @@ def test_close_tracked_error_text_carries_no_server_prose():
     """The error records the exception TYPE, never the exception.
 
     ``str(exc)`` is the transport's message, which interpolates whatever the server
-    said (P2). The old loops appended the exception object itself.
+    said (P2). The old loops appended the exception object itself. The chain
+    assertions matter as much as the message ones: pytest's chain repr renders
+    ``__cause__``/``__context__`` even under ``--tb=short``, so a leak riding the
+    chain rather than the message would pass a bare ``str(info.value)`` check.
+    Here both are genuinely ``None`` -- not merely suppressed -- because the final
+    ``raise RuntimeError(...)`` sits OUTSIDE the per-ticket ``try``/``except``, so
+    no exception is "being handled" at the point it is raised (verified: unlike
+    ``_adopt_by_title``'s search-failure path, there is no active exception state
+    left to inherit).
     """
     client = _StubCloseClient(failing={"I1"})
 
@@ -314,3 +394,5 @@ def test_close_tracked_error_text_carries_no_server_prose():
     message = str(info.value)
     assert "EasyvistaConnectionError" in message
     assert "connection failed" not in message
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None
