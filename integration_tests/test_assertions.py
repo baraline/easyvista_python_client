@@ -318,9 +318,7 @@ def test_a_fixture_setup_failure_does_not_render_its_arguments(tmp_path):
     timed-out create printed the whole request payload, catalog code included.
     """
     output = _run_nested_pytest(tmp_path, _SETUP_FAILING_CONFTEST, _SETUP_TEST)
-    assert "test_needs_a_record" in output, (
-        f"the nested run did not execute:\n{output}"
-    )
+    assert "test_needs_a_record" in output, f"the nested run did not execute:\n{output}"
     assert "LEAKED_INSTANCE_DATA" not in output
 
 
