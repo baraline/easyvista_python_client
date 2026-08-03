@@ -11,6 +11,12 @@ a deprecation policy will follow the 1.0 release.
 
 ### Added
 
+- `skills/`: eight Agent Skills covering client setup, search syntax, tickets,
+  ticket actions, documents, assets, the directory and reporting/context, with
+  an index in `skills/README.md`. Shipped in the source distribution, not in
+  the wheel.
+- `scripts/tests/test_skills_contract.py`: checks every skill's frontmatter and
+  code snippets against the real public API, so a rename fails CI.
 - Public `filters.py`: `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, and
   `is_safe_ev_value` for building EasyVista `search` expressions safely.
 - `Request` now declares fields that were previously reachable only as untyped
