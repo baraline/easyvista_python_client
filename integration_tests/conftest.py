@@ -49,7 +49,13 @@ from typing import NamedTuple
 
 import pytest
 
-from easyvista_python_client import EasyvistaClient, EasyvistaConfig
+from easyvista_python_client import (
+    EasyvistaAuthError,
+    EasyvistaClient,
+    EasyvistaConfig,
+    EasyvistaError,
+    EasyvistaNotFound,
+)
 
 _HERE = Path(__file__).resolve().parent
 
@@ -454,6 +460,21 @@ def ticket_factory(live_client, live_write_config) -> Iterator[Callable[[], str]
             raise RuntimeError(f"failed to close factory ticket(s): {errors}")
 
 
+def _is_per_record_gap(exc: EasyvistaError) -> bool:
+    """Whether ``exc`` means "this record has no memo" rather than a real fault.
+
+    403 is profile-gating on the memo endpoint and 404 is a missing memo; both are
+    facts about the record, so the scan continues (design principle P1). **401 is
+    not**, and the distinction cannot be made on the exception class:
+    ``_transport.py`` raises ``EasyvistaAuthError`` for ``status in (401, 403)``,
+    so catching the class turns an expired mid-run token into "this instance has no
+    Consigne data" after scanning fifty departments.
+    """
+    if isinstance(exc, EasyvistaNotFound):
+        return True
+    return isinstance(exc, EasyvistaAuthError) and exc.status_code == 403
+
+
 @pytest.fixture(scope="session")
 def consigne_department_id(live_client) -> int:
     """A department id whose note (``COMMENT_DEPARTMENT``) is non-empty.
@@ -462,8 +483,6 @@ def consigne_department_id(live_client) -> int:
     (design principle P2). Skips when the scan finds none, which is a fact about
     the instance rather than a defect (P1).
     """
-    from easyvista_python_client import EasyvistaAuthError, EasyvistaNotFound
-
     scanned = 0
     for dept in live_client.iter_departments(max_records=CONSIGNE_SCAN_LIMIT):
         if dept.department_id is None:
@@ -471,11 +490,10 @@ def consigne_department_id(live_client) -> int:
         scanned += 1
         try:
             note = live_client.get_department_comment(dept.department_id)
-        # Exactly the two the comment below claims: 403 (profile-gated) and 404
-        # (no such memo). Catching EasyvistaError swallowed the transport and
-        # 5xx cases too, so a dropped connection read as "this department has
-        # no Consigne" and the scan ended in a skip instead of a failure.
-        except (EasyvistaAuthError, EasyvistaNotFound):
+        except (EasyvistaAuthError, EasyvistaNotFound) as exc:
+            # Narrowed on the STATUS CODE, not the class: see _is_per_record_gap.
+            if not _is_per_record_gap(exc):
+                raise
             continue  # profile-gated or missing on this record; keep scanning
         if note and note.strip():
             return dept.department_id
