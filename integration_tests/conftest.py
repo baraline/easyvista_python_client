@@ -54,8 +54,14 @@ from easyvista_python_client import (
     EasyvistaAuthError,
     EasyvistaClient,
     EasyvistaConfig,
+    EasyvistaConnectionError,
     EasyvistaError,
     EasyvistaNotFound,
+    EasyvistaRateLimitError,
+    EasyvistaServerError,
+    PostRequest,
+    ev_equals_filter,
+    is_safe_ev_value,
 )
 
 _HERE = Path(__file__).resolve().parent
@@ -313,6 +319,155 @@ def live_write_config() -> dict[str, str]:
     return resolved
 
 
+# Three attempts, and a re-send happens ONLY after a search has proved the
+# previous attempt did not commit -- so N attempts still yield at most one ticket.
+_CREATE_ATTEMPTS = 3
+
+
+class _InconclusiveCreate(RuntimeError):
+    """A create whose outcome could not be established, so it must NOT be re-sent.
+
+    Deliberately distinct from an ordinary failure. Re-sending risks a duplicate
+    ticket the suite never learns the RFC of -- an orphan on someone else's
+    instance -- and that is worse than stopping loudly.
+    """
+
+
+def _adopt_by_title(search_client: EasyvistaClient, title: str) -> str | None:
+    """Return the RFC of the ticket titled exactly ``title``, or ``None`` if absent.
+
+    Raises :class:`_InconclusiveCreate` when the question cannot be answered, which
+    is the only safe third outcome: on this API a condition it cannot honour is
+    silently dropped and **every** record comes back, so "no answer" and "no match"
+    must never collapse into each other. The honoured-search check below is what
+    keeps that distinction, and it is why this is safe even if ``TITLE`` were not a
+    searchable column at all.
+    """
+    __tracebackhide__ = True
+    if not is_safe_ev_value(title):
+        raise _InconclusiveCreate(
+            "the intended title contains a double quote, which EasyVista cannot "
+            "match in any rendering (verified live), so this create cannot be "
+            "reconciled"
+        )
+    search = ev_equals_filter("TITLE", title)
+    if search is None:
+        raise _InconclusiveCreate("the intended title is blank")
+    try:
+        result = search_client.search_tickets(search=search, max_rows=2)
+    except EasyvistaError as exc:
+        raise _InconclusiveCreate(
+            f"the reconciliation search itself failed ({type(exc).__name__})"
+        ) from exc
+
+    returned = len(result.records)
+    if result.total_record_count != returned:
+        raise _InconclusiveCreate(
+            f"the TITLE condition was dropped: {result.total_record_count} total "
+            f"against {returned} returned rows, i.e. the whole table"
+        )
+    if returned > 2:
+        raise _InconclusiveCreate(f"reconciliation returned {returned} rows")
+
+    matches = [row for row in result.records if row.title == title]
+    if not matches:
+        if result.records:
+            raise _InconclusiveCreate(
+                f"reconciliation returned {returned} row(s) whose TITLE is not the "
+                f"intended one"
+            )
+        return None
+    rfc = matches[0].rfc_number
+    if not rfc:
+        raise _InconclusiveCreate("the reconciled row carries no RFC_NUMBER")
+    return rfc
+
+
+def _create_tracked(
+    write_client: EasyvistaClient,
+    search_client: EasyvistaClient,
+    cfg: dict[str, str],
+    tracked: list[str],
+    *,
+    title: str,
+    description: str,
+) -> str:
+    """Create one ticket and register its RFC in ``tracked`` the instant it is known.
+
+    The append happens BEFORE any assertion, which is the whole point: the old
+    order asserted on the RFC first, so a create that committed server-side but
+    returned no usable body left a ticket nothing would ever close.
+
+    ``write_client`` must be the zero-retry client. This function does its own
+    retrying, and it re-sends only after a search has *proved* the previous attempt
+    did not commit -- so at most one ticket exists however many attempts are made.
+    A deterministic rejection (``EasyvistaValidationError``, HTTP 590) is not a
+    transient and propagates untouched.
+    """
+    for _attempt in range(_CREATE_ATTEMPTS):
+        rfc: str | None = None
+        try:
+            ticket = write_client.create_ticket(
+                PostRequest(
+                    catalog_code=cfg["catalog_code"],
+                    title=title,
+                    description=description,
+                    origin=int(cfg["origin"]),
+                    department_id=int(cfg["department_id"]),
+                    urgency_id=int(cfg["urgency_id"]),
+                    impact_id=int(cfg["impact_id"]),
+                )
+            )
+        except (
+            EasyvistaConnectionError,
+            EasyvistaRateLimitError,
+            EasyvistaServerError,
+        ):
+            pass  # the request may or may not have committed; never re-send blind
+        else:
+            rfc = ticket.rfc_number
+            if rfc:
+                tracked.append(rfc)
+                return rfc
+
+        adopted = _adopt_by_title(search_client, title)
+        if adopted is not None:
+            tracked.append(adopted)
+            return adopted
+        # The search was honoured and found nothing, so nothing committed and the
+        # next attempt cannot duplicate.
+
+    raise AssertionError(
+        f"create_ticket produced no usable ticket in {_CREATE_ATTEMPTS} attempts"
+    )
+
+
+def _close_tracked(
+    client: EasyvistaClient, cfg: dict[str, str], tracked: list[str], reason: str
+) -> None:
+    """Close every RFC in ``tracked``, attempting all of them regardless of failures.
+
+    Error records carry the exception's TYPE and status code, never the exception
+    object: ``str(exc)`` is the transport's message, which interpolates server prose
+    this suite did not author (P2).
+    """
+    errors: list[tuple[str, str, int | None]] = []
+    for rfc in tracked:
+        try:
+            client.close_ticket(
+                rfc,
+                status_guid=cfg["status_guid"],
+                delete_actions=1,
+                comment=reason,
+            )
+        except EasyvistaError as exc:
+            errors.append((rfc, type(exc).__name__, exc.status_code))
+        except Exception as exc:  # every ticket must be attempted regardless
+            errors.append((rfc, type(exc).__name__, None))
+    if errors:
+        raise RuntimeError(f"failed to close ticket(s): {errors}")
+
+
 @pytest.fixture(scope="session")
 def probe_tickets(
     live_client, live_write_client, live_write_config
@@ -322,52 +477,36 @@ def probe_tickets(
     Yields (nonce, rfc_control, rfc_quoted):
       - control ticket title: ``EVCLI{nonce}A``            (quote-free)
       - quoted  ticket title: ``EVCLI{nonce}B 22" monitor`` (contains a literal ")
-    """
-    from easyvista_python_client import PostRequest
 
+    The quoted title is unreconcilable by construction -- EasyVista cannot match a
+    literal ``"`` in any rendering -- so an inconclusive create for THAT ticket
+    stops loudly rather than risking a duplicate. The control ticket is created
+    first, so it is tracked and closed either way.
+    """
     cfg = live_write_config
     nonce = uuid.uuid4().hex[:10].upper()
-
-    def _create(title: str) -> str:
-        ticket = live_write_client.create_ticket(
-            PostRequest(
-                catalog_code=cfg["catalog_code"],
-                title=title,
-                description="search-syntax characterization probe; safe to close",
-                origin=int(cfg["origin"]),
-                department_id=int(cfg["department_id"]),
-                urgency_id=int(cfg["urgency_id"]),
-                impact_id=int(cfg["impact_id"]),
-            )
-        )
-        # Bound first so the failed assert has no sub-expression to explain:
-        # `assert ticket.rfc_number` makes the rewriter print the whole live
-        # Request, nested REQUESTOR/DEPARTMENT labels included (P2).
-        rfc = ticket.rfc_number
-        assert rfc, "create_ticket returned no rfc_number"
-        return rfc
-
-    created: list[str] = []
+    description = "search-syntax characterization probe; safe to close"
+    tracked: list[str] = []
     try:
-        rfc_control = _create(f"EVCLI{nonce}A")
-        created.append(rfc_control)
-        rfc_quoted = _create(f'EVCLI{nonce}B 22" monitor')
-        created.append(rfc_quoted)
+        rfc_control = _create_tracked(
+            live_write_client,
+            live_client,
+            cfg,
+            tracked,
+            title=f"EVCLI{nonce}A",
+            description=description,
+        )
+        rfc_quoted = _create_tracked(
+            live_write_client,
+            live_client,
+            cfg,
+            tracked,
+            title=f'EVCLI{nonce}B 22" monitor',
+            description=description,
+        )
         yield nonce, rfc_control, rfc_quoted
     finally:
-        errors = []
-        for rfc in created:
-            try:
-                live_client.close_ticket(
-                    rfc,
-                    status_guid=cfg["status_guid"],
-                    delete_actions=1,
-                    comment="probe cleanup",
-                )
-            except Exception as exc:  # every ticket must be attempted regardless
-                errors.append((rfc, exc))
-        if errors:
-            raise RuntimeError(f"failed to close probe ticket(s): {errors}")
+        _close_tracked(live_client, cfg, tracked, "probe cleanup")
 
 
 class RichTicket(NamedTuple):
@@ -415,39 +554,32 @@ def rich_ticket(
     """One ticket created with every settable field; closed in teardown.
 
     All-synthetic content, so any round-trip assertion compares our own strings
-    against themselves. Session-scoped and treated as read-only by its
-    consumers: a test that MUTATES a ticket takes a fresh one from
-    ``ticket_factory`` instead, so a title-update test can never invalidate a
-    title-read test regardless of collection order.
-    """
-    from easyvista_python_client import PostRequest
+    against themselves. Session-scoped and treated as read-only by its consumers:
+    a test that MUTATES a ticket takes a fresh one from ``ticket_factory`` instead,
+    so a title-update test can never invalidate a title-read test regardless of
+    collection order.
 
+    The create sits INSIDE the ``try`` and reconciles a lost response, because this
+    fixture's setup exception is cached by pytest and re-raised to all 17 of its
+    consumers -- one transient used to end the session's write coverage.
+    """
     cfg = live_write_config
     nonce = uuid.uuid4().hex[:10].upper()
     title = f"EVCLI{nonce}RICH"
     description = f"EVCLI{nonce} capability-suite fixture ticket; safe to close"
-    ticket = live_write_client.create_ticket(
-        PostRequest(
-            catalog_code=cfg["catalog_code"],
+    tracked: list[str] = []
+    try:
+        rfc = _create_tracked(
+            live_write_client,
+            live_client,
+            cfg,
+            tracked,
             title=title,
             description=description,
-            origin=int(cfg["origin"]),
-            department_id=int(cfg["department_id"]),
-            urgency_id=int(cfg["urgency_id"]),
-            impact_id=int(cfg["impact_id"]),
         )
-    )
-    rfc = ticket.rfc_number
-    assert rfc, "create_ticket returned no rfc_number"
-    try:
         yield RichTicket(rfc=rfc, title=title, description=description)
     finally:
-        live_client.close_ticket(
-            rfc,
-            status_guid=cfg["status_guid"],
-            delete_actions=1,
-            comment="fixture cleanup",
-        )
+        _close_tracked(live_client, cfg, tracked, "fixture cleanup")
 
 
 @pytest.fixture
@@ -456,50 +588,28 @@ def ticket_factory(
 ) -> Iterator[Callable[[], str]]:
     """Create fresh tickets for mutating tests; close every one in teardown.
 
-    Returns a zero-argument callable that creates one ticket and returns its
-    RFC. Teardown attempts EVERY created ticket regardless of individual
-    failures and raises once at the end -- the ``probe_tickets`` pattern -- so
-    one failed close never orphans the rest.
+    Returns a zero-argument callable that creates one ticket and returns its RFC.
+    Teardown attempts EVERY created ticket regardless of individual failures and
+    raises once at the end, so one failed close never orphans the rest.
     """
-    from easyvista_python_client import PostRequest
-
     cfg = live_write_config
-    created: list[str] = []
+    tracked: list[str] = []
 
     def _make() -> str:
         nonce = uuid.uuid4().hex[:10].upper()
-        ticket = live_write_client.create_ticket(
-            PostRequest(
-                catalog_code=cfg["catalog_code"],
-                title=f"EVCLI{nonce}",
-                description=f"EVCLI{nonce} capability-suite ticket; safe to close",
-                origin=int(cfg["origin"]),
-                department_id=int(cfg["department_id"]),
-                urgency_id=int(cfg["urgency_id"]),
-                impact_id=int(cfg["impact_id"]),
-            )
+        return _create_tracked(
+            live_write_client,
+            live_client,
+            cfg,
+            tracked,
+            title=f"EVCLI{nonce}",
+            description=f"EVCLI{nonce} capability-suite ticket; safe to close",
         )
-        rfc = ticket.rfc_number
-        assert rfc, "create_ticket returned no rfc_number"
-        created.append(rfc)
-        return rfc
 
     try:
         yield _make
     finally:
-        errors = []
-        for rfc in created:
-            try:
-                live_client.close_ticket(
-                    rfc,
-                    status_guid=cfg["status_guid"],
-                    delete_actions=1,
-                    comment="factory cleanup",
-                )
-            except Exception as exc:  # every ticket must be attempted regardless
-                errors.append((rfc, exc))
-        if errors:
-            raise RuntimeError(f"failed to close factory ticket(s): {errors}")
+        _close_tracked(live_client, cfg, tracked, "factory cleanup")
 
 
 def _is_per_record_gap(exc: EasyvistaError) -> bool:

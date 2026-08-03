@@ -2,16 +2,29 @@
 
 Marked ``integration`` by this directory's collection hook (so CI deselects
 them), but they run anywhere a plain ``pytest`` runs. Everything here is pure:
-the helpers under test take a client object, so a stub is enough.
+the per-record-gap and routing checks take no client at all, and the
+create/close/adoption helpers take a client *object* -- so a small stub that
+implements just the one or two methods each helper calls is enough; no live
+credentials or network access are needed anywhere in this file.
 """
 
 from __future__ import annotations
 
+import pytest
+
 from easyvista_python_client import (
     EasyvistaAuthError,
+    EasyvistaConnectionError,
     EasyvistaNotFound,
+    EasyvistaValidationError,
 )
-from integration_tests.conftest import _is_per_record_gap
+from integration_tests.conftest import (
+    _adopt_by_title,
+    _close_tracked,
+    _create_tracked,
+    _InconclusiveCreate,
+    _is_per_record_gap,
+)
 
 
 def test_403_is_a_per_record_gap():
@@ -70,3 +83,234 @@ def test_non_idempotent_posts_never_use_the_retrying_client():
         "these calls duplicate on retry and must go through live_write_client "
         "instead: " + ", ".join(offenders)
     )
+
+
+# --- reconciliation of a create whose outcome is unknown ----------------------
+
+
+class _StubRow:
+    """Enough of a ``Request`` for the reconciliation checks."""
+
+    def __init__(self, title: str | None, rfc: str | None) -> None:
+        self.title = title
+        self.rfc_number = rfc
+
+
+class _StubResult:
+    """Enough of a ``SearchResult``. ``total`` defaults to an honoured search."""
+
+    def __init__(self, records: list[_StubRow], total: int | None = None) -> None:
+        self.records = records
+        self.total_record_count = len(records) if total is None else total
+
+
+class _StubSearchClient:
+    def __init__(self, result: object = None, error: Exception | None = None) -> None:
+        self._result = result
+        self._error = error
+        self.calls = 0
+
+    def search_tickets(self, *, search=None, max_rows=None):
+        self.calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def test_adopt_returns_the_rfc_of_an_exact_single_match():
+    client = _StubSearchClient(_StubResult([_StubRow("EVCLIABCRICH", "I1")]))
+    assert _adopt_by_title(client, "EVCLIABCRICH") == "I1"
+
+
+def test_adopt_returns_none_when_the_search_is_honoured_and_empty():
+    """An authoritative empty is the ONLY licence to re-send the create."""
+    client = _StubSearchClient(_StubResult([]))
+    assert _adopt_by_title(client, "EVCLIABCRICH") is None
+
+
+def test_adopt_raises_when_the_condition_was_dropped():
+    """The whole-table response, which is this API's failure mode for a bad filter.
+
+    total_record_count far exceeds the returned rows, so the TITLE condition was
+    ignored. Returning None here would re-send a create that may already have
+    committed; returning a row would adopt an arbitrary live ticket.
+    """
+    client = _StubSearchClient(
+        _StubResult(
+            [_StubRow("something else", "I9"), _StubRow("another", "I8")], total=3843
+        )
+    )
+    with pytest.raises(_InconclusiveCreate):
+        _adopt_by_title(client, "EVCLIABCRICH")
+
+
+def test_adopt_never_searches_an_unquotable_title():
+    """probe_tickets' second title carries a literal double quote.
+
+    EasyVista has no escape for it and the suite asserts live that all three
+    renderings match nothing, so this create is unreconcilable BY CONSTRUCTION.
+    It must stop loudly rather than re-send.
+    """
+    client = _StubSearchClient(_StubResult([]))
+    with pytest.raises(_InconclusiveCreate):
+        _adopt_by_title(client, 'EVCLIABCB 22" monitor')
+    assert client.calls == 0, "an unquotable title must never reach the API"
+
+
+def test_adopt_raises_when_the_search_itself_fails():
+    client = _StubSearchClient(error=EasyvistaConnectionError("connection failed"))
+    with pytest.raises(_InconclusiveCreate):
+        _adopt_by_title(client, "EVCLIABCRICH")
+
+
+def test_adopt_raises_on_a_non_matching_row():
+    """Rows came back but none is ours: honoured or not, the answer is unclear."""
+    client = _StubSearchClient(_StubResult([_StubRow("EVCLIOTHER", "I2")]))
+    with pytest.raises(_InconclusiveCreate):
+        _adopt_by_title(client, "EVCLIABCRICH")
+
+
+def test_adopt_raises_when_the_matched_row_has_no_rfc():
+    client = _StubSearchClient(_StubResult([_StubRow("EVCLIABCRICH", None)]))
+    with pytest.raises(_InconclusiveCreate):
+        _adopt_by_title(client, "EVCLIABCRICH")
+
+
+# --- the create helper: append-before-assert, and reconciliation on retry -----
+
+_CFG = {
+    "catalog_code": "INC_STANDARD",
+    "origin": "1",
+    "department_id": "2",
+    "urgency_id": "3",
+    "impact_id": "4",
+    "status_guid": "{00000000-0000-0000-0000-000000000000}",
+}
+
+
+class _StubTicket:
+    def __init__(self, rfc: str | None) -> None:
+        self.rfc_number = rfc
+
+
+class _StubWriteClient:
+    """Replays a scripted list of create outcomes; an Exception item is raised."""
+
+    def __init__(self, outcomes: list[object]) -> None:
+        self._outcomes = list(outcomes)
+        self.calls = 0
+
+    def create_ticket(self, _post):
+        self.calls += 1
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def test_create_tracked_registers_the_rfc_and_does_not_search():
+    """The green path costs zero extra requests."""
+    write = _StubWriteClient([_StubTicket("I1")])
+    search = _StubSearchClient(_StubResult([]))
+    tracked: list[str] = []
+
+    rfc = _create_tracked(
+        write, search, _CFG, tracked, title="EVCLIAAA", description="d"
+    )
+
+    assert rfc == "I1"
+    assert tracked == ["I1"]
+    assert search.calls == 0, "a conclusive create must not trigger reconciliation"
+
+
+def test_create_tracked_adopts_a_committed_ticket_with_no_rfc_in_the_body():
+    """The orphan path, closed: the ticket exists, so it must become trackable."""
+    write = _StubWriteClient([_StubTicket(None)])
+    search = _StubSearchClient(_StubResult([_StubRow("EVCLIAAA", "I7")]))
+    tracked: list[str] = []
+
+    rfc = _create_tracked(
+        write, search, _CFG, tracked, title="EVCLIAAA", description="d"
+    )
+
+    assert rfc == "I7"
+    assert tracked == ["I7"], "an adopted ticket must be registered for cleanup"
+    assert write.calls == 1, "nothing committed-and-found may be re-sent"
+
+
+def test_create_tracked_resends_only_after_an_authoritative_empty():
+    """This is the cascade fix: a transient no longer ends the session."""
+    write = _StubWriteClient(
+        [EasyvistaConnectionError("connection failed"), _StubTicket("I2")]
+    )
+    search = _StubSearchClient(_StubResult([]))
+    tracked: list[str] = []
+
+    rfc = _create_tracked(
+        write, search, _CFG, tracked, title="EVCLIAAA", description="d"
+    )
+
+    assert rfc == "I2"
+    assert tracked == ["I2"]
+    assert write.calls == 2, "the second attempt should have been made"
+
+
+def test_create_tracked_stops_when_reconciliation_is_inconclusive():
+    """Never re-send blind: one loud stop beats a duplicate nobody can see."""
+    write = _StubWriteClient([EasyvistaConnectionError("connection failed")])
+    search = _StubSearchClient(_StubResult([_StubRow("x", "I9")], total=3843))
+    tracked: list[str] = []
+
+    with pytest.raises(_InconclusiveCreate):
+        _create_tracked(write, search, _CFG, tracked, title="EVCLIAAA", description="d")
+    assert write.calls == 1
+    assert tracked == []
+
+
+def test_create_tracked_does_not_absorb_a_validation_error():
+    """A 590 is deterministic and means a real defect -- it must propagate."""
+    write = _StubWriteClient([EasyvistaValidationError("nope", status_code=590)])
+    search = _StubSearchClient(_StubResult([]))
+
+    with pytest.raises(EasyvistaValidationError):
+        _create_tracked(write, search, _CFG, [], title="EVCLIAAA", description="d")
+    assert write.calls == 1, "a validation error must not be retried"
+
+
+class _StubCloseClient:
+    """Records closes; raises for any RFC in ``failing``."""
+
+    def __init__(self, failing: set[str] | None = None) -> None:
+        self.closed: list[str] = []
+        self._failing = failing or set()
+
+    def close_ticket(self, rfc, *, status_guid, delete_actions, comment):
+        if rfc in self._failing:
+            raise EasyvistaConnectionError("connection failed")
+        self.closed.append(rfc)
+
+
+def test_close_tracked_attempts_every_ticket_despite_a_failure():
+    client = _StubCloseClient(failing={"I2"})
+
+    with pytest.raises(RuntimeError) as info:
+        _close_tracked(client, _CFG, ["I1", "I2", "I3"], "cleanup")
+
+    assert client.closed == ["I1", "I3"], "one failure must not orphan the rest"
+    assert "I2" in str(info.value)
+
+
+def test_close_tracked_error_text_carries_no_server_prose():
+    """The error records the exception TYPE, never the exception.
+
+    ``str(exc)`` is the transport's message, which interpolates whatever the server
+    said (P2). The old loops appended the exception object itself.
+    """
+    client = _StubCloseClient(failing={"I1"})
+
+    with pytest.raises(RuntimeError) as info:
+        _close_tracked(client, _CFG, ["I1"], "cleanup")
+
+    message = str(info.value)
+    assert "EasyvistaConnectionError" in message
+    assert "connection failed" not in message
