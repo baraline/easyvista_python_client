@@ -479,7 +479,15 @@ Error handling
 --------------
 
 All errors derive from :class:`~easyvista_python_client.EasyvistaError`, which carries
-``status_code``, ``ev_code``, and ``ev_message``. Catch the specific subclass you care about.
+``status_code``, ``ev_code``, ``ev_message``, and ``body``. Catch the specific subclass
+you care about.
+
+``ev_code`` / ``ev_message`` are populated only when the response body matches a
+recognized EasyVista error shape; the exception message itself never includes the raw
+response body, so it cannot leak an unrecognized body's contents into a log or a
+traceback. ``body`` (``bytes | None``) is the raw response body, for the cases
+``ev_code`` / ``ev_message`` cannot parse — an upstream proxy's HTML error page, a
+plain-text 503, or any other shape this client does not recognize.
 
 .. code-block:: python
 

@@ -845,10 +845,19 @@ def test_title_search_requires_the_fields_projection_to_return_a_value(
     # unprojected count clears (see requests_baseline) actually proves the count
     # is real rather than a coincidental single leftover row.
     unfiltered = live_client.search_tickets(max_rows=1, fields=["RFC_NUMBER", "TITLE"])
-    assert unfiltered.total_record_count >= 2, (
-        "an unfiltered search under the fields= projection reported fewer than "
-        "2 total records -- counts do not reliably survive this projection, so "
-        "the honoured-search check below cannot be trusted"
+    # Bound first, and compare counts rather than reprs (P2): unlike the two
+    # nonce-TITLE-filtered searches below, this one is UNFILTERED, so an inline
+    # `assert unfiltered.total_record_count >= 2` would let the rewriter print
+    # the whole SearchResult on failure -- an arbitrary live ticket from
+    # someone else's instance, rendered precisely on the failure this assertion
+    # exists to report.
+    unfiltered_total = unfiltered.total_record_count
+    enough = unfiltered_total >= 2
+    assert enough, (
+        f"an unfiltered search under the fields= projection reported "
+        f"{unfiltered_total} total records, fewer than 2 -- counts do not "
+        "reliably survive this projection, so the honoured-search check below "
+        "cannot be trusted"
     )
 
     search = ev_equals_filter("TITLE", rich_ticket.title)

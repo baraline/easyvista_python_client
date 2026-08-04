@@ -350,7 +350,16 @@ class _InconclusiveCreate(RuntimeError):
 
 
 def _adopt_by_title(search_client: EasyvistaClient, title: str) -> str | None:
-    """Return the RFC of the ticket titled exactly ``title``, or ``None`` if absent.
+    """Return the RFC of the ticket titled exactly ``title``, or ``None`` if
+    the search was honoured and found none AS OF THE MOMENT IT RAN.
+
+    That ``None`` is a point-in-time observation, not proof of permanent
+    absence: it licenses the caller to re-send (see ``_create_tracked``,
+    which pairs it with ``_RECONCILE_DELAY`` to narrow, not close, the window),
+    but a create still in flight when this search ran can still commit
+    afterward -- an orphan this function has no way to detect, because by
+    construction it never learns the RFC of a ticket that did not exist yet
+    when it searched.
 
     Raises :class:`_InconclusiveCreate` when the question cannot be answered, which
     is the only safe third outcome: on this API a condition it cannot honour is
@@ -486,10 +495,20 @@ def _create_tracked(
                 tracked.append(rfc)
                 return rfc
 
-        # Give a create that timed out (LIVE_TIMEOUT) a chance to actually land
-        # before asking whether it did -- see _RECONCILE_DELAY. Costs nothing on
-        # a green run: this line is only reached after a create has already
-        # failed, so the 30s timeout is already sunk.
+        # Reached on every path that doesn't already have a trackable RFC in
+        # hand -- not only the "timed out, might still be in flight" case
+        # _RECONCILE_DELAY exists for. It also fires when create_ticket
+        # returned successfully but with an empty body (the ticket already
+        # committed; there is no in-flight ambiguity left to wait out), when
+        # the title is unquotable and _adopt_by_title is about to raise
+        # without ever searching (probe_tickets' second ticket), and once
+        # more on the final attempt, immediately before the terminal
+        # AssertionError below. Worst case is _CREATE_ATTEMPTS *
+        # _RECONCILE_DELAY (45s) of dead wait. Kept uniform rather than
+        # skipped on those paths: they are the rare, already-degraded cases
+        # (a failure already happened, or the loop is already ending), and
+        # branching this call per-path is complexity this trade is not worth
+        # paying for on an already-slow, live-only code path.
         time.sleep(_RECONCILE_DELAY)
         adopted = _adopt_by_title(search_client, title)
         if adopted is not None:

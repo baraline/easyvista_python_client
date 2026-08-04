@@ -375,18 +375,31 @@ def test_create_tracked_resends_only_after_an_authoritative_empty():
 def test_create_tracked_sleeps_before_reconciling_a_transient(monkeypatch):
     """The reconciliation delay runs, and runs BEFORE the search, on every retry.
 
-    ``_no_reconcile_delay`` (module-scoped, autouse) keeps ``_RECONCILE_DELAY``
-    at 0 for the rest of this file so the suite stays fast -- but that also
-    means a removed ``time.sleep`` call would be invisible to timing alone.
-    This test spies on ``time.sleep`` directly and records call order against
-    the search, so it fails if the sleep is ever deleted or reordered to after
-    the search runs, regardless of what ``_RECONCILE_DELAY`` is set to.
+    ``_no_reconcile_delay`` (function-scoped like every ``monkeypatch``-based
+    fixture, autouse) keeps ``_RECONCILE_DELAY`` at 0 for every test in this
+    file so the suite stays fast -- but that also means comparing against
+    ``conftest_module._RECONCILE_DELAY`` here would just be checking ``0 == 0``:
+    it cannot tell "correctly relays the constant" apart from "hardcoded to
+    literal 0", and that gap would let ``_RECONCILE_DELAY = 0`` in
+    ``conftest.py`` -- neutering the live mitigation entirely -- ship with
+    every offline test still green. Re-patching the constant to a sentinel
+    here, distinct from the file-wide 0, closes that: only a call that
+    genuinely relays whatever ``_RECONCILE_DELAY`` currently is can produce
+    this exact value. The sleep itself stays faked either way, so nothing
+    here actually waits.
+
+    This test also spies on ``time.sleep`` and the search call together,
+    recording call order, so it fails if the sleep is ever deleted or
+    reordered to after the search runs.
     """
+    _SENTINEL_DELAY = 15.0
+    monkeypatch.setattr(conftest_module, "_RECONCILE_DELAY", _SENTINEL_DELAY)
+
     order: list[str] = []
 
     def fake_sleep(seconds: float) -> None:
         order.append("sleep")
-        assert seconds == conftest_module._RECONCILE_DELAY
+        assert seconds == _SENTINEL_DELAY
 
     monkeypatch.setattr(conftest_module.time, "sleep", fake_sleep)
 
