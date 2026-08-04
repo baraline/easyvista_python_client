@@ -1,5 +1,12 @@
 # easyvista-python-client
 
+[![CI](https://github.com/baraline/easyvista_python_client/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/baraline/easyvista_python_client/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/baraline/easyvista_python_client/branch/main/graph/badge.svg)](https://codecov.io/gh/baraline/easyvista_python_client)
+[![License](https://img.shields.io/github/license/baraline/easyvista_python_client)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/baraline/easyvista_python_client)
+[![Docs](https://readthedocs.org/projects/easyvista-python-client/badge/?version=latest)](https://easyvista-python-client.readthedocs.io/en/latest/)
+
+
 Typed Python client for the EasyVista Service Manager REST API. Sync + async,
 Pydantic models, Bearer or Basic auth.
 
