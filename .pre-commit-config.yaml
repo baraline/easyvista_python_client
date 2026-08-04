@@ -1,3 +1,10 @@
+# The coverage hook below is `stages: [pre-push]`, and pre-commit only installs
+# the hook types it is told about -- so without this line `pre-commit install`
+# writes .git/hooks/pre-commit alone and the coverage gate is configured but
+# never fires. Anyone who ran `pre-commit install` before this line existed has
+# no pre-push hook and must re-run it (pre-commit install --install-hooks).
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.0
@@ -77,3 +84,27 @@ repos:
         # third entry.
         files: ^easyvista_python_client/_sync/(_concurrency\.py|tests/test_concurrency\.py)$
         pass_filenames: false
+      # The local half of the coverage gate in .github/workflows/ci.yml, so an
+      # under-covered branch is caught before the push rather than by CI after
+      # it. pre-push, not pre-commit: it runs the whole unit suite, which is far
+      # too slow to sit in front of every commit.
+      #
+      # The pytest command lives in the script rather than in `entry` here, and
+      # that indirection is load-bearing rather than tidiness. This hook has to
+      # run in the environment where `pip install -e ".[dev]"` happened --
+      # measuring a package that is not the one under test is meaningless -- so
+      # the tempting spelling is `language: system` with `entry: python -m
+      # pytest ...`, as glpi_python_client uses. On this machine that resolves
+      # the bare `python` to the Microsoft Store stub and the hook dies with
+      # exit 9009 before pytest is ever reached (verified). `language: python`
+      # instead, for the reason the two hooks above give: pre-commit builds the
+      # hook a managed venv from the interpreter that ran pre-commit, never from
+      # PATH. The script then locates the project's own interpreter and
+      # delegates to it. It imports only the stdlib, hence no
+      # additional_dependencies.
+      - id: pytest-coverage
+        name: pytest with coverage (>=95%)
+        entry: python scripts/run_coverage_gate.py
+        language: python
+        pass_filenames: false
+        stages: [pre-push]

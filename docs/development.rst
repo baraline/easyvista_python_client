@@ -8,16 +8,50 @@ Setup
 
    pip install -e ".[dev]"
    pip install -e ".[docs]"
-   pre-commit install
+   pre-commit install --install-hooks
+
+``--install-hooks`` matters: one hook runs at **pre-push** rather than pre-commit
+(see :ref:`coverage`), and ``pre-commit install`` only writes the hook types the
+config declares. If you set the repository up before that hook existed, re-run
+the line above or your pushes are ungated.
 
 Tests
 -----
 
-The suite uses ``pytest`` with ``respx`` for HTTP mocking, and asserts a coverage floor.
+The suite uses ``pytest`` with ``respx`` for HTTP mocking.
 
 .. code-block:: bash
 
    pytest -m "not integration"
+
+.. _coverage:
+
+Coverage
+--------
+
+The floor is 95%, set by ``[tool.coverage.report] fail_under`` in
+``pyproject.toml``. It is measured on ``easyvista_python_client`` with two things
+excluded: the test modules, which live inside the package and would otherwise
+weigh thousands of lines of always-executed test code against the source, and
+the generated ``_sync/`` modules, which are a token transform of ``_async/`` and
+would score the same logic twice behind a doubled denominator (see
+:ref:`the generated sync client <generated-sync-client>`).
+
+``--cov`` is **not** in ``addopts``, so a plain or single-file ``pytest`` run
+neither measures nor gates coverage. Reproduce what CI asserts with:
+
+.. code-block:: bash
+
+   pytest -m "not integration" --cov=easyvista_python_client --cov-report=term-missing --cov-fail-under=95
+
+Add ``--cov-report=html`` for a browsable report under ``htmlcov/``. The gate is
+enforced in two places: the ``coverage`` job in ``.github/workflows/ci.yml``,
+which also uploads ``coverage.xml`` to Codecov, and the ``pytest-coverage``
+pre-push hook, which runs ``scripts/run_coverage_gate.py``. That script locates
+the project's interpreter itself -- preferring ``.venv``, then ``VIRTUAL_ENV`` --
+so ``git push`` gates correctly whether or not the virtualenv is activated. If it
+cannot find an interpreter with the dev dependencies installed it says so and
+fails rather than passing silently.
 
 Linting and type-checking
 --------------------------
@@ -56,6 +90,8 @@ Building the docs
 .. code-block:: bash
 
    sphinx-build -b html -W docs docs/_build/html
+
+.. _generated-sync-client:
 
 The generated sync client
 -------------------------

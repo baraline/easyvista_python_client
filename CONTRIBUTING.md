@@ -28,12 +28,33 @@ python -m ruff check .
 python -m mypy easyvista_python_client
 ```
 
-Coverage is enforced at 95% and `--cov` is always on via `addopts`, so a
-single-file run needs `--no-cov` to avoid a spurious under-coverage failure:
+A single-file run needs no extra flags — `--cov` is not in `addopts`:
 
 ```bash
-python -m pytest easyvista_python_client/tests/test_client.py --no-cov
+python -m pytest easyvista_python_client/tests/test_pagination.py
 ```
+
+## Coverage
+
+The floor is 95% (`[tool.coverage.report] fail_under`), measured on
+`easyvista_python_client` minus the tests and the generated `_sync/` modules —
+those are a token transform of `_async/`, so counting both would score the same
+logic twice. Reproduce what CI's `coverage` job asserts:
+
+```bash
+python -m pytest -m "not integration" --cov=easyvista_python_client --cov-report=term-missing --cov-fail-under=95
+```
+
+Add `--cov-report=html` for a browsable report in `htmlcov/`. The same gate runs
+as a **pre-push** hook, so `pre-commit install` now needs to wire up two hook
+types:
+
+```bash
+python -m pre_commit install --install-hooks
+```
+
+If you set up the repo before that hook existed, re-run the line above or your
+pushes are ungated.
 
 ## Documentation build
 
@@ -89,6 +110,4 @@ release that bumps `__version__` must bump every skill's `metadata.version`.
 `scripts/tests/test_skills_contract.py` is the gate: it parses every `SKILL.md`
 and asserts each symbol, client method, keyword argument and model field the
 skill names still exists on the public surface. Run it with
-`pytest scripts/tests/test_skills_contract.py --no-cov` (see the coverage note
-above — a single-file run without `--no-cov` fails the 95% gate even when
-every test passes).
+`pytest scripts/tests/test_skills_contract.py`.

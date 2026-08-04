@@ -178,17 +178,35 @@ exclude = ["tests/", "integration_tests/", "testing/"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["easyvista_python_client", "scripts", "integration_tests"]
-addopts = "--cov=easyvista_python_client --cov-report=term-missing"
-# --strict-markers / --strict-config are passed on CI's command line, NOT here:
-# in `addopts` pytest 9 silently ignores them (they are parsed as ini overrides,
-# which are harvested before addopts is prepended), so they would look like a
-# gate while doing nothing. Verified: a typo'd marker errors from the command
-# line and passes with a warning from addopts.
+# `addopts` is deliberately absent, and both halves of that are load-bearing.
+#
+# `--cov` used to live here, which made coverage always-on: a single-module run
+# measured the whole package, saw ~15%, and failed the fail_under gate below
+# even with every test passing -- so the documented workflow was to remember
+# `--no-cov`, and a real regression and a scoped run produced the same red. The
+# gate is now asserted where a full suite actually runs: the `coverage` job in
+# .github/workflows/ci.yml and the pre-push hook in .pre-commit-config.yaml,
+# both of which pass --cov explicitly. Matches glpi_python_client. Putting
+# --cov back here reintroduces the --no-cov dance; add flags to those two
+# call sites instead.
+#
+# --strict-markers / --strict-config are passed on CI's command line for a
+# different reason: in `addopts` pytest 9 silently ignores them (they are
+# parsed as ini overrides, which are harvested before addopts is prepended),
+# so they would look like a gate while doing nothing. Verified: a typo'd
+# marker errors from the command line and passes with a warning from addopts.
 markers = [
     "integration: live tests against a real EasyVista instance (skipped unless env configured)",
 ]
 
 [tool.coverage.run]
+branch = false
+# Declared here as well as on the `--cov=easyvista_python_client` command lines
+# in CI and the pre-push hook, so `coverage run -m pytest` and a bare
+# `pytest --cov` measure the same tree rather than only the files that happened
+# to get imported. Belt and braces, not a duplicate: the flag sets the source
+# for pytest-cov runs, this sets it for every other entry point.
+source = ["easyvista_python_client"]
 # Test modules now live inside the package, so `--cov=easyvista_python_client`
 # would measure them too. They execute end to end and report ~100%, which would
 # weigh ~6,700 lines of test code against ~2,700 lines of source and dilute the
@@ -223,4 +241,26 @@ omit = [
 ]
 
 [tool.coverage.report]
+show_missing = true
+# Explicit rather than left to the default: a fully-covered file carries the
+# information that it IS fully covered, and collapsing those rows makes the
+# report's shape depend on how good it is, so two runs are no longer diffable.
+skip_covered = false
 fail_under = 95
+# Replaces coverage's built-in exclusion list rather than adding to it, so
+# `pragma: no cover` has to be restated here -- dropping it would silently
+# re-measure every line anyone has deliberately marked. Mirrors
+# glpi_python_client.
+#
+# The other two entries are pre-emptive, not repairs: as of this commit the
+# source contains no `if TYPE_CHECKING:` block and no `raise
+# NotImplementedError`, and adding them left the total at 1272 statements /
+# 99.21% exactly. They are here so the first one written does not read as a
+# coverage gap -- a TYPE_CHECKING body exists for mypy and cannot execute, and
+# an unimplemented-stub line is not a line anyone can test. `if TYPE_CHECKING:`
+# excludes the guard and its whole body.
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

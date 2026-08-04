@@ -41,6 +41,50 @@ jobs:
       # where pytest 9 silently ignores them.
       - run: pytest -m "not integration" --strict-markers --strict-config
 
+  coverage:
+    # The 95% floor in `[tool.coverage.report] fail_under` used to be enforced
+    # only because `--cov` sat in pytest's `addopts`, which made every run --
+    # including a one-file local run -- measure the whole package and fail. Now
+    # that addopts is clean, THIS job is where the floor is actually asserted;
+    # delete it and fail_under becomes a number nothing reads. `needs: test`
+    # keeps the failure legible: a broken test reports as a broken test on five
+    # Python versions, not as an under-coverage number here.
+    #
+    # One version, not the matrix: coverage of this package does not vary by
+    # interpreter (there is no version-gated code), so five runs would produce
+    # five identical percentages, five uploads, and a Codecov report whose
+    # totals depend on which one landed last.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      # --cov-fail-under duplicates `[tool.coverage.report] fail_under` on
+      # purpose: the flag is what a reader of this file can see is enforced,
+      # and it also survives someone commenting the config value out.
+      - run: >-
+          pytest -m "not integration"
+          --strict-markers --strict-config
+          --cov=easyvista_python_client
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=95
+      # `fail_ci_if_error: false` so a Codecov outage, or this repository not
+      # being wired up on codecov.io yet, cannot turn a green suite red. The
+      # gate that must not be skippable is --cov-fail-under above, which runs
+      # before this and needs no third party. Without a CODECOV_TOKEN secret
+      # the upload simply no-ops and the README badge reads "unknown".
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
   build-audit:
     # Before the test co-location refactor, "tests never ship" was structural:
     # the unit tests lived outside `packages = ["easyvista_python_client"]`, so
