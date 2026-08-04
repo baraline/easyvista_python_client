@@ -796,29 +796,61 @@ def test_title_is_an_exactly_searchable_column(
 def test_title_search_requires_the_fields_projection_to_return_a_value(
     live_client: EasyvistaClient, rich_ticket
 ):
-    """The projection ``_adopt_by_title`` sends is what makes it satisfiable.
+    """Confirms the ``fields=`` projection ``_adopt_by_title`` sends actually works.
+
+    This test sends the exact same projection ``_adopt_by_title`` uses --
+    ``fields=["RFC_NUMBER", "TITLE"]`` -- against a live search, and proves the
+    projected TITLE comes back populated and byte-equal to the title this suite
+    authored. It does **not** call ``_adopt_by_title`` itself: the projection is
+    a hardcoded literal here, built independently of the helper, so if the
+    projection were ever stripped from ``_adopt_by_title`` this test would keep
+    passing regardless -- it says nothing about the helper's own call. What
+    guards *that* is ``_StubSearchClient`` in ``test_fixture_helpers.py``, which
+    records the ``fields=`` it was actually called with; the offline
+    ``_adopt_by_title``/``_create_tracked`` tests assert against that recorded
+    value, which is what reddens if the helper's projection ever drifts from
+    this one.
 
     ``test_title_is_an_exactly_searchable_column`` above proves the filter is
     honoured, but it never reads the returned row's TITLE back -- and that gap
     hid a real defect: the default list projection returns the TITLE key present
     but EMPTY (measured live: 400 tickets scanned via a plain ``search_tickets``,
-    zero with a populated title). ``_adopt_by_title``'s ``row.title == title``
-    byte-equal check was therefore unsatisfiable against this instance until it
-    started requesting ``fields=["RFC_NUMBER", "TITLE"]`` explicitly -- every
-    inconclusive create fell through to the "not the intended one" branch and
-    stopped loudly rather than adopting. Fails safe, but the lost-response-after-
-    commit orphan path this whole helper exists to close did not actually work.
-
-    This test sends the exact same projection ``_adopt_by_title`` does and checks
-    what that test above did not: that the returned row's TITLE is populated and
-    byte-equal to the queried value, not merely that the row count is right.
+    zero with a populated title). Without this projection, ``_adopt_by_title``'s
+    ``row.title == title`` byte-equal check was therefore unsatisfiable against
+    this instance -- every inconclusive create fell through to the "not the
+    intended one" branch and stopped loudly rather than adopting. Fails safe, but
+    the lost-response-after-commit orphan path this whole helper exists to close
+    did not actually work.
 
     Placed after ``test_title_is_an_exactly_searchable_column`` (itself already
     last, deliberately, per that test's own docstring): both instantiate
     ``rich_ticket``, which is session-scoped, so this reuses the same ticket
     rather than creating a second one, and both sort after every
     baseline-equality assertion in this module for the same reason that one does.
+
+    Also establishes a premise the honoured-search check below relies on:
+    ``build_search_result`` (``pagination.py``) falls back to ``len(records)``
+    when the server omits ``total_record_count``, so under a *projected* search
+    that fallback would make ``total == returned`` a tautology rather than
+    evidence of anything. The unprojected case is covered independently by
+    ``requests_baseline`` (its own fixture skips unless the server reports
+    ``total_record_count >= 2``); nothing established that a real count
+    survives ``fields=`` until the assertion below.
     """
+    # An unfiltered search under the SAME projection this test's filtered search
+    # uses. A real reported count, not a records-length fallback, is what makes
+    # the honoured-search check meaningful below. `>= 2`, never `> 0`: on this
+    # API an unhonoured condition also returns something other than zero (the
+    # whole table), so only a threshold this suite independently knows the
+    # unprojected count clears (see requests_baseline) actually proves the count
+    # is real rather than a coincidental single leftover row.
+    unfiltered = live_client.search_tickets(max_rows=1, fields=["RFC_NUMBER", "TITLE"])
+    assert unfiltered.total_record_count >= 2, (
+        "an unfiltered search under the fields= projection reported fewer than "
+        "2 total records -- counts do not reliably survive this projection, so "
+        "the honoured-search check below cannot be trusted"
+    )
+
     search = ev_equals_filter("TITLE", rich_ticket.title)
     assert search is not None, "the fixture title did not yield a filter"
     result = live_client.search_tickets(

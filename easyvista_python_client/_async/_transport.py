@@ -117,7 +117,9 @@ class BaseTransport:
         # reuses it verbatim -- so an unrecognized body prints wherever the
         # exception surfaces. The byte count keeps the diagnostic ("the server
         # said something we do not parse, and it was this big") without the
-        # content; `.ev_message` and `.ev_code` carry the parsed values.
+        # content; `.ev_message` and `.ev_code` carry the parsed values, and
+        # `.body` (below) carries the raw bytes themselves, for a caller with no
+        # other way to see what an unrecognized response actually said.
         detail = ev_message or (
             f"<{len(response.content)}-byte body with no recognized error key>"
         )
@@ -126,6 +128,7 @@ class BaseTransport:
             "status_code": status,
             "ev_code": ev_code,
             "ev_message": ev_message,
+            "body": response.content,
         }
         if status in (401, 403):
             raise EasyvistaAuthError(message, **kwargs)

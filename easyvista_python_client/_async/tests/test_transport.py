@@ -117,6 +117,46 @@ def test_finish_with_non_json_error_body():
     assert "21-byte body" in message
 
 
+def test_finish_with_non_ascii_error_body_counts_bytes_not_characters():
+    """The byte count is genuinely bytes, not ``len(response.text)`` in disguise.
+
+    "Internal Server Error" above is 21 characters *and* 21 UTF-8 bytes, so a
+    regression back to ``len(response.text)`` would still print "21-byte body"
+    there -- the two implementations are indistinguishable on an ASCII body.
+    21 accented "e" characters are not: each one is 2 bytes in UTF-8, so the
+    body is 42 bytes long while ``len(response.text)`` is 21. Verified below
+    rather than assumed.
+    """
+    text = "é" * 21
+    resp = httpx.Response(500, text=text)
+    assert len(resp.text) == 21
+    assert len(resp.content) == 42
+    with pytest.raises(EasyvistaServerError) as info:
+        _base().finish(resp)
+    message = str(info.value)
+    assert text not in message
+    assert "42-byte body" in message
+    assert "21-byte body" not in message
+
+
+def test_finish_attaches_the_raw_body_to_the_exception_without_printing_it():
+    """The body dropped from the message (P2) is not lost -- it moves to ``.body``.
+
+    A PyPI consumer hitting a response this client does not recognize (an
+    nginx HTML page, a WAF block page, a plain-text 503) has no other way to
+    see what the server actually said, now that it is no longer interpolated
+    into the message. Both halves matter together: ``.body`` without the
+    message staying clean would re-open the P2 hole this exists to close, and
+    a clean message without ``.body`` would make the bytes unrecoverable.
+    """
+    body = b"<html><body>502 Bad Gateway</body></html>"
+    resp = httpx.Response(502, content=body)
+    with pytest.raises(EasyvistaServerError) as info:
+        _base().finish(resp)
+    assert info.value.body == body
+    assert "502 Bad Gateway" not in str(info.value)
+
+
 def test_is_retryable_status():
     base = _base()
     assert base.is_retryable_status(503) is True

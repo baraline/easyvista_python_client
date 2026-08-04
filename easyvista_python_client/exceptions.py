@@ -13,11 +13,20 @@ class EasyvistaError(Exception):
         status_code: int | None = None,
         ev_code: str | None = None,
         ev_message: str | None = None,
+        body: bytes | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.ev_code = ev_code
         self.ev_message = ev_message
+        # The raw response body, for a caller that hit one the transport does
+        # not recognize (an nginx/WAF HTML page, a plain-text 5xx). The
+        # transport deliberately stopped interpolating it into `message` (P2:
+        # nothing redacts exception TEXT, so it would print wherever the
+        # exception surfaces), which would otherwise make it unrecoverable.
+        # NOT passed to `super().__init__`, so it never becomes part of
+        # `.args` -- that is what keeps it out of `str()`/`repr()`.
+        self.body = body
 
 
 class EasyvistaAuthError(EasyvistaError):

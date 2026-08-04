@@ -44,6 +44,7 @@ layers of that guarantee and why all three are needed.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import replace
@@ -160,6 +161,16 @@ CONSIGNE_SCAN_LIMIT = 50
 # at 10s). Non-idempotent POSTs deliberately do NOT: see live_write_client.
 LIVE_TIMEOUT = 30.0
 LIVE_MAX_RETRIES = 2
+
+# A create that timed out (LIVE_TIMEOUT) may still be in flight on the server --
+# the read timing out proves nothing about whether the write landed. Searching
+# for it immediately maximises the odds of observing a pre-commit state: the
+# search is honoured, finds nothing (honestly, at that instant), and licenses a
+# re-send. If the original request then commits microseconds or seconds later,
+# the result is two tickets sharing one nonce title, one of them an orphan
+# nothing will ever close. This delay narrows that window; it does not close
+# it -- see the residual documented on `_create_tracked` and `_adopt_by_title`.
+_RECONCILE_DELAY = 15.0
 
 
 def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
@@ -321,8 +332,11 @@ def live_write_config() -> dict[str, str]:
     return resolved
 
 
-# Three attempts, and a re-send happens ONLY after a search has proved the
-# previous attempt did not commit -- so N attempts still yield at most one ticket.
+# Three attempts, and a re-send is licensed ONLY by an honoured, empty
+# reconciliation search taken _RECONCILE_DELAY after the timeout. That is
+# evidence the previous attempt had not committed AS OF that search -- not
+# proof it never will. A residual race remains: see `_create_tracked` and
+# `_adopt_by_title` for the orphan it can still produce.
 _CREATE_ATTEMPTS = 3
 
 
@@ -415,11 +429,11 @@ def _adopt_by_title(search_client: EasyvistaClient, title: str) -> str | None:
 
 
 def _create_tracked(
-    write_client: EasyvistaClient,
-    search_client: EasyvistaClient,
     cfg: dict[str, str],
     tracked: list[str],
     *,
+    write_client: EasyvistaClient,
+    search_client: EasyvistaClient,
     title: str,
     description: str,
 ) -> str:
@@ -429,14 +443,25 @@ def _create_tracked(
     order asserted on the RFC first, so a create that committed server-side but
     returned no usable body left a ticket nothing would ever close.
 
+    ``write_client`` and ``search_client`` are keyword-only on purpose: both
+    parameters are ``EasyvistaClient``, so a positional swap type-checks and
+    passes review, and would route every create through the *retrying* client
+    -- reintroducing the duplicate-POST hazard this whole helper exists to
+    close. A keyword makes the swap a name, not a position, and is un-writable
+    by accident.
+
     ``write_client`` must be the zero-retry client. This function does its own
-    retrying, and it re-sends only after a search has *proved* the previous attempt
-    did not commit -- so at most one ticket exists however many attempts are made.
-    A deterministic rejection (``EasyvistaValidationError``, HTTP 590) is not a
+    retrying, and a re-send is licensed only by an *honoured, empty* result from
+    ``_adopt_by_title`` taken ``_RECONCILE_DELAY`` after the timeout -- that is
+    evidence the previous attempt had not committed AS OF that search, not proof
+    it never will. A create that commits AFTER the search observed its absence
+    still yields an orphan: a real, uncleaned ticket with a byte-identical nonce
+    title, indistinguishable server-side from the one this function goes on to
+    track. ``_RECONCILE_DELAY`` narrows that window; it does not close it. A
+    deterministic rejection (``EasyvistaValidationError``, HTTP 590) is not a
     transient and propagates untouched.
     """
     for _attempt in range(_CREATE_ATTEMPTS):
-        rfc: str | None = None
         try:
             ticket = write_client.create_ticket(
                 PostRequest(
@@ -461,12 +486,18 @@ def _create_tracked(
                 tracked.append(rfc)
                 return rfc
 
+        # Give a create that timed out (LIVE_TIMEOUT) a chance to actually land
+        # before asking whether it did -- see _RECONCILE_DELAY. Costs nothing on
+        # a green run: this line is only reached after a create has already
+        # failed, so the 30s timeout is already sunk.
+        time.sleep(_RECONCILE_DELAY)
         adopted = _adopt_by_title(search_client, title)
         if adopted is not None:
             tracked.append(adopted)
             return adopted
-        # The search was honoured and found nothing, so nothing committed and the
-        # next attempt cannot duplicate.
+        # The search was honoured and found nothing AS OF THIS MOMENT. It does
+        # not prove the earlier attempt will never commit -- see the docstring's
+        # residual-race note -- only that re-sending now is the intended trade.
 
     raise AssertionError(
         f"create_ticket produced no usable ticket in {_CREATE_ATTEMPTS} attempts"
@@ -520,18 +551,18 @@ def probe_tickets(
     tracked: list[str] = []
     try:
         rfc_control = _create_tracked(
-            live_write_client,
-            live_client,
             cfg,
             tracked,
+            write_client=live_write_client,
+            search_client=live_client,
             title=f"EVCLI{nonce}A",
             description=description,
         )
         rfc_quoted = _create_tracked(
-            live_write_client,
-            live_client,
             cfg,
             tracked,
+            write_client=live_write_client,
+            search_client=live_client,
             title=f'EVCLI{nonce}B 22" monitor',
             description=description,
         )
@@ -601,10 +632,10 @@ def rich_ticket(
     tracked: list[str] = []
     try:
         rfc = _create_tracked(
-            live_write_client,
-            live_client,
             cfg,
             tracked,
+            write_client=live_write_client,
+            search_client=live_client,
             title=title,
             description=description,
         )
@@ -629,10 +660,10 @@ def ticket_factory(
     def _make() -> str:
         nonce = uuid.uuid4().hex[:10].upper()
         return _create_tracked(
-            live_write_client,
-            live_client,
             cfg,
             tracked,
+            write_client=live_write_client,
+            search_client=live_client,
             title=f"EVCLI{nonce}",
             description=f"EVCLI{nonce} capability-suite ticket; safe to close",
         )

@@ -18,6 +18,7 @@ from easyvista_python_client import (
     EasyvistaNotFound,
     EasyvistaValidationError,
 )
+from integration_tests import conftest as conftest_module
 from integration_tests.conftest import (
     _adopt_by_title,
     _close_tracked,
@@ -25,6 +26,22 @@ from integration_tests.conftest import (
     _InconclusiveCreate,
     _is_per_record_gap,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_reconcile_delay(monkeypatch):
+    """Keep this offline module fast: real timing is a live-only concern.
+
+    ``_create_tracked`` sleeps ``_RECONCILE_DELAY`` seconds (15s live) before
+    every reconciliation search, to narrow the race documented on that
+    function and on ``conftest._RECONCILE_DELAY``. None of the stubs below
+    have a clock to race, so paying that delay here would only slow this
+    module down for nothing -- it is neutralized for every test in this file.
+    ``test_create_tracked_sleeps_before_reconciling_a_transient`` checks that
+    the call itself still happens, independent of what this fixture sets the
+    constant to.
+    """
+    monkeypatch.setattr(conftest_module, "_RECONCILE_DELAY", 0)
 
 
 def test_403_is_a_per_record_gap():
@@ -105,29 +122,37 @@ class _StubResult:
 
 
 class _StubSearchClient:
-    """Also asserts the reconciliation search's ``fields=`` projection.
+    """Records the reconciliation search's ``fields=`` projection for later assertion.
 
     ``_adopt_by_title`` must always request ``["RFC_NUMBER", "TITLE"]``: the
     default list projection returns TITLE present but EMPTY (measured live), so
     without this projection the byte-equal comparison against the queried title
-    can never match and every reconciliation is inconclusive forever. Asserting
-    it here, rather than merely accepting whatever is passed, turns a future
-    accidental removal of the projection into an immediate offline failure on
-    every adoption test instead of a silent revert to permanently-dead adoption
-    that only a live run would ever surface.
+    can never match and every reconciliation is inconclusive forever.
+
+    Deliberately does NOT assert inline: ``_adopt_by_title`` wraps this call in
+    ``except Exception: ... raise _InconclusiveCreate(...) from None``, which
+    would launder an ``AssertionError`` raised from in here into
+    ``_InconclusiveCreate("the reconciliation search itself failed
+    (AssertionError)")`` -- destroying the guard's message and, worse, doing so
+    silently for every test that expects a *raise* (it would still raise, just
+    for the wrong reason, and go undetected). Recording ``fields`` and letting
+    the caller assert on it AFTER the call keeps the signal intact either way:
+    a value-expecting test's assertion on the return still fails clearly, and a
+    raise-expecting test can additionally assert on ``.fields`` to confirm the
+    raise was not itself the thing that went missing. Removing the projection
+    from ``_adopt_by_title`` still reddens every test that checks ``.fields``,
+    unambiguously.
     """
 
     def __init__(self, result: object = None, error: Exception | None = None) -> None:
         self._result = result
         self._error = error
         self.calls = 0
+        self.fields: list[str] | None = None
 
     def search_tickets(self, *, search=None, max_rows=None, fields=None):
         self.calls += 1
-        assert fields == ["RFC_NUMBER", "TITLE"], (
-            "the reconciliation search must always project RFC_NUMBER and TITLE "
-            f"explicitly (got fields={fields!r}) -- see the class docstring"
-        )
+        self.fields = fields
         if self._error is not None:
             raise self._error
         return self._result
@@ -136,12 +161,14 @@ class _StubSearchClient:
 def test_adopt_returns_the_rfc_of_an_exact_single_match():
     client = _StubSearchClient(_StubResult([_StubRow("EVCLIABCRICH", "I1")]))
     assert _adopt_by_title(client, "EVCLIABCRICH") == "I1"
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_adopt_returns_none_when_the_search_is_honoured_and_empty():
     """An authoritative empty is the ONLY licence to re-send the create."""
     client = _StubSearchClient(_StubResult([]))
     assert _adopt_by_title(client, "EVCLIABCRICH") is None
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_adopt_raises_when_the_condition_was_dropped():
@@ -158,6 +185,7 @@ def test_adopt_raises_when_the_condition_was_dropped():
     )
     with pytest.raises(_InconclusiveCreate):
         _adopt_by_title(client, "EVCLIABCRICH")
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_adopt_raises_when_the_reported_total_disagrees_with_an_empty_page():
@@ -175,6 +203,7 @@ def test_adopt_raises_when_the_reported_total_disagrees_with_an_empty_page():
     client = _StubSearchClient(_StubResult([], total=3843))
     with pytest.raises(_InconclusiveCreate):
         _adopt_by_title(client, "EVCLIABCRICH")
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_adopt_never_searches_an_unquotable_title():
@@ -213,6 +242,7 @@ def test_adopt_raises_when_the_search_itself_fails():
 
     assert info.value.__cause__ is None
     assert info.value.__suppress_context__ is True
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_adopt_raises_on_a_non_matching_row():
@@ -220,12 +250,14 @@ def test_adopt_raises_on_a_non_matching_row():
     client = _StubSearchClient(_StubResult([_StubRow("EVCLIOTHER", "I2")]))
     with pytest.raises(_InconclusiveCreate):
         _adopt_by_title(client, "EVCLIABCRICH")
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_adopt_raises_when_the_matched_row_has_no_rfc():
     client = _StubSearchClient(_StubResult([_StubRow("EVCLIABCRICH", None)]))
     with pytest.raises(_InconclusiveCreate):
         _adopt_by_title(client, "EVCLIABCRICH")
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_adopt_raises_when_two_rows_share_the_exact_title():
@@ -241,6 +273,7 @@ def test_adopt_raises_when_two_rows_share_the_exact_title():
     )
     with pytest.raises(_InconclusiveCreate):
         _adopt_by_title(client, "EVCLIABCRICH")
+    assert client.fields == ["RFC_NUMBER", "TITLE"]
 
 
 # --- the create helper: append-before-assert, and reconciliation on retry -----
@@ -282,7 +315,12 @@ def test_create_tracked_registers_the_rfc_and_does_not_search():
     tracked: list[str] = []
 
     rfc = _create_tracked(
-        write, search, _CFG, tracked, title="EVCLIAAA", description="d"
+        _CFG,
+        tracked,
+        write_client=write,
+        search_client=search,
+        title="EVCLIAAA",
+        description="d",
     )
 
     assert rfc == "I1"
@@ -297,12 +335,18 @@ def test_create_tracked_adopts_a_committed_ticket_with_no_rfc_in_the_body():
     tracked: list[str] = []
 
     rfc = _create_tracked(
-        write, search, _CFG, tracked, title="EVCLIAAA", description="d"
+        _CFG,
+        tracked,
+        write_client=write,
+        search_client=search,
+        title="EVCLIAAA",
+        description="d",
     )
 
     assert rfc == "I7"
     assert tracked == ["I7"], "an adopted ticket must be registered for cleanup"
     assert write.calls == 1, "nothing committed-and-found may be re-sent"
+    assert search.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_create_tracked_resends_only_after_an_authoritative_empty():
@@ -314,12 +358,62 @@ def test_create_tracked_resends_only_after_an_authoritative_empty():
     tracked: list[str] = []
 
     rfc = _create_tracked(
-        write, search, _CFG, tracked, title="EVCLIAAA", description="d"
+        _CFG,
+        tracked,
+        write_client=write,
+        search_client=search,
+        title="EVCLIAAA",
+        description="d",
     )
 
     assert rfc == "I2"
     assert tracked == ["I2"]
     assert write.calls == 2, "the second attempt should have been made"
+    assert search.fields == ["RFC_NUMBER", "TITLE"]
+
+
+def test_create_tracked_sleeps_before_reconciling_a_transient(monkeypatch):
+    """The reconciliation delay runs, and runs BEFORE the search, on every retry.
+
+    ``_no_reconcile_delay`` (module-scoped, autouse) keeps ``_RECONCILE_DELAY``
+    at 0 for the rest of this file so the suite stays fast -- but that also
+    means a removed ``time.sleep`` call would be invisible to timing alone.
+    This test spies on ``time.sleep`` directly and records call order against
+    the search, so it fails if the sleep is ever deleted or reordered to after
+    the search runs, regardless of what ``_RECONCILE_DELAY`` is set to.
+    """
+    order: list[str] = []
+
+    def fake_sleep(seconds: float) -> None:
+        order.append("sleep")
+        assert seconds == conftest_module._RECONCILE_DELAY
+
+    monkeypatch.setattr(conftest_module.time, "sleep", fake_sleep)
+
+    class _OrderRecordingSearchClient(_StubSearchClient):
+        def search_tickets(self, **kwargs):
+            order.append("search")
+            return super().search_tickets(**kwargs)
+
+    write = _StubWriteClient(
+        [EasyvistaConnectionError("connection failed"), _StubTicket("I2")]
+    )
+    search = _OrderRecordingSearchClient(_StubResult([]))
+    tracked: list[str] = []
+
+    rfc = _create_tracked(
+        _CFG,
+        tracked,
+        write_client=write,
+        search_client=search,
+        title="EVCLIAAA",
+        description="d",
+    )
+
+    assert rfc == "I2"
+    assert order == ["sleep", "search"], (
+        "the reconciliation delay must run, and must run before the search"
+    )
 
 
 def test_create_tracked_stops_when_reconciliation_is_inconclusive():
@@ -329,9 +423,17 @@ def test_create_tracked_stops_when_reconciliation_is_inconclusive():
     tracked: list[str] = []
 
     with pytest.raises(_InconclusiveCreate):
-        _create_tracked(write, search, _CFG, tracked, title="EVCLIAAA", description="d")
+        _create_tracked(
+            _CFG,
+            tracked,
+            write_client=write,
+            search_client=search,
+            title="EVCLIAAA",
+            description="d",
+        )
     assert write.calls == 1
     assert tracked == []
+    assert search.fields == ["RFC_NUMBER", "TITLE"]
 
 
 def test_create_tracked_does_not_absorb_a_validation_error():
@@ -340,16 +442,29 @@ def test_create_tracked_does_not_absorb_a_validation_error():
     search = _StubSearchClient(_StubResult([]))
 
     with pytest.raises(EasyvistaValidationError):
-        _create_tracked(write, search, _CFG, [], title="EVCLIAAA", description="d")
+        _create_tracked(
+            _CFG,
+            [],
+            write_client=write,
+            search_client=search,
+            title="EVCLIAAA",
+            description="d",
+        )
     assert write.calls == 1, "a validation error must not be retried"
+    assert search.calls == 0, (
+        "a deterministic rejection must not trigger reconciliation"
+    )
 
 
 def test_create_tracked_exhausts_all_attempts_then_stops():
-    """Pins the spec's headline constraint: N attempts, at most one ticket, ever.
+    """Pins the spec's attempt bound: exactly N attempts, then a loud stop.
 
     Three transients, each followed by an honoured-and-empty reconciliation --
     every attempt is licensed to re-send, and the helper uses all three before
-    giving up. Without this test, changing `_CREATE_ATTEMPTS`'s consumption (the
+    giving up. This does NOT establish "at most one ticket, ever" as an
+    absolute -- see ``_create_tracked``'s docstring for the residual race a
+    delayed commit can still produce -- only that the loop itself is bounded.
+    Without this test, changing `_CREATE_ATTEMPTS`'s consumption (the
     `range(_CREATE_ATTEMPTS)` bound) or swapping the terminal `raise
     AssertionError` for a silent `return None` (making the `-> str` annotation a
     lie) would break nothing else here.
@@ -359,10 +474,18 @@ def test_create_tracked_exhausts_all_attempts_then_stops():
     tracked: list[str] = []
 
     with pytest.raises(AssertionError):
-        _create_tracked(write, search, _CFG, tracked, title="EVCLIAAA", description="d")
+        _create_tracked(
+            _CFG,
+            tracked,
+            write_client=write,
+            search_client=search,
+            title="EVCLIAAA",
+            description="d",
+        )
 
     assert write.calls == 3
     assert tracked == []
+    assert search.fields == ["RFC_NUMBER", "TITLE"]
 
 
 class _StubCloseClient:

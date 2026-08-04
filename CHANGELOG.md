@@ -85,6 +85,17 @@ a deprecation policy will follow the 1.0 release.
   carries it; the note supplied as `PostAction.description` comes back through
   the action's `DESCRIPTION` Memo, which is reachable only via an item-level
   `GET actions/{id}`. Verified against a live instance.
+- **Every mapped exception's message no longer interpolates the raw HTTP response
+  body.** For a body this client does not recognize (an nginx or WAF HTML page, a
+  plain-text 503, any unmodelled shape), the message previously ended with that
+  body's literal text — which then surfaced verbatim wherever the exception was
+  rendered (`str(exc)`, a traceback, a test runner's failure summary), regardless
+  of what the body actually contained. The message now reports only the byte
+  count. **Added:** `EasyvistaError.body` (`bytes | None`) carries the raw
+  response body, so the content dropped from the message is not lost — it is the
+  only way left to retrieve an unrecognized body. `.status_code`, `.ev_code` and
+  `.ev_message` are unaffected: a *recognized* EasyVista error body (one with a
+  parseable `error`/`error_code` shape) reads exactly as it did before.
 
 ### Changed
 

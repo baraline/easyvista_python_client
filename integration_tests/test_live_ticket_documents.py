@@ -25,11 +25,12 @@ def _nonce() -> str:
 
 
 def _upload(
-    live_client: EasyvistaClient,
-    live_write_client: EasyvistaClient,
     rfc: str,
     suffix: str,
     payload: bytes,
+    *,
+    live_client: EasyvistaClient,
+    live_write_client: EasyvistaClient,
 ) -> Document:
     """Attach ``payload`` under a synthetic filename; return the listed record.
 
@@ -39,7 +40,10 @@ def _upload(
 
     The upload uses the ZERO-retry client. This function verifies by MEMBERSHIP,
     not by delta, so a duplicated upload would pass here silently -- which is
-    exactly why the POST must never be retried.
+    exactly why the POST must never be retried. ``live_client`` and
+    ``live_write_client`` are keyword-only: both are ``EasyvistaClient``, so a
+    positional swap would silently make the upload retryable, and the
+    membership check above would not catch it either.
     """
     filename = f"evcli-{_nonce()}{suffix}"
     live_write_client.add_document(rfc, filename=filename, content=payload)
@@ -56,7 +60,11 @@ def test_upload_appears_in_the_document_list(
 ):
     rfc = ticket_factory()
     document = _upload(
-        live_client, live_write_client, rfc, ".txt", b"capability-suite probe payload\n"
+        rfc,
+        ".txt",
+        b"capability-suite probe payload\n",
+        live_client=live_client,
+        live_write_client=live_write_client,
     )
     assert_populated(document.filename, "document filename")
 
@@ -66,7 +74,13 @@ def test_download_round_trips_text_bytes(
 ):
     rfc = ticket_factory()
     payload = f"EVCLI{_nonce()} capability-suite payload\n".encode()
-    document = _upload(live_client, live_write_client, rfc, ".txt", payload)
+    document = _upload(
+        rfc,
+        ".txt",
+        payload,
+        live_client=live_client,
+        live_write_client=live_write_client,
+    )
     # Bound first: an inline `assert live_client.download_document(document)
     # == payload` makes the rewriter print the call's arguments, and `document`
     # is a server-returned extra="allow" record, not a value this module
@@ -83,7 +97,13 @@ def test_download_round_trips_non_utf8_bytes(
     # and re-encodes as text, this is what catches it.
     rfc = ticket_factory()
     payload = bytes(range(256)) + b"\xff\xfe\x00\x01"
-    document = _upload(live_client, live_write_client, rfc, ".bin", payload)
+    document = _upload(
+        rfc,
+        ".bin",
+        payload,
+        live_client=live_client,
+        live_write_client=live_write_client,
+    )
     round_trips = live_client.download_document(document) == payload
     assert round_trips, "downloaded bytes differ from the uploaded binary payload"
 
@@ -96,7 +116,11 @@ def test_document_identifier_fields_are_present(
     # half it lacks rather than failing (P1).
     rfc = ticket_factory()
     document = _upload(
-        live_client, live_write_client, rfc, ".txt", b"identifier probe\n"
+        rfc,
+        ".txt",
+        b"identifier probe\n",
+        live_client=live_client,
+        live_write_client=live_write_client,
     )
     require_field(document, "DOCUMENT_ID")
     require_field(document, "DDL_HREF")
@@ -106,7 +130,13 @@ def test_documents_reach_the_ticket_context(
     live_client: EasyvistaClient, live_write_client: EasyvistaClient, ticket_factory
 ):
     rfc = ticket_factory()
-    document = _upload(live_client, live_write_client, rfc, ".txt", b"context probe\n")
+    document = _upload(
+        rfc,
+        ".txt",
+        b"context probe\n",
+        live_client=live_client,
+        live_write_client=live_write_client,
+    )
     context = live_client.get_ticket_context(rfc)
     assert any(d.filename == document.filename for d in context.documents), (
         "the uploaded attachment is missing from get_ticket_context().documents"
