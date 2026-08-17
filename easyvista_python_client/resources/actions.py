@@ -8,7 +8,7 @@ engine, so it stays a small bespoke override alongside the ``ACTIONS`` descripto
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from .._transport import RequestSpec
@@ -37,7 +37,7 @@ def build_create_action(
 
 
 def build_list_actions(
-    rfc_number: str,
+    rfc_number: str, *, fields: Iterable[str] | str | None = None
 ) -> tuple[RequestSpec, Callable[[Any], list[Action]]]:
     # Actions are listed via the TOP-LEVEL /actions resource filtered by the
     # request number, not a nested requests/{rfc}/actions path (which the API
@@ -46,10 +46,17 @@ def build_list_actions(
     # so a raw value could append conditions and list another ticket's actions. A
     # blank one must raise too — ev_equals_filter returns None for blank input, and
     # search=None would list every action just as surely.
+    #
+    # ``fields`` is honoured by this endpoint and grants every scalar requested
+    # (verified live 2026-08-17), which is what lets a caller read every action's
+    # timestamps and author in ONE request instead of an item fetch per action.
+    # Two limits, both silent: the memo bodies (``DESCRIPTION``, ``COMMENT``)
+    # come back as HREF objects under any projection — the text is never inlined
+    # — and ``fields=*`` is NOT a wildcard: it silently reduces to ``ACTION_ID``.
     search = ev_equals_filter("REQUEST.RFC_NUMBER", rfc_number)
     if search is None:
         raise ValueError("rfc_number is required to list a ticket's actions")
-    spec, parse_search = build_search(ACTIONS, search=search)
+    spec, parse_search = build_search(ACTIONS, search=search, fields=fields)
 
     def parse(data: Any) -> list[Action]:
         return parse_search(data).records

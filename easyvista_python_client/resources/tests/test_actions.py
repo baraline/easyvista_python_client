@@ -2,7 +2,10 @@ import pytest
 
 from easyvista_python_client.models.action import Action, PostAction
 from easyvista_python_client.resources import actions as a
-from easyvista_python_client.resources.actions import build_get_action
+from easyvista_python_client.resources.actions import (
+    build_get_action,
+    build_list_actions,
+)
 
 
 def test_action_accepts_object_action_type():
@@ -67,6 +70,26 @@ def test_build_list_actions_rejects_blank_rfc(rfc):
 def test_build_list_actions_filters_by_rfc():
     spec, _ = a.build_list_actions("I240101_0001")
     assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'
+
+
+def test_list_actions_passes_a_fields_projection_through():
+    """EV-R3: the projection is what makes comment metadata 1 request, not N."""
+    spec, _parse = build_list_actions(
+        "I240101_0001", fields=["ACTION_ID", "CREATION_DATE_UT", "LAST_UPDATE"]
+    )
+    assert spec.params["fields"] == "ACTION_ID,CREATION_DATE_UT,LAST_UPDATE"
+    assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'
+
+
+def test_list_actions_accepts_a_bare_string_projection():
+    spec, _parse = build_list_actions("I240101_0001", fields="ACTION_ID,LAST_UPDATE")
+    assert spec.params["fields"] == "ACTION_ID,LAST_UPDATE"
+
+
+def test_list_actions_omits_fields_when_not_requested():
+    """Absent, not empty: `fields=` with no value is not the same request."""
+    spec, _parse = build_list_actions("I240101_0001")
+    assert "fields" not in spec.params
 
 
 def test_build_get_action_targets_the_top_level_path():

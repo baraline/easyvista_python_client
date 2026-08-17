@@ -143,6 +143,21 @@ def test_create_and_list_actions(config):
 
 
 @respx.mock
+def test_list_actions_forwards_a_fields_projection(config):
+    """The client must pass fields= through, not just accept it.
+
+    EV-R3: fields= is what turns comment metadata into one request per ticket
+    instead of one request per action.
+    """
+    route = respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    with EasyvistaClient(config) as client:
+        client.list_actions("I240101_0001", fields=["ACTION_ID", "LAST_UPDATE"])
+    assert route.calls.last.request.url.params["fields"] == "ACTION_ID,LAST_UPDATE"
+
+
+@respx.mock
 def test_get_action_fetches_the_item_level_record(config):
     respx.get(f"{ROOT}/actions/52990").mock(
         return_value=httpx.Response(

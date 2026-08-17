@@ -10,7 +10,7 @@ claim that holds on only one of them.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Iterable, Sequence
 from datetime import datetime
 
 from easyvista_python_client._sync._concurrency import Semaphore, settle
@@ -246,8 +246,29 @@ class EasyvistaClient:
         spec, parse = actions_res.build_create_action(rfc_number, action)
         return parse(self._transport.send(spec))
 
-    def list_actions(self, rfc_number: str) -> list[Action]:
-        spec, parse = actions_res.build_list_actions(rfc_number)
+    def list_actions(
+        self, rfc_number: str, *, fields: Iterable[str] | str | None = None
+    ) -> list[Action]:
+        """List a ticket's actions.
+
+        The default projection is slim: it carries ``ACTION_ID``,
+        ``ACTION_LABEL_FR``, ``ACTION_NUMBER``, ``DONE_BY_ID`` and
+        ``EXPECTED_START_DATE_UT`` but **no** ``CREATION_DATE_UT`` or
+        ``LAST_UPDATE``. Pass ``fields`` to project them onto the list and read
+        every action's timestamps and author in one request rather than one
+        item fetch each::
+
+            actions = client.list_actions(
+                rfc,
+                fields=["ACTION_ID", "ACTION_TYPE_ID", "CREATION_DATE_UT",
+                        "LAST_UPDATE", "DONE_BY_ID"],
+            )
+
+        The note text is never projectable — ``DESCRIPTION`` and ``COMMENT``
+        are Memo sub-resources and come back as HREF objects under every
+        projection, so a body still costs one :meth:`resolve_memo` per action.
+        """
+        spec, parse = actions_res.build_list_actions(rfc_number, fields=fields)
         return parse(self._transport.send(spec))
 
     def get_action(self, action_id: str | int) -> Action:
