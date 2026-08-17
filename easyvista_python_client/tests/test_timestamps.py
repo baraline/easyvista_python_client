@@ -24,7 +24,7 @@ def test_parses_the_live_format_with_offset_and_milliseconds():
 
 
 def test_parsed_value_is_always_aware():
-    """ChangedRef.updated_at requires an aware datetime; a naive one is a bug."""
+    """Action.updated_at requires an aware datetime; a naive one is a bug."""
     assert parse_ev_datetime("2026-08-17T15:40:41.610+02:00").tzinfo is not None
 
 

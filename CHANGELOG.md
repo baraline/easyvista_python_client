@@ -111,11 +111,18 @@ a deprecation policy will follow the 1.0 release.
   unverified. Migration: drop your own parsing; to rebuild a search literal
   use `format_ev_datetime(value)`, or pass the `datetime` straight to
   `ev_since_filter`.
-  **Scope relative to the last release (0.1.0):** only `Employee.last_update`
-  is a genuine break. The six `Request` fields above were themselves first
-  declared during this same unreleased cycle (see `Added`), so they never
-  shipped as `str` and this retyping breaks nothing a released version
-  depended on.
+  **Scope note — the `0.1.0` boundary is ambiguous, read both.** Relative to
+  the `## [0.1.0] - 2026-07-15` release **commit** (`6df6a75`), only
+  `Employee.last_update` is a pre-existing field — the six `Request` fields
+  above were themselves first declared later, during this same unreleased
+  cycle (see `Added`), so under that reading only one field is retyped out
+  from under a shipped release. But the `0.1.0` **git tag** currently resolves
+  to a later commit (`3216a33`, 2026-08-04, ~150 commits after the release
+  commit), at which all six `Request` fields and `Employee.last_update` were
+  already declared as `str | None`. Anyone who installed or pinned against the
+  `0.1.0` tag therefore sees **all seven** fields change type, not one — check
+  which commit your `0.1.0` actually resolves to before assuming the narrower
+  case.
 - **Documentation correction:** the `search` operator `~` was documented as
   exact-match-only, identical to `:`. Measured live, `~` **is** a pattern
   operator — it needs an explicit wildcard (`*` or `%`, both work identically)

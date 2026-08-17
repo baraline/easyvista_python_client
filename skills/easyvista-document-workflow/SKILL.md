@@ -1,6 +1,6 @@
 ---
 name: easyvista-document-workflow
-description: "Attach, list and download files on an EasyVista ticket with easyvista_python_client — add_document, list_documents and download_document with the Document model. Use for ticket attachments, uploading evidence or logs to a request, or fetching an attachment's bytes."
+description: "Attach, list, download and delete files on an EasyVista ticket with easyvista_python_client — add_document, list_documents, download_document and delete_document with the Document model. Use for ticket attachments, uploading evidence or logs to a request, fetching an attachment's bytes, or removing one."
 license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the documents sub-resource."
 metadata:
@@ -13,10 +13,10 @@ metadata:
 > methods — the method names and arguments are identical. See
 > `easyvista-client-setup`.
 
-Documents are attachments on a ticket. Three methods: `add_document(rfc,
-filename=, content=)`, `list_documents(rfc)`, `download_document(document)`.
-All are ticket-scoped — there is no standalone document resource on this
-client.
+Documents are attachments on a ticket. Four methods: `add_document(rfc,
+filename=, content=)`, `list_documents(rfc)`, `download_document(document)`
+and `delete_document(rfc, document_id)`. All are ticket-scoped — there is no
+standalone document resource on this client.
 
 ## Procedure
 
@@ -26,6 +26,8 @@ client.
 3. Download with `download_document(document)` → `bytes`. Pass the `Document`
    from the list, or a raw href/path.
 4. Write the bytes yourself; the client does not touch the filesystem.
+5. Remove an attachment with `delete_document(rfc, document.document_id)`. It
+   returns nothing (the API answers with an empty body) — re-list to confirm.
 
 ## The Document model
 
@@ -76,6 +78,17 @@ with EasyvistaClient.from_env() as client:
         Path(document.filename or "attachment.bin").write_bytes(payload)
 ```
 
+```python
+from easyvista_python_client import EasyvistaClient
+
+with EasyvistaClient.from_env() as client:
+    rfc = "YOUR_RFC_NUMBER"
+    documents = client.list_documents(rfc)
+    # DELETE requests/{rfc}/documents/{document_id} -- nested on the ticket,
+    # like every other document operation. Returns nothing on success.
+    client.delete_document(rfc, documents[0].document_id)
+```
+
 ## Gotchas
 
 - `content` must be `bytes`. Read files in binary mode.
@@ -93,4 +106,8 @@ with EasyvistaClient.from_env() as client:
   path reuses the same error mapping and retry policy as the JSON one.
 - `filename` is derived, not always sent by the API. Fall back to a literal
   name before writing to disk.
-- There is no delete-document method on this client.
+- `delete_document(rfc, document_id)` is **ticket-scoped**: it calls the
+  nested `DELETE requests/{rfc}/documents/{document_id}`. Both identifiers
+  must be non-blank — a blank one would silently address the collection
+  rather than one item, which `delete_document` refuses with `ValueError`
+  before sending anything.

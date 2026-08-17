@@ -66,7 +66,10 @@ deployment needs before you build a payload for it.
 4. Call `create_ticket(ticket)`. It returns a `Request` whose `rfc_number` is
    usable immediately — see the first Gotcha for why.
 5. To set body text you can read back afterwards, follow the create with
-   `update_ticket(rfc, RequestUpdate(description=...))`.
+   `update_ticket(rfc, RequestUpdate(description=...))`. `RequestUpdate` also
+   accepts `title`, `status_id`, `impact_id`, `owner_id` and
+   `external_reference` (capped at 50 characters) after create — see the
+   Gotchas for what it deliberately omits.
 6. Read one ticket with `get_ticket(rfc)`; search a page with
    `search_tickets(...)`, which returns a `SearchResult` carrying `.records`,
    `.record_count` (this page) and `.total_record_count` (every match on the
@@ -107,6 +110,21 @@ with EasyvistaClient.from_env() as client:
     updated = client.update_ticket(
         "YOUR_RFC_NUMBER",
         RequestUpdate(title="Printer offline - third floor", description="Confirmed offline at 09:15."),
+    )
+    print(updated.rfc_number)
+```
+
+```python
+from easyvista_python_client import EasyvistaClient, RequestUpdate
+
+with EasyvistaClient.from_env() as client:
+    # impact_id, owner_id and external_reference can all be changed after
+    # create, not only set at create time. external_reference is capped at
+    # 50 characters -- 51 raises pydantic's own ValidationError locally,
+    # before any request is sent.
+    updated = client.update_ticket(
+        "YOUR_RFC_NUMBER",
+        RequestUpdate(impact_id=1, owner_id=1, external_reference="TICKET-REF-0001"),
     )
     print(updated.rfc_number)
 ```
@@ -194,3 +212,9 @@ with EasyvistaClient.from_env() as client:
   the catalog is misconfigured is a reasonable next thing to try.
 - The accepted **write** format for the date fields is unverified; both a
   string and an int probe returned 590. Do not attempt to set them.
+- `RequestUpdate` deliberately does **not** expose `severity_id` (`SEVERITY_ID`
+  is rejected with HTTP 590) or a priority field (EasyVista derives priority
+  from urgency x impact rather than exposing a writable column). `urgency_id`
+  is also absent: it raised HTTP 590 while still changing the stored value on
+  the verified instance, so it is not offered until that is resolved (open
+  item `O-590-PARTIAL`).
