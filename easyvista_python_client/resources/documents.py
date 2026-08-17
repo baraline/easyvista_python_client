@@ -57,6 +57,26 @@ def build_list_documents(
     return RequestSpec("GET", f"requests/{rfc_number}/documents"), _all_documents
 
 
+def build_delete_document(rfc_number: str, document_id: str) -> RequestSpec:
+    """Delete one attachment, via the per-ticket NESTED path.
+
+    ``DELETE requests/{rfc}/documents/{document_id}`` is live-verified
+    (2026-08-17): the document count went 5 → 4 and the target was absent from a
+    re-listing. The top-level ``DELETE documents/{id}`` returns HTTP 403.
+
+    Both identifiers are required and must be non-blank: a blank ``document_id``
+    would address the collection rather than an item, which is a very different
+    request to send by accident.
+    """
+    rfc = str(rfc_number).strip()
+    if not rfc:
+        raise ValueError("rfc_number is required to delete a document")
+    doc = str(document_id).strip()
+    if not doc:
+        raise ValueError("document_id is required to delete a document")
+    return RequestSpec("DELETE", f"requests/{rfc}/documents/{doc}")
+
+
 def download_href(document: Document | str) -> str:
     """The URL to fetch a document's bytes.
 

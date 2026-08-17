@@ -27,7 +27,7 @@ from easyvista_python_client.directory import (
 from easyvista_python_client.exceptions import EasyvistaAuthError, EasyvistaNotFound
 from easyvista_python_client.field_model import parse_memo
 from easyvista_python_client.filters import ev_equals_filter, is_safe_ev_value
-from easyvista_python_client.models.action import Action, PostAction
+from easyvista_python_client.models.action import Action, ActionUpdate, PostAction
 from easyvista_python_client.models.asset import Asset, PostAsset
 from easyvista_python_client.models.department import (
     Department,
@@ -284,6 +284,17 @@ class AsyncEasyvistaClient:
         spec, parse = actions_res.build_get_action(action_id)
         return parse(await self._transport.send(spec))
 
+    async def update_action(self, action_id: str | int, update: ActionUpdate) -> Action:
+        """Edit an existing action's note text.
+
+        Live-verified 2026-08-17 by re-reading the memo afterwards, not by the
+        status code. Note that an action can be edited but **not deleted** —
+        ``DELETE actions/{id}`` is refused with HTTP 403 — so there is
+        deliberately no ``delete_action``.
+        """
+        spec, parse = actions_res.build_update_action(action_id, update)
+        return parse(await self._transport.send(spec))
+
     async def _resolve_action_body(self, action: Action) -> Action:
         """Return ``action`` with its note text resolved onto ``description``.
 
@@ -372,6 +383,17 @@ class AsyncEasyvistaClient:
     async def list_documents(self, rfc_number: str) -> list[Document]:
         spec, parse = documents_res.build_list_documents(rfc_number)
         return parse(await self._transport.send(spec))
+
+    async def delete_document(self, rfc_number: str, document_id: str) -> None:
+        """Remove an attachment from a ticket.
+
+        ``document_id`` is the ``DOCUMENT_ID`` from :meth:`list_documents`.
+        Live-verified 2026-08-17 by re-listing the ticket's documents
+        afterwards. Returns nothing: the API answers with an empty body.
+        """
+        await self._transport.send(
+            documents_res.build_delete_document(rfc_number, document_id)
+        )
 
     async def download_document(self, document: Document | str) -> bytes:
         """Fetch an attachment's bytes.

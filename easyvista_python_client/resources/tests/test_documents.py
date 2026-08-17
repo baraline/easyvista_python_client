@@ -4,7 +4,10 @@ import pytest
 
 from easyvista_python_client.models.document import Document
 from easyvista_python_client.resources import documents as d
-from easyvista_python_client.resources.documents import download_href
+from easyvista_python_client.resources.documents import (
+    build_delete_document,
+    download_href,
+)
 
 
 def test_build_add_document_base64_envelope_and_path():
@@ -82,3 +85,18 @@ def test_download_href_accepts_a_raw_string():
 def test_download_href_raises_when_no_url_is_available():
     with pytest.raises(ValueError, match="no download URL"):
         download_href(Document.model_validate({"DOCUMENT": "report.pdf"}))
+
+
+def test_delete_document_uses_the_nested_per_ticket_path():
+    """The top-level documents/{id} form returns 403 (verified live)."""
+    spec = build_delete_document("I240101_0001", "12345_abcdef")
+    assert spec.method == "DELETE"
+    assert spec.path == "requests/I240101_0001/documents/12345_abcdef"
+    assert spec.json is None
+
+
+def test_delete_document_requires_both_identifiers():
+    with pytest.raises(ValueError, match="rfc_number"):
+        build_delete_document("", "12345_abcdef")
+    with pytest.raises(ValueError, match="document_id"):
+        build_delete_document("I240101_0001", "")

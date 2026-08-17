@@ -1,10 +1,11 @@
 import pytest
 
-from easyvista_python_client.models.action import Action, PostAction
+from easyvista_python_client.models.action import Action, ActionUpdate, PostAction
 from easyvista_python_client.resources import actions as a
 from easyvista_python_client.resources.actions import (
     build_get_action,
     build_list_actions,
+    build_update_action,
 )
 
 
@@ -103,3 +104,16 @@ def test_build_get_action_parses_an_enveloped_record():
     _, parse = build_get_action(52990)
     action = parse({"actions": [{"ACTION_ID": 52990}]})
     assert action.action_id == 52990
+
+
+def test_update_action_uses_the_top_level_path():
+    """The nested requests/{rfc}/actions/{id} form returns 403 (verified live)."""
+    spec, _parse = build_update_action(57483, ActionUpdate(description="edited"))
+    assert spec.method == "PUT"
+    assert spec.path == "actions/57483"
+    assert spec.json == {"description": "edited"}
+
+
+def test_update_action_drops_unset_fields():
+    spec, _parse = build_update_action(1, ActionUpdate(description="only this"))
+    assert "comment" not in spec.json

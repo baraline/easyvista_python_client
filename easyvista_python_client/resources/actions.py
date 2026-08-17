@@ -13,9 +13,9 @@ from typing import Any
 
 from .._transport import RequestSpec
 from ..filters import ev_equals_filter
-from ..models.action import Action, PostAction
+from ..models.action import Action, ActionUpdate, PostAction
 from ..pagination import extract_records
-from .descriptor import ResourceDescriptor, build_get, build_search
+from .descriptor import ResourceDescriptor, build_get, build_search, build_update
 
 ACTIONS: ResourceDescriptor[Action] = ResourceDescriptor(
     path="actions", envelope_key="actions", model=Action
@@ -77,3 +77,14 @@ def build_get_action(
     way the nested list path is.
     """
     return build_get(ACTIONS, action_id)
+
+
+def build_update_action(
+    action_id: str | int, payload: ActionUpdate
+) -> tuple[RequestSpec, Callable[[Any], Action]]:
+    """Edit one action, via the TOP-LEVEL ``actions/{id}`` path.
+
+    The nested ``requests/{rfc}/actions/{id}`` form is rejected with HTTP 403,
+    the same way the nested list and item paths are (verified live).
+    """
+    return build_update(ACTIONS, action_id, payload)

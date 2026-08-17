@@ -24,6 +24,7 @@ import pytest
 import respx
 
 from easyvista_python_client import (
+    ActionUpdate,
     AsyncEasyvistaClient,
     DepartmentUpdate,
     EasyvistaClient,
@@ -77,6 +78,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "create_employee": ((PostEmployee(),), {}),
     "create_ticket": ((PostRequest(catalog_code="C"),), {}),
     "create_tickets": (([PostRequest(catalog_code="C")],), {}),
+    "delete_document": (("I1", "d1"), {}),
     "download_document": (("requests/I1/documents/1",), {}),
     "find_departments": (("Acme",), {}),
     "get_action": ((1,), {}),
@@ -99,6 +101,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "search_employees": ((), {}),
     "search_tickets": ((), {}),
     "ticket_statistics": ((), {"max_records": 1}),
+    "update_action": ((1, ActionUpdate()), {}),
     "update_department": ((1, DepartmentUpdate()), {}),
     "update_employee": ((1, EmployeeUpdate()), {}),
     "update_ticket": (("I1", RequestUpdate()), {}),

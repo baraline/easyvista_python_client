@@ -26,7 +26,7 @@ from .filters import (
     ev_starts_with_filter,
     is_safe_ev_value,
 )
-from .models.action import Action, PostAction
+from .models.action import Action, ActionUpdate, PostAction
 from .models.asset import Asset, PostAsset
 from .models.department import Department, DepartmentUpdate, PostDepartment
 from .models.document import Document
@@ -41,6 +41,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "Action",
+    "ActionUpdate",
     "Asset",
     "AsyncEasyvistaClient",
     "Department",

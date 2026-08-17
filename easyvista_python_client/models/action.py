@@ -111,3 +111,22 @@ class PostAction(EasyvistaWriteModel):
     group_id: int | None = None
     group_name: str | None = None
     description: str | None = None
+
+
+class ActionUpdate(EasyvistaWriteModel):
+    """Payload for editing an existing action's note.
+
+    ``PUT actions/{id}`` is live-verified (2026-08-17): sending
+    ``{"DESCRIPTION": "…"}`` really changed the action's ``description`` memo,
+    confirmed by re-reading it rather than by trusting HTTP 200. The **nested**
+    ``PUT requests/{rfc}/actions/{id}`` returns 403, as does
+    ``DELETE actions/{id}`` — an action can be edited but not deleted.
+
+    ``description`` is the note text. On the verified instance an action's text
+    lives in the ``DESCRIPTION`` memo and ``COMMENT`` is empty, mirroring how
+    ``PostAction.description`` round-trips; ``comment`` is offered for a
+    deployment configured the other way round, and is **not** live-verified.
+    """
+
+    description: str | None = None
+    comment: str | None = None

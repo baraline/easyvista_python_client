@@ -20,7 +20,7 @@ from easyvista_python_client._async import client as client_module
 from easyvista_python_client._async.client import AsyncEasyvistaClient
 from easyvista_python_client.directory import DepartmentContext
 from easyvista_python_client.exceptions import EasyvistaError
-from easyvista_python_client.models.action import PostAction
+from easyvista_python_client.models.action import ActionUpdate, PostAction
 from easyvista_python_client.models.asset import PostAsset
 from easyvista_python_client.models.department import (
     Department,
@@ -175,6 +175,18 @@ async def test_get_action_fetches_the_item_level_record(config):
 
 
 @respx.mock
+async def test_update_action_sends_a_put_to_the_top_level_path(config):
+    """The nested requests/{rfc}/actions/{id} form returns 403 (verified live)."""
+    route = respx.put(f"{ROOT}/actions/57483").mock(
+        return_value=httpx.Response(200, json={"ACTION_ID": 57483})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        action = await client.update_action(57483, ActionUpdate(description="edited"))
+    assert json.loads(route.calls.last.request.content) == {"description": "edited"}
+    assert action.action_id == 57483
+
+
+@respx.mock
 async def test_from_env_constructs_working_client(monkeypatch):
     monkeypatch.setenv("EASYVISTA_URL", "https://ev.test")
     monkeypatch.setenv("EASYVISTA_ACCOUNT", "acme")
@@ -270,6 +282,18 @@ async def test_add_and_list_documents(config):
     assert listed[0].href == "u1"
     body = json.loads(add_route.calls.last.request.content)
     assert body["documents"][0]["filename"] == "a.txt"
+
+
+@respx.mock
+async def test_delete_document_sends_a_delete_to_the_nested_path(config):
+    """Returns None: the API answers a delete with an empty body."""
+    route = respx.delete(f"{ROOT}/requests/I240101_0001/documents/12345_abcdef").mock(
+        return_value=httpx.Response(200)
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        result = await client.delete_document("I240101_0001", "12345_abcdef")
+    assert route.call_count == 1
+    assert result is None
 
 
 @respx.mock
