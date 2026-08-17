@@ -46,6 +46,7 @@ from typing import Any
 import pytest
 
 import easyvista_python_client as ev
+from easyvista_python_client.models.common import EasyvistaWriteModel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = REPO_ROOT / "skills"
@@ -193,6 +194,7 @@ _WRITE_MODELS = {
     "PostRequest": ev.PostRequest,
     "RequestUpdate": ev.RequestUpdate,
     "PostAction": ev.PostAction,
+    "ActionUpdate": ev.ActionUpdate,
     "PostAsset": ev.PostAsset,
     "PostDepartment": ev.PostDepartment,
     "DepartmentUpdate": ev.DepartmentUpdate,
@@ -456,3 +458,29 @@ def test_snippet_hosts_are_synthetic(skill: Path) -> None:
                     f"{skill.name} carries a non-synthetic URL {url!r}; every "
                     "host in a skill must sit under example.com"
                 )
+
+
+def test_write_models_map_is_complete() -> None:
+    """Every exported EasyvistaWriteModel subclass maps in _WRITE_MODELS.
+
+    The ``_WRITE_MODELS`` dict pairs write model names to their classes so that
+    snippet keyword validation can find them. A write model exported from the
+    package but missing from the dict has its snippets silently skipped, leaving
+    typos and dropped keywords undetected. This test converts the hand-maintained
+    enumeration into a self-checking gate that fails when a new write model is
+    exported without a map entry.
+    """
+    exported = {
+        name
+        for name in ev.__all__
+        if (
+            inspect.isclass(obj := getattr(ev, name, None))
+            and obj is not EasyvistaWriteModel
+            and issubclass(obj, EasyvistaWriteModel)
+        )
+    }
+    mapped = set(_WRITE_MODELS.keys())
+    assert exported == mapped, (
+        f"exported write models {sorted(exported)} do not match "
+        f"_WRITE_MODELS {sorted(mapped)}; missing from map: {sorted(exported - mapped)}"
+    )
