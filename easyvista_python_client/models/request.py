@@ -157,9 +157,9 @@ class RequestUpdate(EasyvistaWriteModel):
 
     ``docs/API_Info.md`` documents only the create, comment and close bodies, so
     the update body is not vendor-documented. Every field here is one verified
-    accepted against a live instance -- ``title`` by the Phase 0 probe and by
-    ``integration_tests/test_live_ticket_identity.py``. Nothing is added
-    speculatively: an unaccepted field would silently no-op or raise HTTP 590.
+    accepted against a live instance **by re-reading the ticket afterwards**, not
+    by trusting HTTP 200 — that distinction matters on this API, where a write
+    can return 200 and change nothing.
 
     ``description`` writes the ticket's **COMMENT** Memo, not ``DESCRIPTION`` --
     verified live. EasyVista models ``COMMENT`` as the request's justification
@@ -169,8 +169,24 @@ class RequestUpdate(EasyvistaWriteModel):
     ``COMMENT`` carries the body text. Read it back with
     ``resolve_memo("requests/{rfc}/comment")``, or take
     ``TicketContext.comment``, which resolves it for you.
+
+    **Deliberately absent** (verified 2026-08-17):
+
+    * ``severity_id`` — ``SEVERITY_ID`` is rejected with HTTP 590 (code 2013).
+    * ``urgency_id`` — ``URGENCY_ID`` raised HTTP 590 *and the value still
+      changed*, so the API's behaviour is not one this model can express
+      honestly. Set it with a raw request and re-read if you must.
+    * a priority field — EasyVista derives priority from urgency x impact rather
+      than exposing a writable column.
+
+    ``external_reference`` is capped at 50 characters: 50 is accepted and 51 is
+    rejected server-side (bisected live). The cap is enforced here so the round
+    trip is saved; over-length is rejected rather than truncated either way.
     """
 
     status_id: int | None = None
     title: str | None = None
     description: str | None = None
+    impact_id: int | None = None
+    owner_id: int | None = None
+    external_reference: str | None = Field(default=None, max_length=50)

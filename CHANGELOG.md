@@ -177,6 +177,14 @@ a deprecation policy will follow the 1.0 release.
   action bodies, rather than after. The same requests are issued and the
   result is identical; only their order on the wire changed.
 
+### Notes
+
+- Open item **O-590-PARTIAL**: `PUT requests/{rfc}` with `URGENCY_ID` returned
+  HTTP 590 (code 2013) while nevertheless changing the stored value. A rejected
+  update may therefore have partially applied — re-read before retrying. Needs a
+  focused live probe (set each id from `GET /urgencies` in turn and re-read)
+  before `urgency_id` can be added to `RequestUpdate`.
+
 ## [0.1.0] - 2026-07-15
 
 Initial public release.

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import pydantic
 import pytest
 from pydantic import ValidationError
 
@@ -263,4 +264,40 @@ def test_a_request_timestamp_round_trips_into_a_change_window_filter():
     )
     assert ev_since_filter("LAST_UPDATE", request.last_update) == (
         "LAST_UPDATE:(2026-08-17T15:40:41.610+02:00;)"
+    )
+
+
+def test_request_update_carries_the_writable_columns():
+    """EV-R9/EV-R10: each verified by re-reading the ticket, not by HTTP 200."""
+    body = RequestUpdate(
+        title="t",
+        impact_id=1,
+        owner_id=42,
+        external_reference="PEER-abc123",
+    ).to_api()
+    assert body == {
+        "title": "t",
+        "impact_id": 1,
+        "owner_id": 42,
+        "external_reference": "PEER-abc123",
+    }
+
+
+def test_request_update_still_rejects_an_unverified_field():
+    """extra="forbid" is the guard that caught SEVERITY_ID before the wire."""
+    with pytest.raises(pydantic.ValidationError):
+        RequestUpdate(severity_id=2)
+
+
+def test_external_reference_longer_than_fifty_characters_is_refused_locally():
+    """Bisected live: 50 accepted, 51 -> HTTP 590. Refuse before the round trip.
+
+    Over-length is REJECTED server-side, not truncated, and the previously
+    stored value survives — so this guard loses nothing and saves a request.
+    """
+    with pytest.raises(pydantic.ValidationError):
+        RequestUpdate(external_reference="X" * 51)
+    assert (
+        RequestUpdate(external_reference="X" * 50).to_api()["external_reference"]
+        == "X" * 50
     )
