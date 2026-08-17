@@ -1,4 +1,5 @@
 from easyvista_python_client.directory import (
+    RECENT_TICKETS_SORT,
     DepartmentContext,
     _department_matches,
     _normalize_name,
@@ -36,3 +37,15 @@ def test_department_context_holds_all_parts():
     )
     assert ctx.department.department_id == 60
     assert ctx.employees[0].employee_id == 1
+
+
+def test_recent_tickets_sort_uses_the_space_separated_form():
+    """The colon form is SILENTLY IGNORED by EasyVista (measured 2026-08-17).
+
+    `RFC_NUMBER:DESC` returned rows in the API's default order — byte-identical
+    to an unsorted page — so this constant is the difference between "most
+    recent" and "arbitrary". A regression here is invisible at runtime, which is
+    exactly why it is asserted here.
+    """
+    assert RECENT_TICKETS_SORT == "RFC_NUMBER DESC"
+    assert ":" not in RECENT_TICKETS_SORT

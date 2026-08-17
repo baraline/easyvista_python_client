@@ -10,10 +10,13 @@ from .models.employee import Employee
 from .models.request import Request
 from .reporting import TicketStatistics
 
-# O-DIR-1: the descending-sort token for "most recent" is not yet live-confirmed.
-# EasyVista ignores an unknown ``sort`` param (falls back to default order) rather
-# than erroring, so this is safe; adjust once confirmed against the live instance.
-RECENT_TICKETS_SORT = "RFC_NUMBER:DESC"
+# O-DIR-1 RESOLVED (2026-08-17, live): the descending-sort token must be
+# SPACE-separated. `RFC_NUMBER:DESC` — what this constant used to be — is
+# silently ignored: it returned the API's default order, byte-identical to an
+# unsorted page, so `recent_tickets` was never actually sorted. `FIELD DESC`
+# and `FIELD desc` both work; `-FIELD`, `DESC(FIELD)` and `FIELD:DESC` are all
+# ignored. See integration_tests/test_live_change_window.py for the live guard.
+RECENT_TICKETS_SORT = "RFC_NUMBER DESC"
 
 
 @dataclass

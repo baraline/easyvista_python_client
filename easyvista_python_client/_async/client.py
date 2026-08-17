@@ -672,9 +672,10 @@ class AsyncEasyvistaClient:
         403/404 degrades it to ``[]`` / ``None`` / ``0`` (same pattern as
         :meth:`get_ticket_context`). The flags trim the heavier related calls.
         Tickets and assets filter on ``DEPARTMENT_ID:"<id>"``. ``recent_tickets``
-        ordering is best-effort: it relies on the server honoring
-        ``RECENT_TICKETS_SORT`` (open item O-DIR-1) and silently degrades to the
-        API's default order otherwise.
+        is ordered newest-first by ``RECENT_TICKETS_SORT``, which is live-verified
+        as of 2026-08-17 (O-DIR-1 closed). The token must stay space-separated: a
+        colon form is silently ignored and degrades to the API's default order
+        with no error.
 
         On the async surface the seven independent branches are issued
         concurrently, costing two waves instead of eight serial steps; on the
