@@ -93,6 +93,14 @@ def aggregate_tickets(
     ``CREATION_DATE_UT`` (a ``datetime`` or ISO string); a ticket with a
     missing/unparseable date is excluded when a bound is set. Raises ``ValueError``
     for a malformed bound string.
+
+    The "unparseable" half of that per-ticket guard is unreachable for a
+    ``Request`` built the normal way: ``Request.model_validate`` itself now
+    rejects a malformed ``CREATION_DATE_UT`` before this function ever sees the
+    ticket (see ``OptionalDateTime`` in ``models/common.py``). It stays as
+    defence-in-depth for a ``Request`` assembled some other way (e.g.
+    ``model_construct``, which bypasses validation) -- do not delete it as dead
+    code.
     """
     since = _bound(created_since, "created_since")
     until = _bound(created_until, "created_until")

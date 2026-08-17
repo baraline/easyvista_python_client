@@ -29,6 +29,7 @@ def _ticket() -> Request:
                 "HREF": "https://h/api/v1/12345/catalog-requests/5791",
             },
             "CREATION_DATE_UT": "2025-11-28T11:35:22+01:00",
+            "LAST_UPDATE": "2025-11-28T16:14:41.133+01:00",
         }
     )
 
@@ -39,6 +40,13 @@ def test_to_markdown_has_title_and_header_labels():
     assert "| Status | En cours |" in md
     assert "| Department | Example Department |" in md
     assert "| Catalog | [EXAMPLE] - ticket |" in md
+    # Exact rendered literals, not just "Created"/"Updated" substrings -- a
+    # presence-only check would still pass on an empty cell (the 2026-08-17
+    # retype briefly made these rows vanish entirely: model_dump(by_alias=True)
+    # yields a datetime for these keys now, and the extractor used to return ""
+    # for anything that wasn't already a str).
+    assert "| Created | 2025-11-28T11:35:22.000+01:00 |" in md
+    assert "| Updated | 2025-11-28T16:14:41.133+01:00 |" in md
 
 
 def test_to_markdown_contains_no_api_url():

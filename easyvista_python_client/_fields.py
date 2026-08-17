@@ -4,16 +4,42 @@ EasyVista nests label+href objects (``STATUS``, ``DEPARTMENT``, ``CATALOG_REQUES
 ``URGENCY``, ``IMPACT``). Both the Markdown renderer (:mod:`context`) and the
 statistics aggregator (:mod:`reporting`) need to pick the human label and never an
 href, so the logic lives here once.
+
+Both consumers read a ``model_dump(by_alias=True)`` dict, so a timestamp column
+(``LAST_UPDATE``, ``CREATION_DATE_UT``, …) arrives here as a ``datetime`` since
+the 2026-08-17 read-path retype
+(:class:`~easyvista_python_client.models.common.OptionalDateTime`), not a
+``str``. :func:`_text` renders it rather than discarding it, which is why this
+leaf now imports :mod:`~easyvista_python_client.timestamps`.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+
+from .timestamps import format_ev_datetime
 
 
 def _text(value: Any) -> str:
-    """First stripped string form of ``value``; ``""`` if it is not a string."""
-    return value.strip() if isinstance(value, str) else ""
+    """First stripped string form of ``value``; ``""`` if it doesn't render as text.
+
+    A ``datetime`` renders as EasyVista's own wire format (:func:`format_ev_datetime`)
+    so the extracted text is byte-identical to what the API sent and to what
+    ``ev_since_filter`` accepts. ``format_ev_datetime`` raises on a *naive*
+    datetime, which should not occur for a value that came through
+    ``OptionalDateTime`` (it always normalizes to aware) -- but this is an
+    extractor, which must never raise, so a naive value still falls back to
+    plain ``.isoformat()`` instead.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, datetime):
+        try:
+            return format_ev_datetime(value)
+        except ValueError:
+            return value.isoformat()
+    return ""
 
 
 def _label(obj: Any, keys: tuple[str, ...]) -> str:

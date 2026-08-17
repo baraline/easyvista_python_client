@@ -7,13 +7,21 @@ module normalizes both to a :class:`Reference` using only the API's naming
 conventions, so any field — including custom ``e_*`` fields on any instance —
 resolves the same way with no registry or configuration.
 
-Leaf module: stdlib only, no model/client imports.
+Leaf module: only stdlib plus the :mod:`~easyvista_python_client.timestamps`
+leaf (no cycle: that module imports nothing from the package either), no
+model/client imports. The timestamps import exists so ``.reference()`` on a
+timestamp column (``LAST_UPDATE``, …) — now a ``datetime`` since the
+2026-08-17 read-path retype — resolves to its rendered value instead of an
+empty :class:`Reference`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
+
+from .timestamps import format_ev_datetime
 
 
 @dataclass(frozen=True)
@@ -30,9 +38,23 @@ class Reference:
 
 
 def _scalar(value: Any) -> str | None:
-    """A non-empty id-like scalar as a string, else ``None`` (bools rejected)."""
+    """A non-empty id-like scalar as a string, else ``None`` (bools rejected).
+
+    A ``datetime`` renders as EasyVista's own wire format
+    (:func:`~easyvista_python_client.timestamps.format_ev_datetime`), so
+    ``.reference("LAST_UPDATE")`` on a retyped timestamp field still resolves
+    to a populated :class:`Reference` instead of an empty one. That function
+    raises on a *naive* datetime -- which should not occur for a value that
+    came through ``OptionalDateTime`` -- but this must never raise, so a naive
+    value falls back to plain ``.isoformat()`` instead.
+    """
     if isinstance(value, bool):
         return None
+    if isinstance(value, datetime):
+        try:
+            return format_ev_datetime(value)
+        except ValueError:
+            return value.isoformat()
     if isinstance(value, (str, int)) and str(value).strip():
         return str(value).strip()
     return None

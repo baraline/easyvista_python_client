@@ -1,6 +1,9 @@
+from datetime import datetime, timedelta, timezone
+
 from easyvista_python_client.models.request import Request
 from easyvista_python_client.references import (
     Reference,
+    _scalar,
     localized_label,
     resolve_reference,
 )
@@ -115,6 +118,30 @@ def test_model_reference_resolves_nested_and_id_only():
 def test_model_reference_missing_field_is_empty():
     ticket = Request.model_validate({"RFC_NUMBER": "I1"})
     assert ticket.reference("DEPARTMENT") == Reference(id=None, label=None)
+
+
+def test_scalar_renders_an_aware_datetime_as_the_ev_wire_format():
+    value = datetime(
+        2026, 8, 17, 15, 40, 41, 610000, tzinfo=timezone(timedelta(hours=2))
+    )
+    assert _scalar(value) == "2026-08-17T15:40:41.610+02:00"
+
+
+def test_scalar_renders_a_naive_datetime_via_isoformat_fallback():
+    # format_ev_datetime refuses a naive datetime; _scalar must never raise, so
+    # it falls back to plain .isoformat() rather than propagating that error.
+    value = datetime(2026, 8, 17, 15, 40, 41)
+    assert _scalar(value) == "2026-08-17T15:40:41"
+
+
+def test_model_reference_on_a_retyped_timestamp_field_is_populated():
+    """Request.reference("LAST_UPDATE") must not regress to an empty Reference
+    now that last_update is a datetime rather than a str (2026-08-17 retype)."""
+    ticket = Request.model_validate(
+        {"RFC_NUMBER": "I1", "LAST_UPDATE": "2026-08-17T15:40:41.610+02:00"}
+    )
+    ref = ticket.reference("LAST_UPDATE")
+    assert ref.display == "2026-08-17T15:40:41.610+02:00"
 
 
 def test_reference_exported_from_package():

@@ -99,5 +99,17 @@ def test_an_unparseable_timestamp_raises_rather_than_silently_becoming_none():
     Contrast the "" sentinel above, which is EasyVista's documented way of
     saying "unset" and is therefore not an error.
     """
-    with pytest.raises(pydantic.ValidationError):
+    with pytest.raises(pydantic.ValidationError) as exc_info:
         _Probe.model_validate({"when": "not-a-date"})
+    # The whole reason _empty_str_to_none_datetime hands the original string
+    # back instead of raising itself is so pydantic's own error names the
+    # field -- confirm it actually does, not just that *some* error was raised.
+    assert exc_info.value.errors()[0]["loc"] == ("when",)
+
+
+def test_a_naive_datetime_input_comes_back_aware():
+    """A datetime handed in directly (not a wire string) must still end up
+    aware -- OptionalDateTime promises "An aware `datetime | None`" for every
+    accepted input, not only for strings."""
+    got = _Probe.model_validate({"when": datetime(2026, 1, 1, 9, 0, 0)}).when
+    assert got == datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)

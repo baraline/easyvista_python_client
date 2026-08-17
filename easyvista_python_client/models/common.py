@@ -33,18 +33,24 @@ def _empty_str_to_none_datetime(value: Any) -> Any:
     """Coerce EasyVista's ``""`` sentinel for an absent date to ``None``.
 
     Distinct from :func:`_empty_str_to_none`: a *malformed* timestamp must still
-    raise, so this only maps the documented empty-string sentinel and leaves
-    every other string for pydantic's own datetime validation to accept or
-    reject. Silently returning ``None`` for junk would hide a format change.
+    raise, so this only maps the documented empty-string sentinel; every other
+    value -- including a ``datetime`` handed in directly, not just a string --
+    routes through :func:`~easyvista_python_client.timestamps.parse_ev_datetime`,
+    which normalizes a naive ``datetime`` to UTC and returns ``None`` for
+    anything it cannot parse. When it returns ``None`` this hands the *original*
+    value back rather than substituting ``None`` itself, so pydantic's own
+    datetime validation still runs and raises a ``ValidationError`` naming the
+    field -- silently returning ``None`` for junk would hide a format change.
+    One consequence of that fallthrough: pydantic's own parser accepts a
+    numeric string as Unix epoch seconds (e.g. ``"1724000000"`` ->
+    ``2024-08-18T03:53:20+00:00``), since an unparseable string reaches it
+    unchanged. Harmless while EasyVista only ever sends ISO 8601, but worth
+    knowing before any future epoch-millis format change.
     """
     if isinstance(value, str) and not value.strip():
         return None
-    if isinstance(value, str):
-        parsed = parse_ev_datetime(value)
-        # None here means unparseable; hand the original back so pydantic raises
-        # a ValidationError naming the field rather than silently nulling it.
-        return parsed if parsed is not None else value
-    return value
+    parsed = parse_ev_datetime(value)
+    return parsed if parsed is not None else value
 
 
 OptionalDateTime = Annotated[
@@ -57,7 +63,9 @@ precision (``2026-08-17T15:40:41.610+02:00``), and ``""`` for an unset date —
 verified live 2026-08-17. Python 3.10's ``fromisoformat`` rejects the 3-digit
 fraction outright, which is why this goes through
 :func:`~easyvista_python_client.parse_ev_datetime` rather than letting pydantic
-parse the string itself.
+parse the string itself. A naive ``datetime`` passed in directly (not just a
+wire string) is normalized to aware UTC the same way, so the ``| None`` aside,
+this type's value is always timezone-aware, never naive.
 """
 
 
