@@ -42,10 +42,12 @@ def test_department_context_holds_all_parts():
 def test_recent_tickets_sort_uses_the_space_separated_form():
     """The colon form is SILENTLY IGNORED by EasyVista (measured 2026-08-17).
 
-    `RFC_NUMBER:DESC` returned rows in the API's default order — byte-identical
-    to an unsorted page — so this constant is the difference between "most
-    recent" and "arbitrary". A regression here is invisible at runtime, which is
-    exactly why it is asserted here.
+    On a date column, `FIELD:DESC` returned rows in the API's default order —
+    byte-identical to an unsorted page — so a colon-form constant is the
+    difference between "most recent" and "arbitrary". The rule is syntactic, so
+    it applies to RFC_NUMBER too; the live guard for this exact token lives in
+    integration_tests/test_live_change_window.py. A regression here is invisible
+    at runtime, which is why it is asserted at all.
     """
     assert RECENT_TICKETS_SORT == "RFC_NUMBER DESC"
     assert ":" not in RECENT_TICKETS_SORT
