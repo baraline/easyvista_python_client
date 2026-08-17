@@ -115,6 +115,41 @@ def test_interval_refuses_anything_that_is_not_a_timestamp(bad):
         ev_since_filter("LAST_UPDATE", bad)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "9999-99-99",  # no such month
+        "2025-02-30",  # no such day (February)
+        "2025-13-45T99:99:99",  # no such month/day/time at all
+        "2025-11-28T25:61:61",  # out-of-range time components
+        "٢٠٢٥-١١-٢٨",  # non-ASCII digits  # noqa: RUF001
+    ],
+)
+def test_interval_refuses_a_well_shaped_but_impossible_timestamp(bad):
+    """The regex is a shape gate only; a calendar-invalid value must still be
+    refused, because a dropped condition returns the whole table rather than
+    an error (this is what makes a typo'd watermark dangerous).
+    """
+    with pytest.raises(ValueError, match="timestamp"):
+        ev_since_filter("LAST_UPDATE", bad)
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "2025-11-28",
+        "2025-11-28T16:14:41",
+        "2025-11-28 16:14:41",
+        "2025-11-28T16:14:41.133+01:00",
+        "2025-11-28T16:14:41.133456Z",
+    ],
+)
+def test_interval_accepts_every_rendering_measured_live(literal):
+    """The guard's acceptance side: a regression here fails CLOSED on real
+    watermarks, which no rejection test would catch."""
+    assert ev_since_filter("LAST_UPDATE", literal) == f"LAST_UPDATE:({literal};)"
+
+
 def test_contains_wraps_the_value_in_wildcards_with_the_tilde_operator():
     """``~`` IS a pattern operator; it needs an explicit ``*`` (measured live)."""
     assert ev_contains_filter("ASSET_TAG", "LAPTOP") == 'ASSET_TAG~"*LAPTOP*"'

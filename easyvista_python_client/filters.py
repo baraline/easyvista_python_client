@@ -31,7 +31,7 @@ import re
 from collections.abc import Iterable
 from datetime import datetime
 
-from .timestamps import format_ev_datetime
+from .timestamps import format_ev_datetime, parse_ev_datetime
 
 # A double quote terminates the quoted value, letting a caller reach the ','
 # combinator; no escape for it is known (verified live). ',' itself is NOT
@@ -88,11 +88,19 @@ def ev_in_filter(field: str, values: Iterable[str | int | None]) -> str | None:
 # therefore the guard, not escaping. Deliberately strict — it accepts only the
 # renderings measured live: a date, a second-precision ISO timestamp, or the
 # full offset-bearing literal the API returns.
+#
+# This is a SHAPE gate only, not a validity gate: `[0-9]` (not `\d`, which is
+# Unicode-aware) keeps non-ASCII digits out, and `fullmatch` anchors both ends
+# unconditionally rather than relying on a trailing `$` — which would also
+# match just before a newline — so the guard does not silently depend on the
+# `.strip()` above having already removed one. Calendar/time validity (e.g.
+# ``9999-99-99``, ``25:61:61``) is not this regex's job; :func:`_interval_bound`
+# checks that separately via :func:`~easyvista_python_client.parse_ev_datetime`.
 _TIMESTAMP_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}"  # YYYY-MM-DD
-    r"(?:[T ]\d{2}:\d{2}:\d{2}"  # optional T HH:MM:SS
-    r"(?:\.\d{1,6})?"  # optional fractional seconds
-    r"(?:Z|[+-]\d{2}:\d{2})?)?$"  # optional offset
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}"  # YYYY-MM-DD
+    r"(?:[T ][0-9]{2}:[0-9]{2}:[0-9]{2}"  # optional T HH:MM:SS
+    r"(?:\.[0-9]{1,6})?"  # optional fractional seconds
+    r"(?:Z|[+-][0-9]{2}:[0-9]{2})?)?"  # optional offset
 )
 
 
@@ -100,7 +108,12 @@ def _interval_bound(value: str | datetime | None) -> str:
     """Render one interval bound, or ``""`` for an open end.
 
     Raises ``ValueError`` for anything that is not a timestamp, because the
-    bound is interpolated unquoted (see :data:`_TIMESTAMP_RE`).
+    bound is interpolated unquoted (see :data:`_TIMESTAMP_RE`). The regex is a
+    shape gate; :func:`~easyvista_python_client.parse_ev_datetime` is the
+    validity gate behind it, so a well-shaped but impossible timestamp (e.g.
+    ``9999-99-99`` or ``25:61:61``) is also refused rather than reaching the
+    wire, where a dropped condition returns the whole table rather than an
+    error.
     """
     if value is None:
         return ""
@@ -109,7 +122,7 @@ def _interval_bound(value: str | datetime | None) -> str:
     text = str(value).strip()
     if not text:
         return ""
-    if not _TIMESTAMP_RE.match(text):
+    if not _TIMESTAMP_RE.fullmatch(text) or parse_ev_datetime(text) is None:
         raise ValueError(
             f"{value!r} is not an EasyVista timestamp. An interval bound is "
             "interpolated unquoted, so only a date or an ISO-8601 timestamp is "
@@ -132,9 +145,9 @@ def ev_since_filter(field: str, start: str | datetime | None) -> str | None:
             for ticket in client.iter_tickets(search=search):
                 ...
 
-    ``start`` may be a ``datetime`` (preferred — it cannot be malformed) or a
-    timestamp string. Blank or ``None`` returns ``None``, matching the other
-    builders so callers compose without conditionals.
+    ``start`` may be a ``datetime`` (the preferred input) or a timestamp
+    string. Blank or ``None`` returns ``None``, matching the other builders so
+    callers compose without conditionals.
     """
     bound = _interval_bound(start)
     if not bound:
