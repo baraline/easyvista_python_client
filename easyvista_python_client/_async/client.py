@@ -267,6 +267,10 @@ class AsyncEasyvistaClient:
         The note text is never projectable — ``DESCRIPTION`` and ``COMMENT``
         are Memo sub-resources and come back as HREF objects under every
         projection, so a body still costs one :meth:`resolve_memo` per action.
+
+        ``fields`` has two more silent footguns: ``"*"`` is not a wildcard —
+        it silently reduces to ``ACTION_ID`` alone — and a dotted path such as
+        ``DESCRIPTION.HREF`` is silently dropped.
         """
         spec, parse = actions_res.build_list_actions(rfc_number, fields=fields)
         return parse(await self._transport.send(spec))
