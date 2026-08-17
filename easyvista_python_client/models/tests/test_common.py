@@ -1,7 +1,13 @@
+from datetime import datetime, timedelta, timezone
+
+import pydantic
+import pytest
+
 from easyvista_python_client import FieldClassification
 from easyvista_python_client.models.common import (
     EasyvistaModel,
     EasyvistaWriteModel,
+    OptionalDateTime,
     OptionalInt,
     _empty_str_to_none,
 )
@@ -64,3 +70,34 @@ def test_base_model_keeps_unknown_fields():
     dumped = model.model_dump(by_alias=True)
     assert dumped["RFC_NUMBER"] == "I123"
     assert dumped["e_custom1"] == "x"
+
+
+class _Probe(EasyvistaModel):
+    when: OptionalDateTime = None
+
+
+def test_parses_the_live_easyvista_format():
+    got = _Probe.model_validate({"when": "2026-08-17T15:40:41.610+02:00"}).when
+    assert got == datetime(
+        2026, 8, 17, 15, 40, 41, 610000, tzinfo=timezone(timedelta(hours=2))
+    )
+
+
+def test_the_empty_string_sentinel_becomes_none():
+    """EasyVista returns "" for every unset date — not null. Measured live."""
+    assert _Probe.model_validate({"when": ""}).when is None
+    assert _Probe.model_validate({"when": "   "}).when is None
+
+
+def test_a_missing_key_is_none():
+    assert _Probe.model_validate({}).when is None
+
+
+def test_an_unparseable_timestamp_raises_rather_than_silently_becoming_none():
+    """A malformed date is a real signal; swallowing it would hide a format change.
+
+    Contrast the "" sentinel above, which is EasyVista's documented way of
+    saying "unset" and is therefore not an error.
+    """
+    with pytest.raises(pydantic.ValidationError):
+        _Probe.model_validate({"when": "not-a-date"})

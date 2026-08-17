@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from .common import EasyvistaModel, EasyvistaWriteModel, OptionalInt
+from .common import EasyvistaModel, EasyvistaWriteModel, OptionalDateTime, OptionalInt
 
 
 class Request(EasyvistaModel):
@@ -71,23 +71,27 @@ class Request(EasyvistaModel):
     recipient_id: OptionalInt = Field(default=None, alias="RECIPIENT_ID")
     owner_id: OptionalInt = Field(default=None, alias="OWNER_ID")
 
-    # timestamps and time limits — verified *returned*; their accepted write
-    # format is NOT verified (both a string and an int probe return HTTP 590),
-    # so no datetime parsing is claimed here. See spec open item O-590-DATE.
+    # timestamps — ISO 8601 with an EXPLICIT UTC OFFSET and millisecond
+    # precision, verified live 2026-08-17 against our own UTC clock, so these
+    # parse to aware datetimes. Their accepted WRITE format is still NOT
+    # verified (both a string and an int probe return HTTP 590), which is why
+    # no write model carries a datetime. An unset date is ``""``, handled by
+    # OptionalDateTime. Note ``_UT`` does NOT mean UTC-normalized: those columns
+    # carry the same local offset as LAST_UPDATE.
     #
     # These are the OFFICIAL time fields, portable across EasyVista
     # deployments. The instance-specific GTR/GTI family (``E_GTR_STATUS``,
     # ``E_GTI_UT``, ``E_DELAI_PEC``…) is deliberately NOT declared: it does not
     # exist on another deployment, so it belongs in the custom bucket of
     # :meth:`classify_fields`, reached by name at the call site.
-    submit_date_ut: str | None = Field(default=None, alias="SUBMIT_DATE_UT")
-    creation_date_ut: str | None = Field(default=None, alias="CREATION_DATE_UT")
-    max_resolution_date_ut: str | None = Field(
+    submit_date_ut: OptionalDateTime = Field(default=None, alias="SUBMIT_DATE_UT")
+    creation_date_ut: OptionalDateTime = Field(default=None, alias="CREATION_DATE_UT")
+    max_resolution_date_ut: OptionalDateTime = Field(
         default=None, alias="MAX_RESOLUTION_DATE_UT"
     )
-    expected_date_ut: str | None = Field(default=None, alias="EXPECTED_DATE_UT")
-    end_date_ut: str | None = Field(default=None, alias="END_DATE_UT")
-    last_update: str | None = Field(default=None, alias="LAST_UPDATE")
+    expected_date_ut: OptionalDateTime = Field(default=None, alias="EXPECTED_DATE_UT")
+    end_date_ut: OptionalDateTime = Field(default=None, alias="END_DATE_UT")
+    last_update: OptionalDateTime = Field(default=None, alias="LAST_UPDATE")
     sla_id: OptionalInt = Field(default=None, alias="SLA_ID")
     # Verified live (2026-07-28 Phase 0 probe, U6) as a string on every ticket
     # checked -- never an int -- so no int branch is declared here.

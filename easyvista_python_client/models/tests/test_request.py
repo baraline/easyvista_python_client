@@ -1,6 +1,9 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from pydantic import ValidationError
 
+from easyvista_python_client import ev_since_filter
 from easyvista_python_client.models.request import PostRequest, Request, RequestUpdate
 
 
@@ -114,8 +117,9 @@ def test_request_declares_title_and_core_scalars():
     assert req.recipient_id == 13
     assert req.owner_id == 14
     assert req.external_reference == "REF-1"
-    assert req.submit_date_ut == "2026-01-01 09:00:00"
-    assert req.last_update == "2026-01-02 10:30:00"
+    # No offset in the fixture -> parse_ev_datetime treats it as UTC.
+    assert req.submit_date_ut == datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+    assert req.last_update == datetime(2026, 1, 2, 10, 30, 0, tzinfo=timezone.utc)
 
 
 def test_request_coerces_empty_string_numerics_to_none():
@@ -198,10 +202,17 @@ def test_request_declares_the_official_time_fields():
             "TIME_USED_TO_SOLVE_REQUEST": "3600",
         }
     )
-    assert ticket.creation_date_ut == "2026-07-28 09:00:00"
-    assert ticket.max_resolution_date_ut == "2026-07-30 09:00:00"
-    assert ticket.expected_date_ut == "2026-07-29 09:00:00"
-    assert ticket.end_date_ut == ""
+    # No offset in the fixtures -> parse_ev_datetime treats them as UTC.
+    assert ticket.creation_date_ut == datetime(
+        2026, 7, 28, 9, 0, 0, tzinfo=timezone.utc
+    )
+    assert ticket.max_resolution_date_ut == datetime(
+        2026, 7, 30, 9, 0, 0, tzinfo=timezone.utc
+    )
+    assert ticket.expected_date_ut == datetime(
+        2026, 7, 29, 9, 0, 0, tzinfo=timezone.utc
+    )
+    assert ticket.end_date_ut is None  # "" sentinel
     assert ticket.sla_id == 4
     assert ticket.time_used_to_solve_request == "3600"
 
@@ -227,3 +238,29 @@ def test_gtr_custom_fields_stay_out_of_the_official_bucket():
     assert set(fc.custom) == {"E_GTR_STATUS", "E_GTI_UT"}
     assert "SLA_ID" in fc.official
     assert "MAX_RESOLUTION_DATE_UT" in fc.official
+
+
+def test_request_timestamps_are_aware_datetimes():
+    """BREAKING as of 2026-08-17: these were str. EV-R7 proved the format."""
+    request = Request.model_validate(
+        {
+            "RFC_NUMBER": "I240101_0001",
+            "LAST_UPDATE": "2026-08-17T15:40:41.610+02:00",
+            "CREATION_DATE_UT": "2026-08-17T15:40:36.383+02:00",
+            "END_DATE_UT": "",
+        }
+    )
+    assert request.last_update.tzinfo is not None
+    assert request.last_update.utcoffset() == timedelta(hours=2)
+    assert request.creation_date_ut.year == 2026
+    assert request.end_date_ut is None  # "" sentinel
+
+
+def test_a_request_timestamp_round_trips_into_a_change_window_filter():
+    """The retype must not cost the ability to build an interval (EV-R5)."""
+    request = Request.model_validate(
+        {"RFC_NUMBER": "I240101_0001", "LAST_UPDATE": "2026-08-17T15:40:41.610+02:00"}
+    )
+    assert ev_since_filter("LAST_UPDATE", request.last_update) == (
+        "LAST_UPDATE:(2026-08-17T15:40:41.610+02:00;)"
+    )

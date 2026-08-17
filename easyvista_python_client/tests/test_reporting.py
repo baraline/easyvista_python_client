@@ -147,11 +147,21 @@ def test_created_since_until_inclusive_bounds():
     assert stats.total == 2
 
 
-def test_window_excludes_missing_or_unparseable_dates():
+def test_window_excludes_missing_dates():
+    """A ticket with no CREATION_DATE_UT is excluded once a window bound is set.
+
+    This test used to also cover a third, "garbage"-dated ticket to exercise the
+    unparseable-date branch here in ``aggregate_tickets``. As of the 2026-08-17
+    read-path retype, ``Request.model_validate`` itself rejects a malformed
+    ``CREATION_DATE_UT`` (see
+    ``test_an_unparseable_timestamp_raises_rather_than_silently_becoming_none``
+    in ``models/tests/test_common.py``), so a ``Request`` with an unparseable
+    creation date can no longer be constructed through the validated path this
+    helper uses -- that sub-case is gone, not weakened.
+    """
     tickets = [
         _ticket(RFC_NUMBER="I1", CREATION_DATE_UT="2025-06-15T12:00:00+00:00"),
         _ticket(RFC_NUMBER="I2"),  # no date
-        _ticket(RFC_NUMBER="I3", CREATION_DATE_UT="garbage"),
     ]
     stats = aggregate_tickets(
         tickets, dimensions=(), created_since="2025-01-01T00:00:00+00:00"

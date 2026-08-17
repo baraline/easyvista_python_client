@@ -9,6 +9,19 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- Read-model timestamps are now timezone-aware `datetime` instead of `str`:
+  `Request.submit_date_ut`, `creation_date_ut`, `max_resolution_date_ut`,
+  `expected_date_ut`, `end_date_ut`, `last_update`, and `Employee.last_update`.
+  EasyVista returns ISO 8601 with an explicit UTC offset and millisecond
+  precision (verified live 2026-08-17), so parsing is no longer left to callers.
+  An unset date (`""` on the wire) is `None`. Write models are **unchanged** —
+  the accepted write format for a date is still unverified.
+  Migration: drop your own parsing; to rebuild a search literal use
+  `format_ev_datetime(value)`, or pass the `datetime` straight to
+  `ev_since_filter`.
+
 ### Added
 
 - Python 3.13 and 3.14 are now tested and declared supported (classifiers, and

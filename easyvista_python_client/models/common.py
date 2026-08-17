@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from ..field_model import FieldClassification, classify
 from ..references import Reference, resolve_reference
+from ..timestamps import parse_ev_datetime
 
 
 def _empty_str_to_none(value: Any) -> Any:
@@ -25,6 +27,38 @@ def _empty_str_to_none(value: Any) -> Any:
 
 OptionalInt = Annotated[int | None, BeforeValidator(_empty_str_to_none)]
 """An ``int | None`` field that treats the API's ``""`` sentinel as ``None``."""
+
+
+def _empty_str_to_none_datetime(value: Any) -> Any:
+    """Coerce EasyVista's ``""`` sentinel for an absent date to ``None``.
+
+    Distinct from :func:`_empty_str_to_none`: a *malformed* timestamp must still
+    raise, so this only maps the documented empty-string sentinel and leaves
+    every other string for pydantic's own datetime validation to accept or
+    reject. Silently returning ``None`` for junk would hide a format change.
+    """
+    if isinstance(value, str) and not value.strip():
+        return None
+    if isinstance(value, str):
+        parsed = parse_ev_datetime(value)
+        # None here means unparseable; hand the original back so pydantic raises
+        # a ValidationError naming the field rather than silently nulling it.
+        return parsed if parsed is not None else value
+    return value
+
+
+OptionalDateTime = Annotated[
+    datetime | None, BeforeValidator(_empty_str_to_none_datetime)
+]
+"""An aware ``datetime | None`` for an EasyVista timestamp column.
+
+EasyVista returns ISO 8601 with an explicit UTC offset and millisecond
+precision (``2026-08-17T15:40:41.610+02:00``), and ``""`` for an unset date —
+verified live 2026-08-17. Python 3.10's ``fromisoformat`` rejects the 3-digit
+fraction outright, which is why this goes through
+:func:`~easyvista_python_client.parse_ev_datetime` rather than letting pydantic
+parse the string itself.
+"""
 
 
 class EasyvistaModel(BaseModel):

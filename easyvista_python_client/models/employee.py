@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from .common import EasyvistaModel, EasyvistaWriteModel, OptionalInt
+from .common import EasyvistaModel, EasyvistaWriteModel, OptionalDateTime, OptionalInt
 
 
 class Employee(EasyvistaModel):
@@ -33,7 +33,7 @@ class Employee(EasyvistaModel):
     login: str | None = Field(default=None, alias="LOGIN")
     function_id: OptionalInt = Field(default=None, alias="FUNCTION_ID")
     language_id: OptionalInt = Field(default=None, alias="LANGUAGE_ID")
-    last_update: str | None = Field(default=None, alias="LAST_UPDATE")
+    last_update: OptionalDateTime = Field(default=None, alias="LAST_UPDATE")
     href: str | None = Field(default=None, alias="HREF")
 
 
