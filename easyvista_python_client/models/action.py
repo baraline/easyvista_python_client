@@ -22,9 +22,17 @@ class Action(EasyvistaModel):
     Item-level reads additionally carry timestamps (``CREATION_DATE_UT``,
     ``LAST_UPDATE``), the author (``DONE_BY_ID`` plus a nested ``DONE_BY``
     employee object) and workflow context (``STAGE_ID``, ``WORKFLOW_ID``) —
-    verified live 2026-08-17. The default LIST projection omits all of them; pass
-    ``fields=`` to ``list_actions`` to get them in one request instead of an
-    item fetch per action.
+    verified live 2026-08-17. Their availability on the LIST endpoint is not
+    uniform: ``CREATION_DATE_UT``, ``LAST_UPDATE``, ``GROUP_ID``, ``STAGE_ID``,
+    ``WORKFLOW_ID`` and ``PARENT_ACTION_ID`` are genuinely absent from the
+    default list projection; ``DONE_BY_ID`` and ``ACTION_NUMBER`` are already
+    present there as top-level scalars; ``ACTION_TYPE_ID`` and ``REQUEST_ID``
+    are present on a list row too, but only *nested* (inside ``ACTION_TYPE`` /
+    ``REQUEST``) — since the declared fields alias the top-level key,
+    ``action_type_id``/``request_id`` read ``None`` off a default list row
+    even though the API did return the data. Pass ``fields=`` to
+    ``list_actions`` to get every one of these top-level in one request
+    instead of an item fetch per action.
     """
 
     action_id: OptionalInt = Field(default=None, alias="ACTION_ID")
@@ -36,10 +44,17 @@ class Action(EasyvistaModel):
     # bare string, so accept either (same polymorphism as Request.description).
     action_type: str | dict[str, Any] | None = Field(default=None, alias="ACTION_TYPE")
     # --- item-level fields (EV-R1, verified live 2026-08-17) ------------------
-    # Present on ``GET actions/{id}`` and obtainable on the LIST endpoint via a
-    # ``fields=`` projection (see ``list_actions(fields=...)``); ABSENT from the
-    # default list projection, which carries only ACTION_ID, ACTION_LABEL_FR,
-    # ACTION_NUMBER, DONE_BY_ID and EXPECTED_START_DATE_UT.
+    # All ten are present on ``GET actions/{id}``. On the LIST endpoint:
+    # CREATION_DATE_UT, LAST_UPDATE, GROUP_ID, STAGE_ID, WORKFLOW_ID and
+    # PARENT_ACTION_ID are genuinely ABSENT from the default projection (the
+    # default list row carries only ACTION_ID, ACTION_LABEL_FR, ACTION_NUMBER,
+    # DONE_BY_ID and EXPECTED_START_DATE_UT) -- use a ``fields=`` projection
+    # (see ``list_actions(fields=...)``) or an item fetch to get them.
+    # ACTION_TYPE_ID and REQUEST_ID are NOT list-absent -- the default list row
+    # already returns them, nested inside ACTION_TYPE / REQUEST respectively --
+    # but because these fields alias the top-level key, they still read
+    # ``None`` off a default list row; a ``fields=`` projection or the item GET
+    # returns them top-level instead.
     #
     # Named ``created_at``/``updated_at`` rather than mirroring the API's
     # ``CREATION_DATE_UT``/``LAST_UPDATE`` because these are the two timestamps
@@ -52,8 +67,11 @@ class Action(EasyvistaModel):
     request_id: OptionalInt = Field(default=None, alias="REQUEST_ID")
     action_number: OptionalInt = Field(default=None, alias="ACTION_NUMBER")
     # Workflow context. A freshly created ticket auto-spawns ~12 actions from the
-    # catalog's workflow; they carry these and an EMPTY ``DONE_BY_ID``, which is
-    # how a caller tells a generated step from a human note. Filter on
+    # catalog's workflow -- on one live ticket, only ONE of the twelve was
+    # human-authored; the rest were the workflow's own generated steps. Those
+    # generated actions carry these fields, an EMPTY ``DONE_BY_ID``, and also a
+    # ``STATUS_ID_ON_CREATE`` (deliberately not declared here) -- together how a
+    # caller tells a generated step from a human note. Filter on
     # ``action_type_id`` — the comment-like type ids are per-deployment config.
     stage_id: OptionalInt = Field(default=None, alias="STAGE_ID")
     workflow_id: OptionalInt = Field(default=None, alias="WORKFLOW_ID")

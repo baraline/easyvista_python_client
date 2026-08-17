@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from easyvista_python_client.models.action import Action, PostAction
 
 _CEST = timezone(timedelta(hours=2))
@@ -42,11 +44,23 @@ def test_workflow_context_is_declared_so_generated_actions_are_identifiable():
     assert action.parent_action_id is None  # "" sentinel -> None
 
 
-def test_the_empty_string_sentinel_maps_to_none_on_every_new_int_field():
+@pytest.mark.parametrize(
+    ("alias", "attr"),
+    [
+        ("DONE_BY_ID", "done_by_id"),
+        ("ACTION_TYPE_ID", "action_type_id"),
+        ("GROUP_ID", "group_id"),
+        ("REQUEST_ID", "request_id"),
+        ("ACTION_NUMBER", "action_number"),
+        ("STAGE_ID", "stage_id"),
+        ("WORKFLOW_ID", "workflow_id"),
+        ("PARENT_ACTION_ID", "parent_action_id"),
+    ],
+)
+def test_the_empty_string_sentinel_maps_to_none_on_every_new_int_field(alias, attr):
     """Workflow-generated actions have an EMPTY DONE_BY_ID (measured live)."""
-    action = Action.model_validate({"ACTION_ID": "1", "DONE_BY_ID": "", "GROUP_ID": ""})
-    assert action.done_by_id is None
-    assert action.group_id is None
+    action = Action.model_validate({"ACTION_ID": "1", alias: ""})
+    assert getattr(action, attr) is None
 
 
 def test_absent_timestamps_are_none_not_an_error():
