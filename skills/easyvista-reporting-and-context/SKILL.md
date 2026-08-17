@@ -166,13 +166,14 @@ with EasyvistaClient.from_env() as client:
   the async surface lets siblings already in flight settle before the error
   propagates, so a failing call can issue more requests than the sync surface
   would.
-- `recent_tickets` ordering is best-effort: it depends on the server
-  honouring the descending-sort token `RECENT_TICKETS_SORT`, and that
-  dependency — like the assumption that an unknown `sort` falls back to the
-  default order rather than erroring — is not confirmed against a live
-  instance (open item O-DIR-1; `easyvista-search-syntax` hedges the same
-  claim). Until checked against your own instance, treat the ordering as
-  unconfirmed rather than guaranteed descending.
+- `recent_tickets` is genuinely sorted newest-first: `RECENT_TICKETS_SORT`
+  uses the space-separated descending token (`RFC_NUMBER DESC`), which
+  EasyVista honours — verified live 2026-08-17 by
+  `integration_tests/test_live_change_window.py` (closes open item O-DIR-1).
+  A colon-separated token (`RFC_NUMBER:DESC`), `-RFC_NUMBER` and
+  `DESC(RFC_NUMBER)` are all silently ignored instead, falling back to the
+  server's default order with no error — that was the earlier, unconfirmed
+  form this constant used to rely on.
 - `TicketContext.to_markdown()` titles the body "Description" whichever memo
   carried it, and emits both headings only when both memos have text. Do not
   parse the heading to infer the source field — read `context.description` /

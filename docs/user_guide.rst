@@ -208,11 +208,15 @@ Assets
 
 .. code-block:: python
 
-   from easyvista_python_client import PostAsset, ev_equals_filter
+   from easyvista_python_client import PostAsset, ev_contains_filter, ev_equals_filter
 
    asset = client.create_asset(PostAsset(catalog_id=3153, asset_tag="LAPTOP-001"))
    one = client.get_asset(str(asset.asset_id))
    found = client.search_assets(search=ev_equals_filter("ASSET_TAG", "LAPTOP-001"), max_rows=50)
+
+   # A bare '~' is exact match, identical to ':' -- substring search needs an
+   # explicit wildcard, which ev_contains_filter adds for you: ASSET_TAG~"*LAPTOP*"
+   laptops = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"), max_rows=50)
 
 Documents
 ---------
@@ -288,9 +292,17 @@ Searching and pagination
 
 The verified search grammar is:
 
-- ``FIELD:"value"`` — exact match. ``~`` is a synonym: despite its appearance it is **exact match**,
-  not "contains" — identical to ``:``. No substring operator has been identified; ``%`` inside a
-  value is a literal character, not a wildcard.
+- ``FIELD:"value"`` — exact match.
+- ``~`` — a **pattern operator**, not a synonym for ``:``. It only acts as one with an *explicit*
+  wildcard in the value: ``*`` and ``%`` both expand (verified live 2026-08-17 — ``~"I26081*"``
+  matched 32 rows, ``~"*260817*"`` matched 33, ``~"*0001"`` matched 432, and ``~"<prefix>%"``
+  reproduced the same count as the ``*`` equivalent, so ``%`` is a wildcard too). Given a
+  **bare** value with no wildcard, ``~`` degenerates to exact match — identical to ``:`` — which is
+  why this package once documented it as exact-match-only; that conclusion held only for the
+  wildcard-free inputs it was tested with. ``:`` never expands a wildcard even when one is present
+  in the value: ``:"I26081*"`` matched **0** rows on the same data. Build the pattern with
+  :func:`~easyvista_python_client.ev_contains_filter` (``FIELD~"*value*"``) or
+  :func:`~easyvista_python_client.ev_starts_with_filter` (``FIELD~"value*"``) rather than by hand.
 - ``,`` — combines conditions: **OR** when every condition names the same field, **AND** across
   different fields. ``;`` is *not* a combinator.
 
@@ -304,6 +316,20 @@ The verified search grammar is:
    ``EasyvistaValidationError`` (HTTP 590) rather than being ignored — e.g.
    ``ev_equals_filter("STATUS_ID", "Open")`` sends a status *name* to an integer column and fails
    loudly. That is the friendlier failure; the silent ones above are the dangerous ones.
+
+   There is **no comparison operator** (``>=``, ``BETWEEN``, ``[a TO b]``…), and writing one has
+   *two* different fates depending on its exact shape, not one:
+
+   - drop the ``FIELD:`` colon entirely (e.g. ``LAST_UPDATE>="2026-01-01"``) and the expression is
+     structurally unparseable, so it takes the **silent-drop** path above — the whole table comes
+     back;
+   - keep ``FIELD:"value"`` syntax but embed the operator *inside* the quoted value
+     (``LAST_UPDATE:">=2026-01-01"`` or ``LAST_UPDATE:"[2026-01-01 TO *]"``) and the quoted text must
+     still parse as the column's type — a date, here — so it instead trips the **type-mismatch**
+     fate and raises ``EasyvistaValidationError`` (HTTP 590).
+
+   Either way, no comparison operator ever narrows the result — see :ref:`change-window-filtering`
+   for the interval grammar that does.
 
    Build filters with the helpers, not f-strings:
 
@@ -378,6 +404,79 @@ The async client paginates with ``async for``:
        search=ev_equals_filter("STATUS_ID", 3), page_size=100
    ):
        print(ticket.rfc_number)
+
+.. _change-window-filtering:
+
+Filtering by a change window
+-----------------------------
+
+EasyVista has **no** comparison operator. ``LAST_UPDATE >= x`` in any spelling is
+either structurally unparseable (silently dropped, every record comes back) or,
+if it keeps ``FIELD:"value"`` syntax while embedding the operator inside the
+quoted value, a type mismatch that raises HTTP 590 — see the warning above. A
+range is instead an interval in the *value position*:
+
+.. code-block:: python
+
+   from easyvista_python_client import ev_since_filter
+
+   search = ev_since_filter("LAST_UPDATE", watermark)   # LAST_UPDATE:(...;)
+   if search is not None:
+       for ticket in client.iter_tickets(search=search):
+           ...
+
+``watermark`` may be a :class:`datetime.datetime` (preferred) or a timestamp
+string. Pass a ``datetime`` and the bound cannot be malformed; ``Request``
+timestamps are already aware datetimes (see :ref:`timestamps`), so a value read
+from one ticket can be fed straight back in.
+
+Use :func:`~easyvista_python_client.ev_between_filter` for a closed interval.
+Both refuse a bound that is not a timestamp: the bound is interpolated
+*unquoted*, so a ``;`` or ``)`` inside it would silently change the query.
+
+.. code-block:: python
+
+   from datetime import datetime, timezone
+   from easyvista_python_client import ev_between_filter
+
+   window = ev_between_filter(
+       "LAST_UPDATE",
+       datetime(2026, 1, 1, tzinfo=timezone.utc),
+       datetime(2026, 2, 1, tzinfo=timezone.utc),
+   )
+   recent = client.search_tickets(search=window, max_rows=100)
+
+.. _timestamps:
+
+Timestamps
+~~~~~~~~~~
+
+``Request``'s timestamp fields (``submit_date_ut``, ``creation_date_ut``,
+``max_resolution_date_ut``, ``expected_date_ut``, ``end_date_ut``,
+``last_update``) and ``Employee.last_update`` are timezone-aware
+:class:`datetime.datetime`, parsed from EasyVista's ISO-8601-with-offset wire
+format (``2026-08-17T15:40:41.610+02:00``, millisecond precision — verified
+live 2026-08-17). An unset date is ``None``. The ``_UT`` suffix is a naming
+convention, **not** a promise of UTC normalization: these columns carry the
+same local offset as ``LAST_UPDATE``.
+
+Only the *read* path is parsed. The accepted *write* format is still
+unverified, so no write model accepts a ``datetime`` — set a date-typed field
+with a raw request if you need to.
+
+Use :func:`~easyvista_python_client.format_ev_datetime` to render a
+``datetime`` back into the literal EasyVista's grammar accepts (e.g. as an
+interval bound above), and :func:`~easyvista_python_client.parse_ev_datetime`
+to parse a raw string yourself.
+
+.. code-block:: python
+
+   from easyvista_python_client import format_ev_datetime, parse_ev_datetime
+
+   ticket = client.get_ticket(ticket.rfc_number)
+   watermark = ticket.last_update                 # already an aware datetime
+   literal = format_ev_datetime(watermark)         # "2026-08-17T15:40:41.610+02:00"
+   assert parse_ev_datetime(literal) == watermark
 
 Counting and statistics
 -----------------------

@@ -9,19 +9,6 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
-### Changed (BREAKING)
-
-- Read-model timestamps are now timezone-aware `datetime` instead of `str`:
-  `Request.submit_date_ut`, `creation_date_ut`, `max_resolution_date_ut`,
-  `expected_date_ut`, `end_date_ut`, `last_update`, and `Employee.last_update`.
-  EasyVista returns ISO 8601 with an explicit UTC offset and millisecond
-  precision (verified live 2026-08-17), so parsing is no longer left to callers.
-  An unset date (`""` on the wire) is `None`. Write models are **unchanged** —
-  the accepted write format for a date is still unverified.
-  Migration: drop your own parsing; to rebuild a search literal use
-  `format_ev_datetime(value)`, or pass the `datetime` straight to
-  `ev_since_filter`.
-
 ### Added
 
 - Python 3.13 and 3.14 are now tested and declared supported (classifiers, and
@@ -44,6 +31,18 @@ a deprecation policy will follow the 1.0 release.
   code snippets against the real public API, so a rename fails CI.
 - Public `filters.py`: `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, and
   `is_safe_ev_value` for building EasyVista `search` expressions safely.
+- `ev_since_filter` / `ev_between_filter` — the interval grammar
+  (`FIELD:(a;b)`) that is the only server-side range filter this API honours.
+  EasyVista has no comparison operator (`>=`, `BETWEEN`, `[a TO b]`…): either
+  rendering is silently dropped or, if it keeps `FIELD:"value"` syntax while
+  embedding the operator in the value, raises HTTP 590 as a type mismatch.
+  Neither ever narrows a result, which is why these builders exist.
+- `ev_contains_filter` / `ev_starts_with_filter` — `~` with an explicit
+  wildcard (`*` or `%`; both work identically). A bare value under `~`
+  degenerates to exact match, which these builders avoid by construction.
+- `parse_ev_datetime` / `format_ev_datetime` (new `timestamps.py` module) —
+  parse an EasyVista timestamp to an aware `datetime` and render one back to
+  the literal the search grammar and the wire format both accept.
 - `Request` now declares fields that were previously reachable only as untyped
   `extra="allow"` data — each verified present on live single-ticket GETs:
   `title`, `request_id`, `external_reference`, `sd_catalog_id`, `urgency_id`,
@@ -52,15 +51,20 @@ a deprecation policy will follow the 1.0 release.
   and `last_update`.
 - `RequestUpdate.title` — a ticket's title can now be changed after creation
   (`PUT /requests/{rfc}`), not only set at create time.
+- `RequestUpdate` now also carries `impact_id`, `owner_id` and
+  `external_reference` (capped at 50 characters — bisected live: 50 is
+  accepted, 51 is rejected). `severity_id`, a writable priority field, and
+  `urgency_id` are deliberately still absent; see the `O-590-PARTIAL` note.
 - `EasyvistaClient.download_document` / `AsyncEasyvistaClient.download_document`
   fetch an attachment's bytes. An absolute download URL is followed only when
   its scheme and host match the configured `server`: every request carries the
   instance's Bearer token, so a URL naming another host is refused rather than
   followed.
 - `Request` now declares the official time-limit fields as typed attributes:
-  `creation_date_ut`, `max_resolution_date_ut`, `expected_date_ut`,
-  `end_date_ut`, `sla_id` and `time_used_to_solve_request`. As with the existing
-  timestamps, they are verified *returned* and no datetime parsing is claimed.
+  `creation_date_ut`, `max_resolution_date_ut`, `expected_date_ut` and
+  `end_date_ut` (timezone-aware `datetime`, parsed the same way as the other
+  timestamps below), plus `sla_id` (int) and `time_used_to_solve_request` (a
+  string on every ticket checked, never an int, so no int branch is declared).
   The instance-specific `E_GTR_*` / `E_GTI_*` family stays undeclared and
   reachable through `classify_fields().custom`.
 - `EasyvistaClient.get_action` / `AsyncEasyvistaClient.get_action` fetch a single
@@ -75,8 +79,114 @@ a deprecation policy will follow the 1.0 release.
   tail is an RFC number rather than an id. A created action's id is therefore not
   recoverable from its create response at all; diff `list_actions` across the
   create to identify it (verified live).
+- `list_actions(fields=...)` — project timestamps and author onto the list and
+  read a whole ticket's action metadata in one request instead of one item
+  fetch per action. Two silent footguns come with it: `"*"` is not a wildcard
+  (it reduces to `ACTION_ID` alone) and a dotted path (`DESCRIPTION.HREF`) is
+  silently dropped.
+- `Action` now declares its timestamps (`created_at`/`CREATION_DATE_UT`,
+  `updated_at`/`LAST_UPDATE`), author (`done_by_id`) and workflow context
+  (`action_type_id`, `group_id`, `request_id`, `action_number`, `stage_id`,
+  `workflow_id`, `parent_action_id`) — verified live 2026-08-17. Availability
+  on the LIST endpoint is not uniform across these; pass `fields=` to project
+  the ones a default list row omits.
+- `update_action` and `delete_document`, with `ActionUpdate`. `PUT
+  actions/{id}` edits an action's note (verified live by re-reading it
+  afterwards, not by trusting HTTP 200); an action can be edited but not
+  deleted (`DELETE actions/{id}` is refused with HTTP 403). `DELETE
+  requests/{rfc}/documents/{document_id}` removes an attachment — the
+  top-level `DELETE documents/{id}` returns HTTP 403.
 - `get_ticket_context(..., resolve_action_bodies=True)` resolves each action's
   note text. Pass `False` to skip it — it costs two extra requests per action.
+
+### Changed
+
+- **BREAKING:** Read-model timestamps are now timezone-aware `datetime`
+  instead of `str`: `Request.submit_date_ut`, `creation_date_ut`,
+  `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut`, `last_update`,
+  and `Employee.last_update`. EasyVista returns ISO 8601 with an explicit UTC
+  offset and millisecond precision (verified live 2026-08-17), so parsing is
+  no longer left to callers. An unset date (`""` on the wire) is `None`. Write
+  models are **unchanged** — the accepted write format for a date is still
+  unverified. Migration: drop your own parsing; to rebuild a search literal
+  use `format_ev_datetime(value)`, or pass the `datetime` straight to
+  `ev_since_filter`.
+  **Scope relative to the last release (0.1.0):** only `Employee.last_update`
+  is a genuine break. The six `Request` fields above were themselves first
+  declared during this same unreleased cycle (see `Added`), so they never
+  shipped as `str` and this retyping breaks nothing a released version
+  depended on.
+- **Documentation correction:** the `search` operator `~` was documented as
+  exact-match-only, identical to `:`. Measured live, `~` **is** a pattern
+  operator — it needs an explicit wildcard (`*` or `%`, both work identically)
+  to act as one: `~"*260817*"` matched 33 rows and `~"I26081*"` matched 32,
+  while `:"I26081*"` matched 0, because `:` never expands a wildcard. Without
+  one, `~` degenerates to exact match, which is exactly what the earlier
+  tests observed and over-generalised from. Examples implying substring
+  matching with a bare value (`ASSET_TAG~LAPTOP`) were wrong and have been
+  replaced with `ev_contains_filter("ASSET_TAG", "LAPTOP")` →
+  `ASSET_TAG~"*LAPTOP*"`. The unverified `!~` / `!` / `is_null` /
+  `is_not_null` operators are still not documented as fact.
+- **Documentation correction:** the README's and user guide's tutorial examples filtered with
+  `ev_equals_filter("STATUS_EN", "Open")`. `STATUS_EN` is a sub-key of the nested `STATUS`
+  object, not a top-level column, so EasyVista silently ignored the condition and every example
+  returned *all* tickets, not just open ones. This was a documentation defect, not a library bug
+  — the library does not special-case field names, so nothing in the shipped code was broken.
+  Replaced with `ev_equals_filter("STATUS_ID", 3)` throughout, and the user guide now documents
+  which returned fields are actually searchable and the third (HTTP 590 type-mismatch) search
+  outcome.
+- `AsyncEasyvistaClient.get_ticket_context` and `get_department_context` now issue their
+  independent sub-requests **concurrently** instead of one after another. The async client
+  previously awaited every call in sequence, so it was no faster than the synchronous one
+  (measured against a live instance on a ticket with 19 actions: 14.65s async, 13.44s sync,
+  5.31s after this change). Same requests, same results, same degradation on 403/404 — only
+  the issue order changed. Peak in-flight is 4 sub-resource requests then at most 8
+  concurrent action-body resolutions for a ticket, and 7 branches for a department.
+  Two deltas worth knowing: on a **failing** bundle the siblings already in flight are
+  awaited before the error propagates, so an error path can issue more requests than it did
+  before (bounded by the fan-out width, and all of them reads); and when two branches fail,
+  the exception raised is the first in source order — the one the sequential version would
+  have raised — rather than whichever failed soonest. `create_tickets` stays deliberately
+  sequential: those are writes, and a mid-batch failure must leave a knowable prefix.
+- `TicketContext.to_markdown()` now titles a lone narrative block `## Description` whichever
+  memo it arrived in. A ticket's body does not always live in `DESCRIPTION` — on the verified
+  instance that memo is unused and `COMMENT` carries the body (and `RequestUpdate.description`
+  writes `COMMENT` on any instance), so the rendered document titled a ticket's main text
+  "Comment", which misleads an LLM or a RAG chunker splitting on headings. The renderer no longer
+  assumes either mapping: when only one memo has text it is the body and is titled
+  `## Description`; when both do, the distinction is real and each keeps its own heading, byte
+  identical to before. An instance that populates `DESCRIPTION` is unaffected. The
+  `TicketContext.description` / `.comment` attributes are unchanged and still name their
+  source memo.
+- **Documentation of observed behaviour, not a code change:** a `description` supplied to
+  `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
+  `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's
+  `COMMENT` Memo, not `DESCRIPTION` — verified live (0/15 sampled tickets, portal-created
+  included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
+  text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
+  directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
+- `Request.status_id`, along with the model's other numeric identity/classification fields, now
+  uses an `OptionalInt` type that tolerates the API's `""` for an absent numeric; `status_id`
+  previously raised a validation error on that value.
+- `get_department_context` now raises `ValueError` for a blank or unrenderable `department_id`
+  rather than building a malformed search (defence in depth; not a demonstrated exploitable path).
+- The synchronous client is now **generated** from the asynchronous one with
+  `unasync`. `easyvista_python_client/_async/` is the only hand-written client
+  source; `_sync/` is produced by `python unasync_build.py`, checked in, and
+  verified in CI. Sync/async parity is enforced by a build gate instead of by
+  convention.
+- **Internal module paths moved.** `easyvista_python_client.client` and
+  `easyvista_python_client.async_client` no longer exist. Import from the
+  package root instead — `from easyvista_python_client import EasyvistaClient,
+  AsyncEasyvistaClient` — which is unchanged and has always been the supported
+  surface. `easyvista_python_client._transport.RequestSpec` is also unchanged.
+- `EasyvistaClient.ticket_statistics` now collects its page of tickets into a
+  list before aggregating, rather than streaming the iterator. No behavioural
+  difference at the default `max_records=100`; at `max_records=None` peak
+  memory is now proportional to the result set.
+- `EasyvistaClient.get_ticket_context` now lists documents before resolving
+  action bodies, rather than after. The same requests are issued and the
+  result is identical; only their order on the wire changed.
 
 ### Removed
 
@@ -109,73 +219,11 @@ a deprecation policy will follow the 1.0 release.
   only way left to retrieve an unrecognized body. `.status_code`, `.ev_code` and
   `.ev_message` are unaffected: a *recognized* EasyVista error body (one with a
   parseable `error`/`error_code` shape) reads exactly as it did before.
-
-### Changed
-
-- `AsyncEasyvistaClient.get_ticket_context` and `get_department_context` now issue their
-  independent sub-requests **concurrently** instead of one after another. The async client
-  previously awaited every call in sequence, so it was no faster than the synchronous one
-  (measured against a live instance on a ticket with 19 actions: 14.65s async, 13.44s sync,
-  5.31s after this change). Same requests, same results, same degradation on 403/404 — only
-  the issue order changed. Peak in-flight is 4 sub-resource requests then at most 8
-  concurrent action-body resolutions for a ticket, and 7 branches for a department.
-  Two deltas worth knowing: on a **failing** bundle the siblings already in flight are
-  awaited before the error propagates, so an error path can issue more requests than it did
-  before (bounded by the fan-out width, and all of them reads); and when two branches fail,
-  the exception raised is the first in source order — the one the sequential version would
-  have raised — rather than whichever failed soonest. `create_tickets` stays deliberately
-  sequential: those are writes, and a mid-batch failure must leave a knowable prefix.
-- `TicketContext.to_markdown()` now titles a lone narrative block `## Description` whichever
-  memo it arrived in. A ticket's body does not always live in `DESCRIPTION` — on the verified
-  instance that memo is unused and `COMMENT` carries the body (and `RequestUpdate.description`
-  writes `COMMENT` on any instance), so the rendered document titled a ticket's main text
-  "Comment", which misleads an LLM or a RAG chunker splitting on headings. The renderer no longer
-  assumes either mapping: when only one memo has text it is the body and is titled
-  `## Description`; when both do, the distinction is real and each keeps its own heading, byte
-  identical to before. An instance that populates `DESCRIPTION` is unaffected. The
-  `TicketContext.description` / `.comment` attributes are unchanged and still name their
-  source memo.
-- **Documentation of observed behaviour, not a code change:** a `description` supplied to
-  `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
-  `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's
-  `COMMENT` Memo, not `DESCRIPTION` — verified live (0/15 sampled tickets, portal-created
-  included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
-  text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
-  directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
-- **Documentation correction:** the `search` operator `~` was documented as "contains". It is
-  **exact match**, identical to `:` — verified against a live instance. Examples implying
-  substring matching (`ASSET_TAG~LAPTOP`) were wrong and have been replaced. The unverified
-  `!~` / `!` / `is_null` / `is_not_null` operators are no longer documented as fact.
-- **Documentation correction:** the README's and user guide's tutorial examples filtered with
-  `ev_equals_filter("STATUS_EN", "Open")`. `STATUS_EN` is a sub-key of the nested `STATUS`
-  object, not a top-level column, so EasyVista silently ignored the condition and every example
-  returned *all* tickets, not just open ones. This was a documentation defect, not a library bug
-  — the library does not special-case field names, so nothing in the shipped code was broken.
-  Replaced with `ev_equals_filter("STATUS_ID", 3)` throughout, and the user guide now documents
-  which returned fields are actually searchable and the third (HTTP 590 type-mismatch) search
-  outcome.
-- `Request.status_id`, along with the model's other numeric identity/classification fields, now
-  uses an `OptionalInt` type that tolerates the API's `""` for an absent numeric; `status_id`
-  previously raised a validation error on that value.
-- `get_department_context` now raises `ValueError` for a blank or unrenderable `department_id`
-  rather than building a malformed search (defence in depth; not a demonstrated exploitable path).
-- The synchronous client is now **generated** from the asynchronous one with
-  `unasync`. `easyvista_python_client/_async/` is the only hand-written client
-  source; `_sync/` is produced by `python unasync_build.py`, checked in, and
-  verified in CI. Sync/async parity is enforced by a build gate instead of by
-  convention.
-- **Internal module paths moved.** `easyvista_python_client.client` and
-  `easyvista_python_client.async_client` no longer exist. Import from the
-  package root instead — `from easyvista_python_client import EasyvistaClient,
-  AsyncEasyvistaClient` — which is unchanged and has always been the supported
-  surface. `easyvista_python_client._transport.RequestSpec` is also unchanged.
-- `EasyvistaClient.ticket_statistics` now collects its page of tickets into a
-  list before aggregating, rather than streaming the iterator. No behavioural
-  difference at the default `max_records=100`; at `max_records=None` peak
-  memory is now proportional to the result set.
-- `EasyvistaClient.get_ticket_context` now lists documents before resolving
-  action bodies, rather than after. The same requests are issued and the
-  result is identical; only their order on the wire changed.
+- `RECENT_TICKETS_SORT` used a colon-separated token (`RFC_NUMBER:DESC`) that
+  EasyVista silently ignores, so `get_department_context(recent_tickets=...)`
+  returned tickets in the API's default order rather than newest-first. The
+  descending token must be space-separated (`RFC_NUMBER DESC`) — verified live
+  2026-08-17 by `integration_tests/test_live_change_window.py`. Closes O-DIR-1.
 
 ### Notes
 

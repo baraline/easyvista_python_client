@@ -26,6 +26,8 @@ Models
 
 .. autoclass:: easyvista_python_client.models.action.PostAction
 
+.. autoclass:: easyvista_python_client.models.action.ActionUpdate
+
 .. autoclass:: easyvista_python_client.models.asset.Asset
 
 .. autoclass:: easyvista_python_client.models.asset.PostAsset
@@ -61,16 +63,34 @@ Filters
 -------
 
 Build ``search`` expressions with these rather than f-strings: EasyVista ignores a filter it cannot
-parse and returns every record, and ``,`` combines conditions — so an unescaped value fails silently
-or widens the result rather than raising.
+parse and returns every record, ``,`` combines conditions so an unescaped value can silently widen
+the result, and there is no comparison operator — a range must be expressed as an interval.
 
 .. autofunction:: easyvista_python_client.filters.ev_equals_filter
 
 .. autofunction:: easyvista_python_client.filters.ev_in_filter
 
+.. autofunction:: easyvista_python_client.filters.ev_contains_filter
+
+.. autofunction:: easyvista_python_client.filters.ev_starts_with_filter
+
+.. autofunction:: easyvista_python_client.filters.ev_since_filter
+
+.. autofunction:: easyvista_python_client.filters.ev_between_filter
+
 .. autofunction:: easyvista_python_client.filters.escape_ev_value
 
 .. autofunction:: easyvista_python_client.filters.is_safe_ev_value
+
+Timestamps
+----------
+
+EasyVista's timestamp format, parsed and rendered in one place — see
+:ref:`timestamps` for how the read models use these.
+
+.. autofunction:: easyvista_python_client.timestamps.parse_ev_datetime
+
+.. autofunction:: easyvista_python_client.timestamps.format_ev_datetime
 
 References
 ----------

@@ -108,13 +108,28 @@ with EasyvistaClient.from_env() as client:
         print(asset.asset_id, asset.asset_tag)
 ```
 
+```python
+from easyvista_python_client import EasyvistaClient, ev_contains_filter
+
+with EasyvistaClient.from_env() as client:
+    # A bare '~' is exact match, just like ':' -- ev_contains_filter adds the
+    # explicit wildcard a partial-tag search needs: ASSET_TAG~"*LAPTOP*"
+    found = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
+    print(found.total_record_count)
+```
+
 ## Gotchas
 
 - `catalog_id` is required by EasyVista and is an `int`; `get_asset` takes a
   `str` id. The asymmetry is real.
-- `ASSET_TAG` filters as **exact match** with `~` as well as `:` — there is
-  no substring search for a partial tag
-  (`integration_tests/test_live_search_syntax.py::test_tilde_on_asset_tag_is_exact_match`).
+- `ASSET_TAG~"LAPTOP"` (a bare value, no wildcard) is **exact match**,
+  identical to `ASSET_TAG:"LAPTOP"` — `~` degenerates to equality without an
+  explicit wildcard. For a partial-tag search use `ev_contains_filter` /
+  `ev_starts_with_filter`, which add the wildcard for you:
+  `ev_contains_filter("ASSET_TAG", "LAPTOP")` builds `ASSET_TAG~"*LAPTOP*"`
+  (verified live
+  `integration_tests/test_live_search_syntax.py::test_tilde_without_a_wildcard_is_exact_on_asset_tag`;
+  see `easyvista-search-syntax` for the full grammar).
 - The `Asset` model declares only `asset_id`, `asset_tag`, `serial_number`,
   `status_id` and `href`; everything else the instance returns is preserved
   by `extra="allow"` and reachable through `classify_fields()`. `reference()`

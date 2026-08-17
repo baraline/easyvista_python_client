@@ -15,7 +15,7 @@ from easyvista_python_client import format_ev_datetime, parse_ev_datetime
 
 
 def test_parses_the_live_format_with_offset_and_milliseconds():
-    """The exact shape measured live (9999-99-99A99:99:99.999+99:99)."""
+    """The exact shape measured live (YYYY-MM-DDTHH:MM:SS.mmm+HH:MM)."""
     dt = parse_ev_datetime("2026-08-17T15:40:41.610+02:00")
     assert dt == datetime(
         2026, 8, 17, 15, 40, 41, 610000, tzinfo=timezone(timedelta(hours=2))

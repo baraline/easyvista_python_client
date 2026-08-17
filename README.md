@@ -78,6 +78,7 @@ from easyvista_python_client import (
     EasyvistaClient,
     EasyvistaConfig,
     PostAsset,
+    ev_contains_filter,
     ev_equals_filter,
 )
 
@@ -85,6 +86,10 @@ with EasyvistaClient(EasyvistaConfig.from_env()) as client:
     asset = client.create_asset(PostAsset(catalog_id=3153, asset_tag="LAPTOP-001"))
     tag_filter = ev_equals_filter("ASSET_TAG", "LAPTOP-001")
     found = client.search_assets(search=tag_filter, max_rows=50)
+
+    # `~` needs an explicit wildcard to mean "contains" -- a bare value is exact
+    # match, identical to `:`. ev_contains_filter adds the wildcard for you.
+    partial = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
 
     # attach a file to a ticket (uploaded as base64 inside the JSON body)
     pdf = Path("report.pdf")
