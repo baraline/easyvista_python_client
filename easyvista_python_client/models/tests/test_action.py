@@ -1,4 +1,64 @@
+from datetime import datetime, timedelta, timezone
+
 from easyvista_python_client.models.action import Action, PostAction
+
+_CEST = timezone(timedelta(hours=2))
+
+# Trimmed from a real item-level GET (see the spec's Appendix A-2); values are
+# synthetic, the KEY NAMES are what this test pins.
+_ITEM_PAYLOAD = {
+    "ACTION_ID": "57483",
+    "ACTION_NUMBER": "0",
+    "ACTION_TYPE_ID": "20",
+    "CREATION_DATE_UT": "2026-08-17T15:40:36.000+02:00",
+    "LAST_UPDATE": "2026-08-17T15:40:37.653+02:00",
+    "DONE_BY_ID": "6117",
+    "GROUP_ID": "57",
+    "REQUEST_ID": "7743",
+    "STAGE_ID": "10",
+    "WORKFLOW_ID": "37",
+    "PARENT_ACTION_ID": "",
+    "DONE_BY": {"EMPLOYEE_ID": "6117", "LAST_NAME": "Doe"},
+    "DESCRIPTION": {"HREF": "https://ev.test/api/v1/12345/actions/57483/description"},
+}
+
+
+def test_item_level_action_exposes_timestamps_and_author():
+    """EV-R1: the fields a Comment model needs all exist on the item GET."""
+    action = Action.model_validate(_ITEM_PAYLOAD)
+    assert action.created_at == datetime(2026, 8, 17, 15, 40, 36, tzinfo=_CEST)
+    assert action.updated_at == datetime(2026, 8, 17, 15, 40, 37, 653000, tzinfo=_CEST)
+    assert action.done_by_id == 6117
+    assert action.action_type_id == 20
+    assert action.group_id == 57
+    assert action.request_id == 7743
+
+
+def test_workflow_context_is_declared_so_generated_actions_are_identifiable():
+    """A fresh ticket auto-spawns ~12 workflow actions; these tell them apart."""
+    action = Action.model_validate(_ITEM_PAYLOAD)
+    assert action.stage_id == 10
+    assert action.workflow_id == 37
+    assert action.parent_action_id is None  # "" sentinel -> None
+
+
+def test_the_empty_string_sentinel_maps_to_none_on_every_new_int_field():
+    """Workflow-generated actions have an EMPTY DONE_BY_ID (measured live)."""
+    action = Action.model_validate({"ACTION_ID": "1", "DONE_BY_ID": "", "GROUP_ID": ""})
+    assert action.done_by_id is None
+    assert action.group_id is None
+
+
+def test_absent_timestamps_are_none_not_an_error():
+    """The list projection omits both date fields entirely."""
+    action = Action.model_validate({"ACTION_ID": "1"})
+    assert action.created_at is None
+    assert action.updated_at is None
+
+
+def test_done_by_reference_resolves_through_the_shared_resolver():
+    action = Action.model_validate(_ITEM_PAYLOAD)
+    assert action.reference("DONE_BY").id == "6117"
 
 
 def test_action_reads_the_item_level_description_memo():

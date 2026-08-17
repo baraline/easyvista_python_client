@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from .common import EasyvistaModel, EasyvistaWriteModel, OptionalInt
+from .common import EasyvistaModel, EasyvistaWriteModel, OptionalDateTime, OptionalInt
 
 
 class Action(EasyvistaModel):
@@ -18,6 +18,13 @@ class Action(EasyvistaModel):
     caller supplied as ``PostAction.description`` comes back through
     ``DESCRIPTION`` — **not** ``COMMENT``, and not on the list endpoint at all
     (verified live). ``extra="allow"`` preserves everything else.
+
+    Item-level reads additionally carry timestamps (``CREATION_DATE_UT``,
+    ``LAST_UPDATE``), the author (``DONE_BY_ID`` plus a nested ``DONE_BY``
+    employee object) and workflow context (``STAGE_ID``, ``WORKFLOW_ID``) —
+    verified live 2026-08-17. The default LIST projection omits all of them; pass
+    ``fields=`` to ``list_actions`` to get them in one request instead of an
+    item fetch per action.
     """
 
     action_id: OptionalInt = Field(default=None, alias="ACTION_ID")
@@ -28,6 +35,29 @@ class Action(EasyvistaModel):
     # The live API returns ACTION_TYPE as a nested object (id/name/...), not a
     # bare string, so accept either (same polymorphism as Request.description).
     action_type: str | dict[str, Any] | None = Field(default=None, alias="ACTION_TYPE")
+    # --- item-level fields (EV-R1, verified live 2026-08-17) ------------------
+    # Present on ``GET actions/{id}`` and obtainable on the LIST endpoint via a
+    # ``fields=`` projection (see ``list_actions(fields=...)``); ABSENT from the
+    # default list projection, which carries only ACTION_ID, ACTION_LABEL_FR,
+    # ACTION_NUMBER, DONE_BY_ID and EXPECTED_START_DATE_UT.
+    #
+    # Named ``created_at``/``updated_at`` rather than mirroring the API's
+    # ``CREATION_DATE_UT``/``LAST_UPDATE`` because these are the two timestamps
+    # a caller reaches for; the aliases keep the wire names authoritative.
+    created_at: OptionalDateTime = Field(default=None, alias="CREATION_DATE_UT")
+    updated_at: OptionalDateTime = Field(default=None, alias="LAST_UPDATE")
+    done_by_id: OptionalInt = Field(default=None, alias="DONE_BY_ID")
+    action_type_id: OptionalInt = Field(default=None, alias="ACTION_TYPE_ID")
+    group_id: OptionalInt = Field(default=None, alias="GROUP_ID")
+    request_id: OptionalInt = Field(default=None, alias="REQUEST_ID")
+    action_number: OptionalInt = Field(default=None, alias="ACTION_NUMBER")
+    # Workflow context. A freshly created ticket auto-spawns ~12 actions from the
+    # catalog's workflow; they carry these and an EMPTY ``DONE_BY_ID``, which is
+    # how a caller tells a generated step from a human note. Filter on
+    # ``action_type_id`` — the comment-like type ids are per-deployment config.
+    stage_id: OptionalInt = Field(default=None, alias="STAGE_ID")
+    workflow_id: OptionalInt = Field(default=None, alias="WORKFLOW_ID")
+    parent_action_id: OptionalInt = Field(default=None, alias="PARENT_ACTION_ID")
 
     @model_validator(mode="after")
     def _derive_action_id_from_href(self) -> Action:
