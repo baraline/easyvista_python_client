@@ -7,43 +7,18 @@ delegate to :func:`aggregate_tickets`.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from .models.request import Request
 from .references import resolve_reference
+from .timestamps import parse_ev_datetime
 
-_FRACTION_RE = re.compile(r"\.(\d+)")
-
-
-def _parse_iso_datetime(value: Any) -> datetime | None:
-    """Parse an EasyVista timestamp to a timezone-aware ``datetime``, or ``None``.
-
-    Accepts a ``datetime`` (returned as-is, naive made UTC) or an ISO-8601 string.
-    Normalizes for Python 3.10's stricter ``fromisoformat``: maps a trailing ``Z``
-    to ``+00:00`` and pads/truncates fractional seconds to 6 digits. A naive result
-    is treated as UTC. Unparseable input returns ``None``.
-    """
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if not isinstance(value, str) or not value.strip():
-        return None
-    text = value.strip()
-    if text.endswith(("Z", "z")):
-        text = text[:-1] + "+00:00"
-    match = _FRACTION_RE.search(text)
-    if match:
-        frac6 = (match.group(1) + "000000")[:6]
-        text = text[: match.start()] + "." + frac6 + text[match.end() :]
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
+# Kept as a module-level alias so the eight existing tests in
+# tests/test_reporting.py keep importing the name they were written against.
+_parse_iso_datetime = parse_ev_datetime
 
 DEFAULT_DIMENSIONS: tuple[str, ...] = (
     "STATUS",

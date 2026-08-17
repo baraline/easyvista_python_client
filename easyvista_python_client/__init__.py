@@ -31,6 +31,7 @@ from .models.request import PostRequest, Request, RequestUpdate
 from .pagination import SearchResult
 from .references import Reference
 from .reporting import TicketStatistics, aggregate_tickets
+from .timestamps import format_ev_datetime, parse_ev_datetime
 
 __version__ = "0.1.0"
 
@@ -70,5 +71,7 @@ __all__ = [
     "escape_ev_value",
     "ev_equals_filter",
     "ev_in_filter",
+    "format_ev_datetime",
     "is_safe_ev_value",
+    "parse_ev_datetime",
 ]
