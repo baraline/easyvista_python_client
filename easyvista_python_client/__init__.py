@@ -18,8 +18,12 @@ from .exceptions import (
 from .field_model import FieldClassification
 from .filters import (
     escape_ev_value,
+    ev_between_filter,
+    ev_contains_filter,
     ev_equals_filter,
     ev_in_filter,
+    ev_since_filter,
+    ev_starts_with_filter,
     is_safe_ev_value,
 )
 from .models.action import Action, PostAction
@@ -69,8 +73,12 @@ __all__ = [
     "__version__",
     "aggregate_tickets",
     "escape_ev_value",
+    "ev_between_filter",
+    "ev_contains_filter",
     "ev_equals_filter",
     "ev_in_filter",
+    "ev_since_filter",
+    "ev_starts_with_filter",
     "format_ev_datetime",
     "is_safe_ev_value",
     "parse_ev_datetime",

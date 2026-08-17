@@ -1,6 +1,6 @@
 """Safe builders for EasyVista ``search`` expressions.
 
-EasyVista's search grammar has two traps a caller cannot see, both verified
+EasyVista's search grammar has three traps a caller cannot see, all verified
 against a live instance:
 
 1. An expression it cannot parse is **silently ignored** and every record is
@@ -8,8 +8,12 @@ against a live instance:
 2. ``,`` is a live combinator (OR within one field, AND across fields), so an
    unescaped value that closes its quote can append conditions and silently
    widen the result set.
+3. A comparison operator does not exist. A change window is an *interval in the
+   value position* — ``FIELD:(a;b)`` — and its bound is UNQUOTED, so
+   ``ev_since_filter``/``ev_between_filter`` validate the bound's shape rather
+   than escaping it.
 
-These builders exist so neither can happen. Filters return ``None`` for blank
+These builders exist so none of them can happen. Filters return ``None`` for blank
 input so callers compose without conditionals::
 
     search = ev_equals_filter("DEPARTMENT_CODE", code)
@@ -23,7 +27,11 @@ these builders check.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
+from datetime import datetime
+
+from .timestamps import format_ev_datetime
 
 # A double quote terminates the quoted value, letting a caller reach the ','
 # combinator; no escape for it is known (verified live). ',' itself is NOT
@@ -74,9 +82,128 @@ def ev_in_filter(field: str, values: Iterable[str | int | None]) -> str | None:
     return ",".join(parts)
 
 
+# An interval bound is rendered UNQUOTED inside `(...)`, so the quote-based
+# defence the other builders rely on does not apply here: a ';' would append a
+# second bound and a ')' would close the interval early. Validating the shape is
+# therefore the guard, not escaping. Deliberately strict — it accepts only the
+# renderings measured live: a date, a second-precision ISO timestamp, or the
+# full offset-bearing literal the API returns.
+_TIMESTAMP_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}"  # YYYY-MM-DD
+    r"(?:[T ]\d{2}:\d{2}:\d{2}"  # optional T HH:MM:SS
+    r"(?:\.\d{1,6})?"  # optional fractional seconds
+    r"(?:Z|[+-]\d{2}:\d{2})?)?$"  # optional offset
+)
+
+
+def _interval_bound(value: str | datetime | None) -> str:
+    """Render one interval bound, or ``""`` for an open end.
+
+    Raises ``ValueError`` for anything that is not a timestamp, because the
+    bound is interpolated unquoted (see :data:`_TIMESTAMP_RE`).
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return format_ev_datetime(value)
+    text = str(value).strip()
+    if not text:
+        return ""
+    if not _TIMESTAMP_RE.match(text):
+        raise ValueError(
+            f"{value!r} is not an EasyVista timestamp. An interval bound is "
+            "interpolated unquoted, so only a date or an ISO-8601 timestamp is "
+            "accepted; pass a datetime to be certain."
+        )
+    return text
+
+
+def ev_since_filter(field: str, start: str | datetime | None) -> str | None:
+    """Build an open-ended lower bound: ``FIELD:(start;)``.
+
+    This is the change-window filter. EasyVista has **no** comparison operator —
+    ``>=``, ``>``, ``BETWEEN``, ``[a TO b]`` and ``a..b`` are all silently
+    dropped, which returns the whole table (256 live trials, zero honoured).
+    A range is instead an *interval in the value position*, and the open-ended
+    form is exactly a watermark::
+
+        search = ev_since_filter("LAST_UPDATE", watermark)
+        if search is not None:
+            for ticket in client.iter_tickets(search=search):
+                ...
+
+    ``start`` may be a ``datetime`` (preferred — it cannot be malformed) or a
+    timestamp string. Blank or ``None`` returns ``None``, matching the other
+    builders so callers compose without conditionals.
+    """
+    bound = _interval_bound(start)
+    if not bound:
+        return None
+    return f"{field}:({bound};)"
+
+
+def ev_between_filter(
+    field: str, start: str | datetime | None, end: str | datetime | None
+) -> str | None:
+    """Build a closed interval: ``FIELD:(start;end)``.
+
+    Either bound may be omitted for a half-open interval. With both omitted the
+    result is ``None`` rather than ``FIELD:(;)``, which would match everything.
+
+    Note ``,`` is **not** the separator — ``FIELD:(a,b)`` raises HTTP 590 live.
+    """
+    low, high = _interval_bound(start), _interval_bound(end)
+    if not low and not high:
+        return None
+    return f"{field}:({low};{high})"
+
+
+def _wildcard_filter(field: str, value: str | None, pattern: str) -> str | None:
+    """Shared body for the ``~`` pattern builders.
+
+    ``pattern`` is a format string over ``{v}`` placing the wildcards.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        # A blank value would render `FIELD~"**"`, which matches every row —
+        # the silent-widening failure these builders exist to prevent.
+        return None
+    if any(char in text for char in ("*", "%")):
+        raise ValueError(
+            f"{value!r} contains a wildcard character (* or %). These builders "
+            "add the wildcards themselves; one inside the value would change "
+            "which records match rather than being compared literally."
+        )
+    return f'{field}~"{pattern.format(v=escape_ev_value(text))}"'
+
+
+def ev_contains_filter(field: str, value: str | None) -> str | None:
+    """Build a substring match: ``FIELD~"*value*"``.
+
+    ``~`` **is** a pattern operator, and it needs an explicit wildcard — verified
+    live: ``RFC_NUMBER~"*260817*"`` matched 33 rows while
+    ``RFC_NUMBER:"I26081*"`` matched 0, because ``:`` never expands wildcards.
+    Without a wildcard, ``~`` degenerates to exact match, which is why this
+    package previously documented it as "exact-match, not contains" — that
+    conclusion held only for the inputs it was tested with.
+    """
+    return _wildcard_filter(field, value, "*{v}*")
+
+
+def ev_starts_with_filter(field: str, value: str | None) -> str | None:
+    """Build a prefix match: ``FIELD~"value*"`` (verified live: 32 rows)."""
+    return _wildcard_filter(field, value, "{v}*")
+
+
 __all__ = [
     "escape_ev_value",
+    "ev_between_filter",
+    "ev_contains_filter",
     "ev_equals_filter",
     "ev_in_filter",
+    "ev_since_filter",
+    "ev_starts_with_filter",
     "is_safe_ev_value",
 ]
