@@ -30,6 +30,7 @@ from easyvista_python_client import (
     ev_contains_filter,
     ev_since_filter,
     ev_starts_with_filter,
+    format_ev_datetime,
     parse_ev_datetime,
 )
 from easyvista_python_client._html import html_to_text
@@ -57,8 +58,19 @@ def split_instants(live_client: EasyvistaClient) -> tuple[str, str]:
     Sampled across four pages because the default order is not chronological, so
     one page of a large instance is a biased slice and its quartiles may not
     actually split the data.
+
+    Returns the API's own accepted rendering (:func:`format_ev_datetime`), not
+    a Python ``repr``: ``last_update`` is a parsed, timezone-aware ``datetime``
+    (Task 5), so collecting it via ``.model_dump(by_alias=True)`` in "python"
+    mode hands back the ``datetime`` object itself, not a string -- despite
+    this fixture's own ``-> tuple[str, str]`` annotation. Interpolating that
+    object straight into an f-string (as the comparison-operator test below
+    does) renders Python's ``str(datetime)`` -- a space separator and 6-digit
+    microseconds -- which is NOT a literal this API accepts. Sorting is done
+    on the ``datetime`` values themselves (correct under differing UTC
+    offsets), then each endpoint is rendered to a literal on the way out.
     """
-    stamps: list[str] = []
+    stamps: list = []
     for page in range(4):
         result = live_client.search_tickets(
             max_rows=200, offset=page * 200, fields=["RFC_NUMBER", "LAST_UPDATE"]
@@ -66,16 +78,15 @@ def split_instants(live_client: EasyvistaClient) -> tuple[str, str]:
         if not result.records:
             break
         for row in result.records:
-            value = row.model_dump(by_alias=True).get("LAST_UPDATE")
-            if value is not None:
-                stamps.append(value)
+            if row.last_update is not None:
+                stamps.append(row.last_update)
     if len(stamps) < 8:
         pytest.skip("too few LAST_UPDATE values sampled to derive split instants")
     stamps.sort()
-    early, late = stamps[len(stamps) // 4], stamps[(3 * len(stamps)) // 4]
-    if early == late:
+    early_dt, late_dt = stamps[len(stamps) // 4], stamps[(3 * len(stamps)) // 4]
+    if early_dt == late_dt:
         pytest.skip("sampled LAST_UPDATE values do not span two distinct instants")
-    return early, late
+    return format_ev_datetime(early_dt), format_ev_datetime(late_dt)
 
 
 def test_last_update_parses_to_an_aware_datetime(live_client: EasyvistaClient):
@@ -105,7 +116,13 @@ def test_the_open_ended_interval_is_honoured_and_monotone(
     early, late = split_instants
     search_early = ev_since_filter("LAST_UPDATE", parse_ev_datetime(early))
     search_late = ev_since_filter("LAST_UPDATE", parse_ev_datetime(late))
-    assert search_early is not None and search_late is not None
+    # Two SEPARATE asserts, not one `and`-joined check: a compound boolean
+    # that fails on the second operand would have pytest's rewriter print
+    # both operands to explain it, and the other filter string here embeds a
+    # live instant (P2). Neither can actually fail (`_interval_bound` returns
+    # a non-empty string or raises), but the channel is closed either way.
+    assert search_early is not None
+    assert search_late is not None
 
     count_early = _count(live_client, search_early)
     count_late = _count(live_client, search_late)
@@ -124,11 +141,33 @@ def test_the_open_ended_interval_is_honoured_and_monotone(
 def test_the_closed_interval_is_honoured(
     live_client: EasyvistaClient, split_instants, tickets_baseline
 ):
+    """The upper bound must narrow further than the lower bound alone.
+
+    A single count strictly inside ``(0, baseline)`` cannot distinguish a
+    genuinely closed interval from an upper bound that was silently dropped:
+    if ``FIELD:(early;late)`` degraded to the open-ended ``FIELD:(early;)``,
+    ``got`` would just equal ``count_early`` -- a value
+    ``test_the_open_ended_interval_is_honoured_and_monotone`` already proves
+    sits strictly inside ``(0, baseline)`` on its own, so that check alone
+    would pass for the wrong reason. The extra ``count_early`` query below is
+    what actually establishes the upper bound narrows the result further.
+    """
     early, late = split_instants
     search = ev_between_filter("LAST_UPDATE", early, late)
+    search_since_early = ev_since_filter("LAST_UPDATE", early)
+    # Two separate asserts, not one `and`-joined check: see the equivalent
+    # note on the open-ended interval test above (P2).
     assert search is not None
+    assert search_since_early is not None
+
     got = _count(live_client, search)
+    count_early = _count(live_client, search_since_early)
+
     assert 0 < got < tickets_baseline
+    assert got < count_early, (
+        "the closed interval matched at least as many rows as the open-ended "
+        "lower bound alone -- the upper bound may have been silently dropped"
+    )
 
 
 def test_a_comparison_operator_never_narrows_the_result(
@@ -148,11 +187,20 @@ def test_a_comparison_operator_never_narrows_the_result(
     date-typed column, so the quoted value must actually parse as one —
     embedding ``>=`` or a ``[a TO b]`` range inside the quotes instead trips
     the **type-mismatch** fate: a hard ``EasyvistaValidationError`` (HTTP 590).
-    ``test_live_search_syntax.py`` documents the same shape for an int column
-    (its type-mismatch test); this generalizes it to a date column. Asserting
-    ``== tickets_baseline`` for those two, as the original version of this
-    test did, is wrong: it happened to fail loudly with a 590 rather than
-    passing for the wrong reason, but it was still pinning a false claim.
+    A CONTROL below isolates that claim: a bare, valid ``LAST_UPDATE`` literal
+    is asserted to be ACCEPTED (no raise), which is what licenses attributing
+    the two 590s to the embedded comparison syntax specifically, rather than
+    to ``FIELD:"value"`` being unusable on this column at all. Without that
+    control, a future release that started honouring ``>=`` but still
+    rejected this exact rendering's date shape could keep the raises green
+    while the claim they guard went false -- the same "prose outran evidence"
+    failure this task exists to catch, one level down.
+    ``test_live_search_syntax.py`` documents the same paired shape (bogus vs.
+    type-correct value) for an int column; this generalizes it to a date
+    column. Asserting ``== tickets_baseline`` for the two raising cases, as
+    the original version of this test did, is wrong: it happened to fail
+    loudly with a 590 rather than passing for the wrong reason, but it was
+    still pinning a false claim.
 
     Whichever fate applies, a comparison operator never narrows the result —
     it either raises or returns the whole table — so the filter builders'
@@ -161,6 +209,17 @@ def test_a_comparison_operator_never_narrows_the_result(
     can be simplified.
     """
     early, _late = split_instants
+
+    # Control: a bare, valid LAST_UPDATE literal must be ACCEPTED. Called
+    # outside `pytest.raises` on purpose -- if this column rejected
+    # `FIELD:"value"` syntax outright, this call would itself raise and the
+    # test would error here, honestly, rather than mis-attributing that
+    # rejection to the comparison operator in the two raises below.
+    control = _count(live_client, f'LAST_UPDATE:"{early}"')
+    assert 0 <= control <= tickets_baseline, (
+        "a bare valid LAST_UPDATE literal behaved unexpectedly -- the 590s "
+        "below can no longer be attributed to the embedded comparison syntax"
+    )
 
     with pytest.raises(EasyvistaValidationError) as excinfo:
         _count(live_client, f'LAST_UPDATE:">={early}"')
@@ -220,24 +279,44 @@ def test_descending_sort_needs_the_space_separated_token(
 
 
 def test_recent_tickets_sort_token_is_honoured(live_client: EasyvistaClient):
-    """The exact constant `get_department_context` relies on (O-DIR-1)."""
+    """The exact constant `get_department_context` relies on (O-DIR-1).
+
+    Comparing against the UNSORTED order is what makes this meaningful, the
+    same reasoning ``test_descending_sort_needs_the_space_separated_token``
+    documents: monotonicity alone cannot tell "sorted descending" apart from
+    "the default order happens to be descending". If the default page is
+    itself already RFC-descending, this instance cannot discriminate the two
+    and the test skips rather than passing for a coincidental reason.
+    """
     from easyvista_python_client.directory import RECENT_TICKETS_SORT
 
     proj = ["RFC_NUMBER"]
-    unsorted_order = [
-        r.rfc_number
-        for r in live_client.search_tickets(fields=proj, max_rows=20).records
-    ]
+
+    def rfcs(sort: str | None) -> list[str]:
+        page = live_client.search_tickets(sort=sort, fields=proj, max_rows=20)
+        # Filtered consistently on BOTH the sorted and unsorted side: an RFC-less
+        # row would otherwise make `sorted_rfcs` and its own re-sorted copy
+        # differ in length and fail the monotonicity check for the wrong reason.
+        return [r.rfc_number for r in page.records if r.rfc_number]
+
+    unsorted_order = rfcs(None)
     if len(unsorted_order) < 4:
         pytest.skip("need at least 4 tickets")
-    sorted_rfcs = [
-        r.rfc_number
-        for r in live_client.search_tickets(
-            sort=RECENT_TICKETS_SORT, fields=proj, max_rows=20
-        ).records
-    ]
-    descending = sorted_rfcs == sorted([r for r in sorted_rfcs if r], reverse=True)
-    assert descending, f"{RECENT_TICKETS_SORT!r} did not return newest-first"
+    if unsorted_order == sorted(unsorted_order, reverse=True):
+        pytest.skip(
+            "the default page order is already RFC-descending on this "
+            "instance -- cannot distinguish an honoured sort token from a "
+            "coincidence"
+        )
+
+    sorted_rfcs = rfcs(RECENT_TICKETS_SORT)
+    is_descending = sorted_rfcs == sorted(sorted_rfcs, reverse=True)
+    assert is_descending, f"{RECENT_TICKETS_SORT!r} did not return newest-first"
+    reordered = sorted_rfcs != unsorted_order
+    assert reordered, (
+        f"{RECENT_TICKETS_SORT!r} returned the default order unchanged -- it "
+        "may be silently ignored"
+    )
 
 
 def test_tilde_is_a_wildcard_operator_when_given_a_wildcard(
@@ -305,9 +384,20 @@ def test_percent_is_a_wildcard_character_just_like_star(
     assert exact == 1
 
     by_star = _count(live_client, f'RFC_NUMBER~"{prefix}*"')
-    assert exact < by_star < tickets_baseline, (
-        "the '*' prefix pattern is no longer a non-trivial wildcard match here "
-        "— it cannot serve as the reference point for the '%' comparison"
+    if by_star <= exact:
+        # A data-availability gap (this sampled prefix happens to be unique
+        # on this instance), not a defect -- skip rather than fail (P1). The
+        # sibling tilde test's non-strict `exact <= by_prefix` is the
+        # precedent for treating "no wider than exact" as inconclusive, not
+        # wrong.
+        pytest.skip(
+            "the sampled prefix's '*' match is no wider than the exact RFC "
+            "on this instance -- cannot use it as the reference point for "
+            "the '%' comparison"
+        )
+    assert by_star < tickets_baseline, (
+        "the '*' prefix pattern matched the whole table -- cannot use it as "
+        "the reference point for the '%' comparison"
     )
 
     by_percent = _count(live_client, f'RFC_NUMBER~"{prefix}%"')

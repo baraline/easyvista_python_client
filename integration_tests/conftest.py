@@ -7,9 +7,9 @@ skips cleanly when credentials are absent, so a checkout with no ``secrets/``
 and no ``EASYVISTA_TEST_*`` environment simply skips the suite rather than
 failing it.
 
-They are not read-only. A full run creates and closes **20 tickets** (one shared
-``rich_ticket``, two ``probe_tickets``, and 17 from ``ticket_factory``), plus 7
-actions, 5 document uploads and 3 updates; ``test_live_smoke`` additionally
+They are not read-only. A full run creates and closes **21 tickets** (one shared
+``rich_ticket``, two ``probe_tickets``, and 18 from ``ticket_factory``), plus 8
+actions, 5 document uploads and 4 updates; ``test_live_smoke`` additionally
 issues one create the server is *expected to reject*, so no ticket persists from
 it. Every created ticket is registered for cleanup before it is asserted on, and
 closed in teardown. Point them at a preprod/test instance, never production.
