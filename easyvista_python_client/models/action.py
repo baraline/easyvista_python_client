@@ -116,9 +116,9 @@ class PostAction(EasyvistaWriteModel):
 class ActionUpdate(EasyvistaWriteModel):
     """Payload for editing an existing action's note.
 
-    ``PUT actions/{id}`` is live-verified (2026-08-17): sending
-    ``{"DESCRIPTION": "…"}`` really changed the action's ``description`` memo,
-    confirmed by re-reading it rather than by trusting HTTP 200. The **nested**
+    ``PUT actions/{id}`` is live-verified (2026-08-17): writing the action's
+    ``DESCRIPTION`` memo really changed it, confirmed by re-reading it rather
+    than by trusting HTTP 200. The **nested**
     ``PUT requests/{rfc}/actions/{id}`` returns 403, as does
     ``DELETE actions/{id}`` — an action can be edited but not deleted.
 
