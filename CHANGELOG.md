@@ -315,7 +315,13 @@ Nothing yet.
   pagination (advance the window to the last row's stamp instead of an offset),
   which `iter_tickets` cannot express. The sweep examples in `ev_since_filter`,
   the user guide and the search-syntax skill all carry the sort and the
-  de-duplication.
+  de-duplication. **Undocumented until now:** because descending yields the
+  newest row first, the watermark reaches its final value on page 1 of any
+  given sweep, so a sweep that is interrupted or capped with `max_records`
+  still ends up holding the newest stamp — advancing the watermark from it
+  permanently excludes every row the incomplete sweep never read. The four
+  sites above now say so: advance the watermark only after a sweep runs to
+  completion, and checkpoint a mid-sweep caller with keyset pagination instead.
 - `Request`/`Action`/`Employee` timestamp columns now **raise** on a malformed
   value instead of falling through to pydantic's own datetime parser, which is
   far more permissive than EasyVista's format and invented plausible-looking

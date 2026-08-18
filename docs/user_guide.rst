@@ -540,6 +540,14 @@ de-duplication above.
    are the deferred rows arriving on a later sweep, plus the inclusive-boundary
    re-read described above.
 
+   **A sweep that does not run to completion is a separate trap.** Descending
+   yields the newest row first, so the watermark reaches its *final* value on
+   page 1. A sweep that is interrupted, or capped with ``max_records`` (as the
+   pagination examples above do), still ends up holding the newest stamp —
+   advance the watermark from that and the next window's ``(newest;)`` bound
+   permanently excludes every row the incomplete sweep never read. Only advance
+   the watermark after a sweep runs to completion.
+
    Descending is the safe direction, not a guarantee. If even a deferred miss is
    unacceptable, page
    :meth:`~easyvista_python_client.EasyvistaClient.search_tickets` yourself with

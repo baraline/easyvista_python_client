@@ -287,6 +287,14 @@ def ev_since_filter(field: str, start: str | datetime | None) -> str | None:
     duplicate — that was wrong: the row an ascending sweep drops is not the
     re-touched one.
 
+    **A sweep that does not run to completion is a separate trap under this
+    sort.** Because ``DESC`` yields the newest row first, the watermark reaches
+    its *final* value on page 1. A sweep interrupted partway through, or capped
+    with ``max_records``, still ends up holding the newest stamp — so advancing
+    the watermark from it makes the next window's ``(newest;)`` bound
+    permanently exclude every row the incomplete sweep never reached. Advance the
+    watermark only after a sweep runs to completion.
+
     Descending is the safe direction, not a guarantee: ``iter_tickets`` owns its
     offset. A caller who cannot tolerate even a deferred miss should page
     :meth:`~easyvista_python_client.EasyvistaClient.search_tickets` directly

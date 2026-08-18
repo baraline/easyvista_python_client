@@ -134,6 +134,14 @@ Both tokens are honoured (measured live); descending is chosen for the reason
 above. De-duplicate by `rfc_number` — the duplicates are the deferred rows
 arriving on a later sweep, plus the inclusive-boundary re-read.
 
+**A sweep that never finishes is a separate trap.** `DESC` yields the newest
+row first, so the watermark reaches its *final* value on page 1. A sweep that
+is interrupted, or capped with `max_records` (as some pagination examples in
+this repo do), still ends up holding the newest stamp — advance the watermark
+from that and the next window's `(newest;)` bound permanently excludes every
+row the incomplete sweep never read. Only advance the watermark after a sweep
+runs to completion.
+
 If even a deferred miss is unacceptable, do not use `iter_*`: page
 `search_tickets` yourself with **keyset** pagination — sort ascending and, after
 each page, advance the *window* to `ev_since_filter(field, max(stamps on the
