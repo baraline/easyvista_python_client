@@ -73,6 +73,82 @@ def test_title_is_writable(live_client: EasyvistaClient, ticket_factory):
     assert title_updated, "TITLE was not changed by RequestUpdate(title=...)"
 
 
+def _another_live_value(
+    client: EasyvistaClient, column: str, current: object
+) -> int | None:
+    """Some id already in use on ``column``, different from ``current``.
+
+    Needed because writing back the value a ticket already carries proves
+    nothing: ``ticket_factory`` sets ``IMPACT_ID`` from ``live_write_config``, so
+    a read-back against that same id would pass even if the field were silently
+    dropped. Sampling an id that genuinely exists on the instance keeps the write
+    legal without hardcoding an instance-specific value.
+
+    Returns ``None`` when the sampled page carries no second value, which the
+    caller turns into a skip rather than a failure.
+    """
+    page = client.search_tickets(max_rows=200, fields=["RFC_NUMBER", column])
+    for record in page.records:
+        value = getattr(record, column.lower(), None)
+        if value is not None and value != current:
+            return value
+    return None
+
+
+def test_request_update_writes_impact_owner_and_external_reference(
+    live_client: EasyvistaClient, ticket_factory
+):
+    """The three columns ``RequestUpdate`` gained on this branch, read back.
+
+    Their unit test pins only the emitted body shape -- the client's own
+    lowercase key names -- which under this branch's measured rule proves
+    nothing: a 200 on a PUT is not a receipt, and a field the API cannot honour
+    is silently dropped while the request succeeds. Without this, EasyVista
+    renaming ``EXTERNAL_REFERENCE`` or declining ``OWNER_ID`` on this verb would
+    leave the whole suite green and the public API still advertising all three.
+    The same reasoning produced ``ActionUpdate``'s live guard in
+    ``test_live_change_window.py``.
+
+    One field per PUT, deliberately. A combined body that came back 200 with one
+    field dropped would be exactly the failure this test exists to catch, and a
+    combined body that raised would not say which field caused it.
+
+    P2: ``reference`` is a self-authored nonce, so it may appear in a message.
+    The impact and owner ids are read off the instance and must not.
+    """
+    rfc = ticket_factory()
+    before = live_client.get_ticket(rfc)
+
+    reference = f"EVCLI{uuid.uuid4().hex[:10].upper()}REF"  # 18 chars; cap is 50
+    new_impact = _another_live_value(live_client, "IMPACT_ID", before.impact_id)
+    new_owner = _another_live_value(live_client, "OWNER_ID", before.owner_id)
+    if new_impact is None or new_owner is None:
+        pytest.skip(
+            "the sampled page carries no second IMPACT_ID / OWNER_ID -- cannot "
+            "distinguish an honoured write from a dropped one"
+        )
+
+    live_client.update_ticket(rfc, RequestUpdate(external_reference=reference))
+    live_client.update_ticket(rfc, RequestUpdate(impact_id=new_impact))
+    live_client.update_ticket(rfc, RequestUpdate(owner_id=new_owner))
+
+    after = live_client.get_ticket(rfc)
+    reference_landed = after.external_reference == reference
+    impact_landed = after.impact_id == new_impact
+    owner_landed = after.owner_id == new_owner
+    assert reference_landed, (
+        f"EXTERNAL_REFERENCE is not {reference} after "
+        "RequestUpdate(external_reference=...) -- the field was accepted with a "
+        "200 and silently dropped"
+    )
+    assert impact_landed, (
+        "IMPACT_ID does not match the id sent by RequestUpdate(impact_id=...)"
+    )
+    assert owner_landed, (
+        "OWNER_ID does not match the id sent by RequestUpdate(owner_id=...)"
+    )
+
+
 def test_update_does_not_disturb_the_identifier(
     live_client: EasyvistaClient, ticket_factory
 ):

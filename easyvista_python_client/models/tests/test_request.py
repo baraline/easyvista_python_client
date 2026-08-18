@@ -268,7 +268,14 @@ def test_a_request_timestamp_round_trips_into_a_change_window_filter():
 
 
 def test_request_update_carries_the_writable_columns():
-    """EV-R9/EV-R10: each verified by re-reading the ticket, not by HTTP 200."""
+    """Pins the emitted body SHAPE only -- the client's own lowercase key names.
+
+    This asserts nothing about the wire. A 200 on a PUT is not a receipt on this
+    API: a field it cannot honour is silently dropped while the request succeeds.
+    The read-back that does establish these three land lives in
+    ``integration_tests/test_live_ticket_identity.py``
+    ``::test_request_update_writes_impact_owner_and_external_reference``.
+    """
     body = RequestUpdate(
         title="t",
         impact_id=1,
