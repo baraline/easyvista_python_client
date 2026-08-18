@@ -206,6 +206,25 @@ a deprecation policy will follow the 1.0 release.
 
 ### Fixed
 
+- `ev_since_filter` / `ev_between_filter` accepted a **timestamp string with no
+  UTC offset** and passed it to the wire. EasyVista accepts such a literal and
+  reads it in a different zone, which moves the bound and **silently skips
+  records** — measured live 2026-08-18, the same wall-clock text with and without
+  its offset enumerated 13 rows and 11 rows against one instance. Both builders
+  now refuse a time that carries no offset (or `Z`), matching the guard
+  `format_ev_datetime` already applied to a naive `datetime`; a bare date is
+  still accepted, having no time to misplace. Found by probing, not by review:
+  the datetime path was guarded and the string path was not, for the identical
+  hazard.
+- **Documentation correction:** `RequestUpdate`'s docstring claimed `DESCRIPTION`
+  is empty on every ticket of the verified instance. It is not. A pooled 77-row
+  sample across four orderings found `COMMENT` populated on 57 rows,
+  `DESCRIPTION` on 27 and *both* on 24, with the proportions flipping by slice
+  (measured 2026-08-18). The earlier 0/15 reading was a sampling artifact drawn
+  from probe-authored tickets. The load-bearing claim is unchanged and still
+  verified: `RequestUpdate.description` writes the `COMMENT` memo. What is
+  withdrawn is the generalisation about `DESCRIPTION` being universally empty —
+  which also means an instance's body memo cannot be auto-detected by sampling.
 - `find_departments` and `list_actions` interpolated caller values into a `search` expression
   unescaped. Because `,` is an EasyVista combinator, a crafted value could silently widen the
   result set (verified live: a department lookup returned 2 records instead of 1). Both now

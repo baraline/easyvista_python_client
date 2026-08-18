@@ -103,6 +103,16 @@ _TIMESTAMP_RE = re.compile(
     r"(?:Z|[+-][0-9]{2}:[0-9]{2})?)?"  # optional offset
 )
 
+# A datetime carrying NO ``Z`` and no ``+-HH:MM``. The wire accepts these, and
+# reads them in another zone -- measured live 2026-08-18, the same wall-clock
+# text with and without its offset enumerated 13 rows and 11 rows against one
+# instance, the offset-less form moving the bound *later* and skipping records
+# with no error. A bare date deliberately does NOT match: it has day
+# granularity and no time to misplace, and round 1 measured it honoured.
+_OFFSETLESS_TIME_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"
+)
+
 
 def _interval_bound(value: str | datetime | None) -> str:
     """Render one interval bound, or ``""`` for an open end.
@@ -114,6 +124,13 @@ def _interval_bound(value: str | datetime | None) -> str:
     ``9999-99-99`` or ``25:61:61``) is also refused rather than reaching the
     wire, where a dropped condition returns the whole table rather than an
     error.
+
+    A third gate refuses a **time without a UTC offset**, even though the wire
+    accepts one. An offset-less literal is read in another zone, which moves the
+    bound and skips records silently -- the one failure mode a watermark must
+    never have. :func:`~easyvista_python_client.format_ev_datetime` already
+    refuses a naive ``datetime`` on this reasoning; this keeps the string path
+    consistent with it. A bare date stays legal.
     """
     if value is None:
         return ""
@@ -127,6 +144,14 @@ def _interval_bound(value: str | datetime | None) -> str:
             f"{value!r} is not an EasyVista timestamp. An interval bound is "
             "interpolated unquoted, so only a date or an ISO-8601 timestamp is "
             "accepted; pass a datetime to be certain."
+        )
+    if _OFFSETLESS_TIME_RE.fullmatch(text):
+        raise ValueError(
+            f"{value!r} names a time with no UTC offset, which EasyVista reads "
+            "in another zone: that silently moves the bound and skips records "
+            "with no error at all. Append the offset (or 'Z'), or pass an aware "
+            "datetime and let format_ev_datetime render it. A date alone is "
+            "accepted -- it has no time to misplace."
         )
     return text
 

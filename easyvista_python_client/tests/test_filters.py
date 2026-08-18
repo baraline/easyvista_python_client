@@ -66,9 +66,13 @@ def test_is_safe_predicate_never_raises():
 
 
 def test_since_emits_the_open_ended_interval():
-    """``FIELD:(a;)`` — the form measured live as a watermark lower bound."""
-    got = ev_since_filter("LAST_UPDATE", "2025-11-28T16:14:41")
-    assert got == "LAST_UPDATE:(2025-11-28T16:14:41;)"
+    """``FIELD:(a;)`` — the form measured live as a watermark lower bound.
+
+    The literal carries its offset because the bound gate now requires one on
+    any time; this test is about the emitted *shape*, so it uses a legal one.
+    """
+    got = ev_since_filter("LAST_UPDATE", "2025-11-28T16:14:41+01:00")
+    assert got == "LAST_UPDATE:(2025-11-28T16:14:41+01:00;)"
 
 
 def test_since_accepts_a_datetime_and_formats_the_offset_literal():
@@ -137,17 +141,57 @@ def test_interval_refuses_a_well_shaped_but_impossible_timestamp(bad):
 @pytest.mark.parametrize(
     "literal",
     [
+        # A date alone is legal: day granularity, no time to misplace. Measured
+        # live as honoured (round 1: 4107 rows against a 4316-row table).
         "2025-11-28",
-        "2025-11-28T16:14:41",
-        "2025-11-28 16:14:41",
         "2025-11-28T16:14:41.133+01:00",
         "2025-11-28T16:14:41.133456Z",
     ],
 )
 def test_interval_accepts_every_rendering_measured_live(literal):
     """The guard's acceptance side: a regression here fails CLOSED on real
-    watermarks, which no rejection test would catch."""
+    watermarks, which no rejection test would catch.
+
+    The offset-less *time* renderings that round 1 measured as accepted by the
+    API moved to ``test_interval_refuses_a_time_without_an_offset``: the wire
+    takes them, but it reads them in another zone. See that test.
+    """
     assert ev_since_filter("LAST_UPDATE", literal) == f"LAST_UPDATE:({literal};)"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2025-11-28T16:14:41",
+        "2025-11-28 16:14:41",
+        "2025-11-28T16:14:41.133",
+        "2025-11-28T16:14:41.133456",
+    ],
+)
+def test_interval_refuses_a_time_without_an_offset(bad):
+    """An offset-less time SILENTLY SHIFTS the window, so refuse it locally.
+
+    The API *accepts* these -- which is precisely the danger. Measured live
+    2026-08-18 against one instance, the same wall-clock text with and without
+    its offset enumerated 13 rows and 11 rows respectively; the offset-less form
+    is read in another zone, moving the bound *later* and skipping records with
+    no error of any kind. A watermark that silently skips is the worst outcome
+    this grammar can produce.
+
+    ``format_ev_datetime`` already refuses a naive ``datetime`` for exactly this
+    reason, and its docstring says so. Accepting a naive *string* let the same
+    hazard reach the wire by the other path, so both paths now refuse.
+    """
+    with pytest.raises(ValueError, match="offset"):
+        ev_since_filter("LAST_UPDATE", bad)
+
+
+def test_between_refuses_an_offsetless_time_on_either_bound():
+    """Both bounds go through the same gate, so neither may be naive."""
+    with pytest.raises(ValueError, match="offset"):
+        ev_between_filter("LAST_UPDATE", "2025-11-28T16:14:41", "2025-12-01")
+    with pytest.raises(ValueError, match="offset"):
+        ev_between_filter("LAST_UPDATE", "2025-11-28", "2025-12-01T16:14:41")
 
 
 def test_contains_wraps_the_value_in_wildcards_with_the_tilde_operator():

@@ -83,6 +83,12 @@ validated as a real timestamp because it is interpolated **unquoted**, so a
 stray `;` or `)` inside it would silently change the query rather than being
 escaped away.
 
+**A bound naming a time must carry its UTC offset**, and both builders refuse one
+that does not — as a `datetime` or as a string. EasyVista *accepts* an
+offset-less literal and reads it in another zone, moving the bound later and
+skipping records with no error (measured live: 13 rows with the offset, 11
+without, same wall-clock text). A bare date is fine; it has no time to misplace.
+
 ## What is searchable
 
 Only **top-level scalar columns**. Two families are returned but not

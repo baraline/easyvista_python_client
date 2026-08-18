@@ -162,13 +162,23 @@ class RequestUpdate(EasyvistaWriteModel):
     can return 200 and change nothing.
 
     ``description`` writes the ticket's **COMMENT** Memo, not ``DESCRIPTION`` --
-    verified live. EasyVista models ``COMMENT`` as the request's justification
-    and ``DESCRIPTION`` as a separate Memo; which one a deployment actually
-    populates is a per-instance configuration choice. On the instance this
-    client was verified against, ``DESCRIPTION`` is empty on every ticket and
-    ``COMMENT`` carries the body text. Read it back with
-    ``resolve_memo("requests/{rfc}/comment")``, or take
-    ``TicketContext.comment``, which resolves it for you.
+    verified live by reading the text back, and pinned by
+    ``integration_tests/test_live_ticket_metadata.py``.
+
+    EasyVista models ``COMMENT`` as the request's justification and
+    ``DESCRIPTION`` as a separate Memo. Which one a deployment populates is a
+    per-instance configuration choice, and it is **not** reliably detectable at
+    runtime. A pooled 77-row sample of one instance across four different
+    orderings found ``COMMENT`` populated on 57 rows, ``DESCRIPTION`` on 27,
+    *both* on 24 and neither on 17 -- and the proportions flipped depending on
+    which slice was sampled, so a majority vote over a sample answers whichever
+    way the sort happened to fall (measured 2026-08-18). An earlier 15-ticket
+    sample that found ``DESCRIPTION`` empty everywhere was not representative;
+    do not rely on that being true of any instance. Treat the body memo as
+    operator configuration, not as something to infer.
+
+    Read ``COMMENT`` back with ``resolve_memo("requests/{rfc}/comment")``, or
+    take ``TicketContext.comment``, which resolves it for you.
 
     **Deliberately absent** (verified 2026-08-17):
 

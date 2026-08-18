@@ -430,6 +430,16 @@ string. Pass a ``datetime`` and the bound cannot be malformed; ``Request``
 timestamps are already aware datetimes (see :ref:`timestamps`), so a value read
 from one ticket can be fed straight back in.
 
+.. warning::
+
+   **A bound that names a time must carry its UTC offset.** EasyVista accepts an
+   offset-less literal and reads it in a different zone: measured live, the same
+   wall-clock text with and without its offset returned 13 rows and 11 rows
+   against one instance — the offset-less form moves the bound *later* and skips
+   records, with no error of any kind. Both builders therefore refuse a naive
+   time, whether it arrives as a ``datetime`` or as a string. A bare date
+   (``"2026-01-31"``) stays accepted: day granularity has no time to misplace.
+
 Use :func:`~easyvista_python_client.ev_between_filter` for a closed interval.
 Both refuse a bound that is not a timestamp: the bound is interpolated
 *unquoted*, so a ``;`` or ``)`` inside it would silently change the query.
