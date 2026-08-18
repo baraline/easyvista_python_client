@@ -16,7 +16,7 @@ a deprecation policy will follow the 1.0 release.
   change it) instead of returning them whole. Motivation: a consumer mirroring
   attachments had no choice but to buffer, because `download_document`
   materialises the whole file before it returns anything. What this removes is
-  that download buffer and only that -- one attachment's worth of memory, so a
+  that download buffer and only that — one attachment's worth of memory, so a
   32 MB file is held a chunk at a time instead of whole. The upload leg is
   unaffected: `add_document` takes `content: bytes` and base64-encodes it, so a
   mirror that re-uploads still materialises that payload in full (see below for

@@ -477,7 +477,7 @@ class _StreamThatFailsBeforeTheFirstByte(httpx.AsyncByteStream):
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         raise httpx.ReadError("dropped before the first byte")
-        yield b""  # unreachable; makes this a generator rather than a coroutine
+        yield b""  # unreachable; the yield is what makes this a generator function
 
 
 async def _collect(chunks: AsyncIterator[bytes]) -> list[bytes]:
@@ -489,7 +489,8 @@ async def _collect(chunks: AsyncIterator[bytes]) -> list[bytes]:
 async def test_stream_bytes_reassembles_to_the_whole_body():
     # 10244 bytes at chunk_size=1024: deliberately NOT a multiple of it, so the
     # last chunk is a short one. A body sized to an exact multiple never
-    # exercises the ragged tail, and the join above would pass either way.
+    # exercises the ragged tail, and the reassembly assertion below would
+    # pass either way.
     body = bytes(range(256)) * 40 + b"tail"
     respx.get(f"{ROOT}/documents/1/content").mock(
         return_value=httpx.Response(200, content=body)

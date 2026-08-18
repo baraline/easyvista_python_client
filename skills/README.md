@@ -30,7 +30,8 @@ The package ships two clients with one endpoint surface:
   `await`, `for` over the iterators.
 - `AsyncEasyvistaClient` — asynchronous, doing real non-blocking I/O.
   `async with AsyncEasyvistaClient(config) as client`, `await` every method,
-  `async for` over the iterators.
+  `async for` over the iterators and over `stream_document`, which is an async
+  generator rather than a coroutine.
 
 Neither wraps the other. `_async/` is hand-written and `_sync/` is generated
 from it by `unasync_build.py` under a byte-equality CI gate, so the two surfaces

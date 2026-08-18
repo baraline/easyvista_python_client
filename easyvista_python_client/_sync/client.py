@@ -447,16 +447,18 @@ class EasyvistaClient:
         stream = self._transport.stream_bytes(
             documents_res.download_href(document), chunk_size=chunk_size
         )
-        # Close the inner generator explicitly rather than leave it to be
+        # Close the inner generator in a `finally` rather than leaving it to be
         # collected. `stream`'s own `finally` is what releases the response and
-        # returns its connection to the pool, and unwinding *this* generator --
-        # which is what a caller that stops early, by `break` or by an
-        # exception, causes -- does not reach it on its own: the loop below just
-        # exits. Without the `finally` here the release waits on `stream`
-        # becoming garbage, which the sync tree does by refcount but the async
-        # one defers to the garbage collector *and* the event loop's
-        # async-generator finalizer, and until then the connection stays checked
-        # out -- a real cost to a caller with a small connection pool.
+        # returns its connection to the pool, and unwinding *this* generator
+        # does not reach it on its own -- the loop below simply exits.
+        #
+        # What this buys, stated precisely: one deferral instead of two. Closing
+        # this generator -- explicitly, or by an exception propagating out of it
+        # -- now releases the response at once. A bare `break` still defers on
+        # the async surface, because unwinding this generator is itself left to
+        # the event loop's async-generator finalizer; what the `finally` removes
+        # is the *second* wait, for `stream` to become garbage in its own right.
+        # On the sync surface refcounting closes it promptly either way.
         # `contextlib.closing`/`aclosing` would say this in one line, but those
         # two names differ by more than a token so the codegen cannot generate
         # the pair; `stream.close()`/`stream.aclose()` it can.

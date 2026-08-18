@@ -351,7 +351,8 @@ def test_stream_document_chunks_reassemble_to_the_download(config):
 class _ClosableStream(httpx.SyncByteStream):
     """A response body that records when the transport closed it.
 
-    ``closed`` flips in ``aclose()``, which httpx calls when the response is
+    ``closed`` flips in ``aclose()``/``close()``, which httpx calls when the
+    response is
     released -- which is what ``stream_bytes`` does in its own ``finally``. So
     the flag answers "has the connection gone back to the pool yet".
     """
