@@ -22,7 +22,12 @@ import uuid
 
 import pytest
 
-from easyvista_python_client import EasyvistaClient, Request, RequestUpdate
+from easyvista_python_client import (
+    EasyvistaClient,
+    EasyvistaValidationError,
+    Request,
+    RequestUpdate,
+)
 from integration_tests._assertions import assert_populated, assert_shape
 
 pytestmark = pytest.mark.integration
@@ -73,25 +78,59 @@ def test_title_is_writable(live_client: EasyvistaClient, ticket_factory):
     assert title_updated, "TITLE was not changed by RequestUpdate(title=...)"
 
 
-def _another_live_value(
-    client: EasyvistaClient, column: str, current: object
-) -> int | None:
-    """Some id already in use on ``column``, different from ``current``.
+def _other_live_values(
+    client: EasyvistaClient, column: str, current: object, limit: int = 5
+) -> list[int]:
+    """Up to ``limit`` distinct ids in use on ``column``, none equal to ``current``.
 
     Needed because writing back the value a ticket already carries proves
     nothing: ``ticket_factory`` sets ``IMPACT_ID`` from ``live_write_config``, so
     a read-back against that same id would pass even if the field were silently
-    dropped. Sampling an id that genuinely exists on the instance keeps the write
-    legal without hardcoding an instance-specific value.
+    dropped. Sampling ids that genuinely exist on the instance avoids hardcoding
+    an instance-specific value.
 
-    Returns ``None`` when the sampled page carries no second value, which the
-    caller turns into a skip rather than a failure.
+    Several candidates, not one: an id that is in use *somewhere* is not
+    necessarily legal *here*. ``IMPACT_ID`` and ``OWNER_ID`` are foreign keys
+    constrained by the ticket's catalog entry, severity matrix and domain, so the
+    first sampled id may be refused for a ticket ``ticket_factory`` just created.
+    The caller tries them in order (see :func:`_write_first_accepted`).
+
+    An empty list means the sampled page carries no second value at all, which
+    the caller turns into a skip rather than a failure.
     """
     page = client.search_tickets(max_rows=200, fields=["RFC_NUMBER", column])
+    values: list[int] = []
     for record in page.records:
         value = getattr(record, column.lower(), None)
-        if value is not None and value != current:
-            return value
+        if value is None or value == current or value in values:
+            continue
+        values.append(value)
+        if len(values) >= limit:
+            break
+    return values
+
+
+def _write_first_accepted(
+    client: EasyvistaClient, rfc: str, column: str, candidates: list[int]
+) -> int | None:
+    """PUT each candidate to ``column`` until one is accepted; return it.
+
+    ``None`` when every candidate was refused, which the caller turns into a
+    skip. A refusal here means "that id is not assignable to this ticket", not
+    "``RequestUpdate`` cannot write this column" -- reporting it as the latter
+    would be a false red, and this test is about the latter only.
+
+    Only ``EasyvistaValidationError`` is caught, which is the transport's mapping
+    of the two statuses a *refused value* arrives as (400 and 590). An auth
+    failure, a 404 or a 5xx still reddens, because none of those means "this id
+    is illegal here".
+    """
+    for candidate in candidates:
+        try:
+            client.update_ticket(rfc, RequestUpdate(**{column.lower(): candidate}))
+        except EasyvistaValidationError:
+            continue
+        return candidate
     return None
 
 
@@ -113,34 +152,59 @@ def test_request_update_writes_impact_owner_and_external_reference(
     field dropped would be exactly the failure this test exists to catch, and a
     combined body that raised would not say which field caused it.
 
+    A PUT the instance *refuses* is not that failure. ``IMPACT_ID`` and
+    ``OWNER_ID`` are foreign keys whose legal values depend on the ticket's
+    catalog entry and domain, so an id sampled off another ticket may be rejected
+    for this one; that is a skip, not a red. ``EXTERNAL_REFERENCE`` needs no
+    instance-side legality and stays an unconditional assertion.
+
     P2: ``reference`` is a self-authored nonce, so it may appear in a message.
     The impact and owner ids are read off the instance and must not.
     """
     rfc = ticket_factory()
     before = live_client.get_ticket(rfc)
 
+    # EXTERNAL_REFERENCE first and unconditionally: it is free text, so no
+    # instance-side legality can stand between the PUT and the read-back, and
+    # asserting it before the two foreign keys keeps this guard from being
+    # skipped past when one of those cannot be established.
     reference = f"EVCLI{uuid.uuid4().hex[:10].upper()}REF"  # 18 chars; cap is 50
-    new_impact = _another_live_value(live_client, "IMPACT_ID", before.impact_id)
-    new_owner = _another_live_value(live_client, "OWNER_ID", before.owner_id)
-    if new_impact is None or new_owner is None:
-        pytest.skip(
-            "the sampled page carries no second IMPACT_ID / OWNER_ID -- cannot "
-            "distinguish an honoured write from a dropped one"
-        )
-
     live_client.update_ticket(rfc, RequestUpdate(external_reference=reference))
-    live_client.update_ticket(rfc, RequestUpdate(impact_id=new_impact))
-    live_client.update_ticket(rfc, RequestUpdate(owner_id=new_owner))
-
-    after = live_client.get_ticket(rfc)
-    reference_landed = after.external_reference == reference
-    impact_landed = after.impact_id == new_impact
-    owner_landed = after.owner_id == new_owner
+    reference_landed = live_client.get_ticket(rfc).external_reference == reference
     assert reference_landed, (
         f"EXTERNAL_REFERENCE is not {reference} after "
         "RequestUpdate(external_reference=...) -- the field was accepted with a "
         "200 and silently dropped"
     )
+
+    # IMPACT_ID and OWNER_ID are foreign keys, and an id in use on another ticket
+    # is not necessarily assignable to this one, so a refusal is a skip: several
+    # candidates are tried, and only if none is accepted does the column go
+    # unmeasured. Failing there would report "RequestUpdate cannot write
+    # OWNER_ID" when what happened is "that owner is not valid for this ticket".
+    new_impact = _write_first_accepted(
+        live_client,
+        rfc,
+        "IMPACT_ID",
+        _other_live_values(live_client, "IMPACT_ID", before.impact_id),
+    )
+    new_owner = _write_first_accepted(
+        live_client,
+        rfc,
+        "OWNER_ID",
+        _other_live_values(live_client, "OWNER_ID", before.owner_id),
+    )
+    if new_impact is None or new_owner is None:
+        # P2: no sampled id is named, only the column names authored here.
+        pytest.skip(
+            "no sampled IMPACT_ID / OWNER_ID differing from this ticket's own "
+            "was accepted for it -- cannot distinguish an honoured write from a "
+            "dropped one"
+        )
+
+    after = live_client.get_ticket(rfc)
+    impact_landed = after.impact_id == new_impact
+    owner_landed = after.owner_id == new_owner
     assert impact_landed, (
         "IMPACT_ID does not match the id sent by RequestUpdate(impact_id=...)"
     )

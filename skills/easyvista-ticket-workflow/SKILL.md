@@ -176,8 +176,13 @@ with EasyvistaClient.from_env() as client:
   JSON-serialisable.** `submit_date_ut`, `creation_date_ut`,
   `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut` and `last_update`
   are parsed, so `json.dumps(ticket.model_dump(by_alias=True))` and
-  `json.dumps(ticket.classify_fields().official)` raise `TypeError`. Use
-  `model_dump(mode="json")` when exporting, caching or logging as JSON. Only the
+  `json.dumps(ticket.classify_fields().official)` raise `TypeError`. For a dump,
+  use `model_dump(mode="json")`. `classify_fields()` takes **no arguments**, so
+  that keyword has nowhere to go there: render the values with
+  `format_ev_datetime` before serialising the bucket, or re-key a JSON-mode dump
+  by the bucket's keys — `dumped = ticket.model_dump(mode="json",
+  by_alias=True)`, then `{k: dumped[k] for k in ticket.classify_fields().official}`.
+  Only the
   **declared** columns are parsed — an instance-specific date reached through
   `classify_fields().custom` is still the raw string, so pass it through
   `parse_ev_datetime` before comparing the two. No write model accepts a

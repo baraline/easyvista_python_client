@@ -168,8 +168,12 @@ Nothing yet.
   now yield `datetime` objects for these columns, so
   `json.dumps(ticket.classify_fields().official)` raises
   `TypeError: Object of type datetime is not JSON serializable` where it used to
-  work — pass `model_dump(mode="json")` (or otherwise render the values) on any
-  path that caches, exports or logs a record as JSON.
+  work — pass `model_dump(mode="json")` on any path that caches, exports or logs
+  a record as JSON. `classify_fields()` takes **no arguments**, so `mode="json"`
+  cannot be applied to it: render its values with `format_ev_datetime` before
+  serialising, or re-key a JSON-mode dump by the bucket's keys
+  (`dumped = ticket.model_dump(mode="json", by_alias=True)`, then
+  `{k: dumped[k] for k in ticket.classify_fields().official}`).
   **Scope note — the `0.1.0` boundary is ambiguous, read both.** Relative to
   the `## [0.1.0] - 2026-07-15` release **commit** (`6df6a75`), only
   `Employee.last_update` is a pre-existing field — the six `Request` fields

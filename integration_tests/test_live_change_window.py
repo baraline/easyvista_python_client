@@ -16,7 +16,7 @@ Skipped automatically without credentials; never runs in CI.
 from __future__ import annotations
 
 import uuid
-from datetime import timezone
+from datetime import timedelta, timezone
 from itertools import pairwise
 
 import pytest
@@ -274,25 +274,54 @@ def test_only_some_timestamp_renderings_are_accepted_as_an_interval_bound(
 
     Built from raw ``search=`` strings on purpose: the builders now emit only the
     honoured rendering, so they cannot express the rejected ones.
+
+    Each honoured rendering is a **differential across two bounds** in that same
+    rendering, never a single count: a silently dropped condition returns the
+    whole table, so ``0 < got <= baseline`` would pass on the very fate this
+    module exists to detect. The later bound must return strictly fewer rows than
+    the earlier one, which no dropped condition can do -- dropped, both counts are
+    the baseline. The pairs are built so the strict inequality is guaranteed by
+    construction: ``split_instants``' early instant is itself in the result set of
+    the early bound (the lower bound is inclusive) and below the later bound.
     """
-    early, _late = split_instants
+    early, late = split_instants
     moment = parse_ev_datetime(early)
+    later = parse_ev_datetime(late)
     assert moment is not None, "split_instants did not yield a parseable literal"
+    assert later is not None, "split_instants did not yield a parseable literal"
     as_utc = moment.astimezone(timezone.utc)
+    later_utc = later.astimezone(timezone.utc)
+    # For the date-only rendering the second bound is the day AFTER the late
+    # instant, not its own day: on an instance whose sampled stamps all fall on
+    # one day the two dates would otherwise be equal and the differential empty.
+    day_after_late = (later.date() + timedelta(days=1)).isoformat()
 
     honoured = {
-        "date only": moment.date().isoformat(),
-        "milliseconds with offset": format_ev_datetime(moment),
-        "milliseconds with Z": format_ev_datetime(as_utc).replace("+00:00", "Z"),
+        "date only": (moment.date().isoformat(), day_after_late),
+        "milliseconds with offset": (
+            format_ev_datetime(moment),
+            format_ev_datetime(later),
+        ),
+        "milliseconds with Z": (
+            format_ev_datetime(as_utc).replace("+00:00", "Z"),
+            format_ev_datetime(later_utc).replace("+00:00", "Z"),
+        ),
     }
-    for name, literal in honoured.items():
-        got = _count(live_client, f"LAST_UPDATE:({literal};)")
-        # `name` is authored here; the count and the literal derived from live
+    for name, (low, high) in honoured.items():
+        got_low = _count(live_client, f"LAST_UPDATE:({low};)")
+        got_high = _count(live_client, f"LAST_UPDATE:({high};)")
+        # `name` is authored here; the counts and the literals derived from live
         # data are not printed (P2).
-        assert 0 < got <= tickets_baseline, (
+        assert 0 < got_low <= tickets_baseline, (
             f"the {name!r} rendering was expected to be honoured as an interval "
             "bound and returned nothing -- format_ev_datetime may no longer emit "
             "a literal this grammar accepts"
+        )
+        assert got_high < got_low, (
+            f"a later bound in the {name!r} rendering did not return strictly "
+            "fewer rows than an earlier one -- the condition is being silently "
+            "dropped and the whole table returned, which is what this rendering "
+            "being honoured is supposed to rule out"
         )
 
     rejected = {

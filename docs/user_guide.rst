@@ -616,10 +616,16 @@ is still the raw wire string, so within one record dump
 
    **A record dump is no longer directly JSON-serialisable.** ``model_dump()``
    and ``classify_fields()`` yield ``datetime`` objects for the columns above, so
-   ``json.dumps(ticket.classify_fields().official)`` raises
-   ``TypeError: Object of type datetime is not JSON serializable``. Pass
-   ``model_dump(mode="json")`` — or otherwise render the values — on any path
-   that caches, exports or logs a record as JSON.
+   both ``json.dumps(ticket.model_dump(by_alias=True))`` and
+   ``json.dumps(ticket.classify_fields().official)`` raise
+   ``TypeError: Object of type datetime is not JSON serializable``. For a dump,
+   pass ``model_dump(mode="json")``. ``classify_fields()`` takes **no arguments**,
+   so there is nowhere to put that keyword: render the ``datetime`` values with
+   :func:`~easyvista_python_client.format_ev_datetime` before serialising the
+   bucket, or classify the JSON-mode dump yourself — the buckets are keyed by
+   wire column name, so ``{k: dumped[k] for k in ticket.classify_fields().official}``
+   over ``dumped = ticket.model_dump(mode="json", by_alias=True)`` gives the same
+   split with serialisable values.
 
 Use :func:`~easyvista_python_client.format_ev_datetime` to render a
 ``datetime`` back into the literal EasyVista's grammar accepts (e.g. as an

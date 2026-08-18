@@ -129,6 +129,18 @@ _OFFSETLESS_TIME_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"
 )
 
+# A time whose UTC offset carries SECONDS (``+05:53:20``), which
+# :data:`_TIMESTAMP_RE` refuses. Matched separately only to DIAGNOSE it: the
+# value is perfectly good ISO 8601 -- it is what ``isoformat()`` produces for
+# any pre-1900 ``zoneinfo`` instant -- so the generic "not an EasyVista
+# timestamp ... pass a datetime to be certain" message would be wrong twice
+# over, since parsing it back to a datetime and passing that raises for the
+# same underlying reason (see :func:`_render_interval_bound`).
+_SUB_MINUTE_OFFSET_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?[+-][0-9]{2}:[0-9]{2}:[0-9]{2}"
+)
+
 
 def _render_interval_bound(moment: datetime) -> str:
     """Render one time bound in the single form measured live as honoured.
@@ -183,8 +195,15 @@ def _interval_bound(value: str | datetime | None) -> str:
     ``"2025-11-28T16:14:41+01:00"``, the most natural way to comply with the
     offset gate, is HTTP 590 on the wire as written and becomes
     ``2025-11-28T16:14:41.000+01:00`` here. Sub-millisecond precision is
-    truncated to milliseconds, EasyVista's own precision. A bare **date** is
-    passed through unchanged (see :data:`_DATE_ONLY_RE`).
+    truncated to milliseconds, EasyVista's own precision -- truncated **down**,
+    never rounded (``.133999`` becomes ``.133``). That direction is not
+    symmetric between the two ends of an interval: on the **inclusive lower**
+    bound it widens the window, so the worst case is re-reading a record, while
+    on an **upper** bound it moves the bound up to 999 microseconds *earlier*
+    and NARROWS the window, excluding anything stamped inside the truncated
+    remainder. A caller who needs an exact upper bound should hand in a value
+    already at millisecond precision. A bare **date** is passed through
+    unchanged (see :data:`_DATE_ONLY_RE`).
     """
     if value is None:
         return ""
@@ -195,6 +214,16 @@ def _interval_bound(value: str | datetime | None) -> str:
         return ""
     parsed = parse_ev_datetime(text) if _TIMESTAMP_RE.fullmatch(text) else None
     if parsed is None:
+        if _SUB_MINUTE_OFFSET_RE.fullmatch(text):
+            raise ValueError(
+                f"{value!r} carries a UTC offset that is not a whole number of "
+                "minutes, which EasyVista's interval grammar cannot express -- "
+                "the value itself is valid ISO 8601 (every pre-1900 zoneinfo "
+                "zone renders like this). Convert it to UTC, or to a zone with "
+                "a whole-minute offset. Parsing it back to a datetime and "
+                "passing that does NOT help: the datetime path refuses the same "
+                "offset for the same reason."
+            )
         raise ValueError(
             f"{value!r} is not an EasyVista timestamp. An interval bound is "
             "interpolated unquoted, so only a date or an ISO-8601 timestamp is "
@@ -291,6 +320,18 @@ def ev_between_filter(
     result is ``None`` rather than ``FIELD:(;)``, which would match everything.
 
     Note ``,`` is **not** the separator — ``FIELD:(a,b)`` raises HTTP 590 live.
+
+    Both bounds are normalised exactly as :func:`ev_since_filter`'s is (see
+    :func:`_interval_bound`): a bare date passes through, and a value naming a
+    time is re-rendered at millisecond precision with an explicit offset. The
+    sub-millisecond truncation that involves runs **downward**, which is the
+    safe direction for the lower bound but not for the upper one —
+    ``"...41.133999Z"`` as ``end`` becomes ``"...41.133Z"``, up to 999
+    microseconds early. Pass an ``end`` already at millisecond precision when
+    the exact instant matters. (EasyVista itself returns millisecond precision,
+    so a bound read back from a record cannot fall inside that remainder. The
+    *upper* bound's inclusivity is unmeasured — only the lower bound's was
+    verified live.)
     """
     low, high = _interval_bound(start), _interval_bound(end)
     if not low and not high:

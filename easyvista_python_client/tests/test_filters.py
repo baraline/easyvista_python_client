@@ -210,13 +210,29 @@ def test_interval_refuses_a_sub_minute_utc_offset_on_either_path():
     grammar accepts can express -- and which the string path already refused.
     Validating the RENDERED bound is what keeps the datetime path from emitting
     something its own sibling path would reject.
+
+    Both paths must give the SAME diagnosis, which is why the string half matches
+    on "whole number of minutes" rather than merely on "timestamp". The generic
+    message ("is not an EasyVista timestamp ... pass a datetime to be certain")
+    would be wrong twice over here: the value IS a valid ISO-8601 timestamp -- it
+    is what ``isoformat()`` returns for such a zone -- and following the advice
+    raises on the datetime path for the same underlying reason.
     """
     odd = timezone(timedelta(hours=5, minutes=53, seconds=20))
     aware = datetime(2025, 11, 28, 16, 14, 41, tzinfo=odd)
     with pytest.raises(ValueError, match="whole number of minutes"):
         ev_since_filter("LAST_UPDATE", aware)
-    with pytest.raises(ValueError, match="timestamp"):
+    with pytest.raises(ValueError, match="whole number of minutes"):
         ev_since_filter("LAST_UPDATE", aware.isoformat())
+    # The fractional-second variant takes the same branch: `isoformat()` emits
+    # microseconds whenever they are non-zero, so this is the shape a caller who
+    # serialised `datetime.now(odd)` would actually hand back.
+    with pytest.raises(ValueError, match="whole number of minutes"):
+        ev_since_filter("LAST_UPDATE", aware.replace(microsecond=133999).isoformat())
+    # A genuinely unparseable value must keep the generic message -- the new
+    # branch must not swallow it.
+    with pytest.raises(ValueError, match="is not an EasyVista timestamp"):
+        ev_since_filter("LAST_UPDATE", "not-a-timestamp")
 
 
 @pytest.mark.parametrize(
