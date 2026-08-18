@@ -113,24 +113,36 @@ def _other_live_values(
 def _write_first_accepted(
     client: EasyvistaClient, rfc: str, column: str, candidates: list[int]
 ) -> int | None:
-    """PUT each candidate to ``column`` until one is accepted; return it.
+    """PUT each candidate to ``column`` until the read-back confirms one landed.
 
     ``None`` when every candidate was refused, which the caller turns into a
     skip. A refusal here means "that id is not assignable to this ticket", not
     "``RequestUpdate`` cannot write this column" -- reporting it as the latter
     would be a false red, and this test is about the latter only.
 
-    Only ``EasyvistaValidationError`` is caught, which is the transport's mapping
-    of the two statuses a *refused value* arrives as (400 and 590). An auth
-    failure, a 404 or a 5xx still reddens, because none of those means "this id
-    is illegal here".
+    The read-back after every PUT is load-bearing, not defensive style: this
+    API's documented refusal mode -- restated in
+    :func:`test_request_update_writes_impact_owner_and_external_reference`'s
+    own docstring -- is a **200 with the field silently dropped**, not a raised
+    error. Treating "no exception raised" as "the instance accepted it" would
+    make the first sampled id -- accepted or not -- the last one tried, and a
+    silently declined candidate would surface as "RequestUpdate cannot write
+    this column" instead of "that value is not valid for this ticket": exactly
+    the false red this helper exists to prevent.
+
+    Only ``EasyvistaValidationError`` is caught around the PUT itself, which is
+    the transport's mapping of the two statuses a *refused value* can still
+    raise as (400 and 590). An auth failure, a 404 or a 5xx still reddens,
+    because none of those means "this id is illegal here".
     """
+    attr = column.lower()
     for candidate in candidates:
         try:
-            client.update_ticket(rfc, RequestUpdate(**{column.lower(): candidate}))
+            client.update_ticket(rfc, RequestUpdate(**{attr: candidate}))
         except EasyvistaValidationError:
             continue
-        return candidate
+        if getattr(client.get_ticket(rfc), attr, None) == candidate:
+            return candidate
     return None
 
 
