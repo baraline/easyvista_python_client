@@ -71,6 +71,14 @@ Nothing yet.
 - `ev_contains_filter` / `ev_starts_with_filter` — `~` with an explicit
   wildcard (`*` or `%`; both work identically). A bare value under `~`
   degenerates to exact match, which these builders avoid by construction.
+  A value containing any of `*`, `%`, `_` or `[` raises `ValueError`: all four
+  are metacharacters to `~` (`_` matches any single character, `[` opens a
+  character class — measured live: replacing one character of an RFC that
+  matched 1 row with `_`, or with `[0-9]`, matched 9), and no escape for them
+  exists (`\_` is compared literally). Refusing beats silently matching records
+  the caller did not ask for, which matters because `_` is pervasive in
+  EasyVista codes: `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` would
+  otherwise also match `LAPTOP-01` and `LAPTOP001`, with HTTP 200 and no hint.
 - `parse_ev_datetime` / `format_ev_datetime` (new `timestamps.py` module) —
   parse an EasyVista timestamp to an aware `datetime` and render one back to
   the literal the search grammar and the wire format both accept.
@@ -111,16 +119,30 @@ Nothing yet.
   recoverable from its create response at all; diff `list_actions` across the
   create to identify it (verified live).
 - `list_actions(fields=...)` — project timestamps and author onto the list and
-  read a whole ticket's action metadata in one request instead of one item
-  fetch per action. Two silent footguns come with it: `"*"` is not a wildcard
-  (it reduces to `ACTION_ID` alone) and a dotted path (`DESCRIPTION.HREF`) is
-  silently dropped.
+  read a whole **page** of action metadata in one request instead of one item
+  fetch per action. Three silent footguns come with it: `"*"` is not a wildcard
+  (it reduces to `ACTION_ID` alone), a dotted path (`DESCRIPTION.HREF`) is
+  silently dropped, and `list_actions` returns **one page and does not
+  paginate** — a ticket with more actions than `config.default_max_rows` is
+  truncated with no error, and the call discards the envelope's total so the
+  caller cannot detect it. That is not a corner case: a freshly created ticket
+  already carries about twelve actions, most of them workflow-generated. The
+  same cap therefore truncates `get_ticket_context`'s action log and
+  `TicketContext.to_markdown()`'s rendering of it. `list_actions` now sends
+  `config.default_max_rows` explicitly, the way every sibling search does, so
+  the cap is the client's and can be raised; real pagination is a follow-up.
 - `Action` now declares its timestamps (`created_at`/`CREATION_DATE_UT`,
   `updated_at`/`LAST_UPDATE`), author (`done_by_id`) and workflow context
   (`action_type_id`, `group_id`, `request_id`, `action_number`, `stage_id`,
   `workflow_id`, `parent_action_id`) — verified live 2026-08-17. Availability
   on the LIST endpoint is not uniform across these; pass `fields=` to project
-  the ones a default list row omits.
+  the ones a default list row omits. Note the naming diverges from the two
+  models already shipped: `Action.created_at`/`updated_at` alias the same wire
+  columns that `Request` and `Employee` expose as
+  `creation_date_ut`/`last_update`. The wire aliases are identical on all three,
+  so code spanning record types should reach the value through
+  `classify_fields()` / `.reference()` rather than a shared attribute name —
+  `getattr(record, "last_update")` raises `AttributeError` on an `Action`.
 - `update_action` and `delete_document`, with `ActionUpdate`. `PUT
   actions/{id}` edits an action's note (verified live by re-reading it
   afterwards, not by trusting HTTP 200); an action can be edited but not
@@ -141,14 +163,20 @@ Nothing yet.
   models are **unchanged** — the accepted write format for a date is still
   unverified. Migration: drop your own parsing; to rebuild a search literal
   use `format_ev_datetime(value)`, or pass the `datetime` straight to
-  `ev_since_filter`.
+  `ev_since_filter`. One more consequence, easy to miss: a record dump is no
+  longer directly JSON-serialisable. `model_dump()` and `classify_fields()`
+  now yield `datetime` objects for these columns, so
+  `json.dumps(ticket.classify_fields().official)` raises
+  `TypeError: Object of type datetime is not JSON serializable` where it used to
+  work — pass `model_dump(mode="json")` (or otherwise render the values) on any
+  path that caches, exports or logs a record as JSON.
   **Scope note — the `0.1.0` boundary is ambiguous, read both.** Relative to
   the `## [0.1.0] - 2026-07-15` release **commit** (`6df6a75`), only
   `Employee.last_update` is a pre-existing field — the six `Request` fields
-  above were themselves first declared later, during this same unreleased
-  cycle (see `Added`), so under that reading only one field is retyped out
+  above were themselves first declared later, during this 0.2.0 cycle
+  (see `Added`), so under that reading only one field is retyped out
   from under a shipped release. But the `0.1.0` **git tag** currently resolves
-  to a later commit (`3216a33`, 2026-08-04, ~150 commits after the release
+  to a later commit (`3216a33`, 2026-08-04, 117 commits after the release
   commit), at which all six `Request` fields and `Employee.last_update` were
   already declared as `str | None`. Anyone who installed or pinned against the
   `0.1.0` tag therefore sees **all seven** fields change type, not one — check
@@ -163,7 +191,9 @@ Nothing yet.
   tests observed and over-generalised from. Examples implying substring
   matching with a bare value (`ASSET_TAG~LAPTOP`) were wrong and have been
   replaced with `ev_contains_filter("ASSET_TAG", "LAPTOP")` →
-  `ASSET_TAG~"*LAPTOP*"`. The unverified `!~` / `!` / `is_null` /
+  `ASSET_TAG~"*LAPTOP*"`. `*` and `%` are not the only metacharacters either:
+  under `~`, `_` matches any single character and `[` opens a character class
+  (both measured live). The unverified `!~` / `!` / `is_null` /
   `is_not_null` operators are still not documented as fact.
 - **Documentation correction:** the README's and user guide's tutorial examples filtered with
   `ev_equals_filter("STATUS_EN", "Open")`. `STATUS_EN` is a sub-key of the nested `STATUS`
@@ -199,8 +229,10 @@ Nothing yet.
 - **Documentation of observed behaviour, not a code change:** a `description` supplied to
   `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
   `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's
-  `COMMENT` Memo, not `DESCRIPTION` — verified live (0/15 sampled tickets, portal-created
-  included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
+  `COMMENT` Memo, not `DESCRIPTION` — verified live by re-reading the memo after a write, not
+  by trusting HTTP 200. Nothing is claimed here about how often `DESCRIPTION` is populated on
+  an instance: an earlier reading of that (`0/15` sampled tickets) is explicitly withdrawn by
+  the DESCRIPTION-sampling correction under `Fixed` below. Read the body
   text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
   directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
 - `Request.status_id`, along with the model's other numeric identity/classification fields, now
@@ -247,6 +279,43 @@ Nothing yet.
   still accepted, having no time to misplace. Found by probing, not by review:
   the datetime path was guarded and the string path was not, for the identical
   hazard.
+- `ev_since_filter` / `ev_between_filter` now **normalise** a timestamp string
+  bound instead of passing it through. The offset gate above made an offset
+  mandatory, and the obvious way to comply with a stored
+  `"2026-08-17T20:26:40"` watermark is to append `+02:00` — but measured live
+  2026-08-18, `LAST_UPDATE:(2025-11-28T16:14:41+01:00;)` is **HTTP 590**, as are
+  minute precision, `seconds+00:00` and a space instead of `T` (which is what
+  `str(aware_datetime)` produces). Only a bare date and
+  millisecond-precision-with-offset (or `Z`) are honoured. An admitted string
+  bound is therefore re-rendered through
+  `format_ev_datetime(parse_ev_datetime(text))`, so the string and datetime
+  paths now emit byte-identical bounds and both emit a rendering the wire
+  accepts; a bare date is still passed through unchanged. Lowercase `z` is now
+  accepted too — `parse_ev_datetime` already accepted it on the read path, so
+  refusing it here rejected a value this package itself produces. The rendered
+  bound is validated as well, so a `datetime` in a zone whose UTC offset is not
+  a whole number of minutes (every pre-1900 `zoneinfo` entry) raises locally
+  instead of emitting `+05:53:20`.
+- **Documented, not changed:** the interval's lower bound is **inclusive** and
+  milliseconds are honoured (verified live on three independent boundaries), so
+  a watermark set to `max(t.last_update)` re-reads that boundary record on the
+  next sweep. And an offset-pagination sweep over a change window **must be
+  sorted**: the rows the filter selects are by construction the rows that are
+  changing, so a ticket touched between two pages can move ahead of the read
+  cursor in the server's unspecified default order and be missed *permanently*,
+  because the next sweep starts from a later watermark. Sorting ascending on the
+  same column the window filters (`sort="LAST_UPDATE"`) moves a re-touched row
+  toward the tail instead, so it is seen twice and de-duplicated by
+  `rfc_number`. The sweep examples in `ev_since_filter`, the user guide and the
+  search-syntax skill now all carry the sort and the de-duplication.
+- `Request`/`Action`/`Employee` timestamp columns now **raise** on a malformed
+  value instead of falling through to pydantic's own datetime parser, which is
+  far more permissive than EasyVista's format and invented plausible-looking
+  instants: `"20260817"` became `1970-08-23T12:00:17Z` (56 years off) and
+  `1755434441610` — what an epoch-millis format change would look like — became
+  a wholly credible `2025-08-17T12:40:41.610Z`. Absorbing a format change is the
+  opposite of what the guard exists for, and the docstring already promised a
+  raise. The `""` unset sentinel still becomes `None`, unchanged.
 - **Documentation correction:** `RequestUpdate`'s docstring claimed `DESCRIPTION`
   is empty on every ticket of the verified instance. It is not. A pooled 77-row
   sample across four orderings found `COMMENT` populated on 57 rows,

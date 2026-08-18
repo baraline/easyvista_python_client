@@ -172,6 +172,17 @@ with EasyvistaClient.from_env() as client:
 
 ## Gotchas
 
+- **Timestamp columns are aware `datetime`, so a record dump is not
+  JSON-serialisable.** `submit_date_ut`, `creation_date_ut`,
+  `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut` and `last_update`
+  are parsed, so `json.dumps(ticket.model_dump(by_alias=True))` and
+  `json.dumps(ticket.classify_fields().official)` raise `TypeError`. Use
+  `model_dump(mode="json")` when exporting, caching or logging as JSON. Only the
+  **declared** columns are parsed — an instance-specific date reached through
+  `classify_fields().custom` is still the raw string, so pass it through
+  `parse_ev_datetime` before comparing the two. No write model accepts a
+  `datetime`, `custom_fields` included: a `datetime` there fails inside the HTTP
+  layer with a bare `TypeError`, so render it yourself.
 - `create_ticket`'s response body is **HREF-only** — the API returns no
   `RFC_NUMBER`. `Request` derives `rfc_number` from the trailing path segment
   of the `href` (its own model validator does this, and it is checked against

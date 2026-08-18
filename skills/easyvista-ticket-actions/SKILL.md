@@ -142,10 +142,12 @@ from easyvista_python_client import ActionUpdate, EasyvistaClient
 
 with EasyvistaClient.from_env() as client:
     # Keyed on the action id alone -- NOT the ticket's rfc_number.
-    updated = client.update_action(
+    client.update_action(
         12345, ActionUpdate(description="Corrected: printer power-cycled twice.")
     )
-    print(updated.action_id)
+    # The PUT's own response body has never been captured, so do not read the
+    # returned Action's fields -- re-read instead.
+    print(client.get_action(12345).description)
 ```
 
 ```python
@@ -188,3 +190,22 @@ with EasyvistaClient.from_env() as client:
 - `list_actions(fields=...)` has two silent footguns: `fields="*"` is not a
   wildcard (it reduces to `ACTION_ID` alone), and a dotted path like
   `"DESCRIPTION.HREF"` is silently dropped rather than raising.
+- **`list_actions` returns ONE page and does not paginate.** The cap is
+  `config.default_max_rows`; a ticket with more actions than that is truncated
+  with **no error**, and the call discards the envelope's total so nothing in the
+  result reveals it. A freshly created ticket already carries about twelve
+  actions (most workflow-generated), so a busy ticket crosses a default cap
+  easily. The same cap truncates `get_ticket_context`'s `actions` and
+  `TicketContext.to_markdown()`'s rendered log — for a comment sync, that means
+  silently missing comments on exactly the busiest tickets. Raise
+  `EasyvistaConfig.default_max_rows` when a whole log matters.
+- **`update_action`'s return value is an unverified echo.** The PUT's response
+  body has never been captured, and the parser falls back to the raw body when
+  there are no records — so if the API answers empty or HREF-only, you get an
+  `Action` whose every field is `None`. Re-read with `get_action` instead of
+  reading fields off the returned object.
+- `Action` names its timestamps `created_at`/`updated_at` where `Request` and
+  `Employee` use `creation_date_ut`/`last_update` for the identical wire
+  columns. `getattr(record, "last_update")` raises `AttributeError` on an
+  `Action`; for code spanning record types, go through `classify_fields()` or
+  `.reference()`, where the wire alias is uniform.

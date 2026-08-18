@@ -14,6 +14,10 @@ and does real non-blocking I/O. Same method names, same arguments, same
 results. Pick the one matching the runtime — synchronous script or async
 event loop — and keep it consistent within one application.
 
+Two exceptions to "returns coroutines": the `iter_*` methods and
+`stream_document` are **async generators** on the async client. Iterate them
+with `async for`; `await client.stream_document(...)` raises `TypeError`.
+
 ## Procedure
 
 1. Pick the client class: `EasyvistaClient` for synchronous code,

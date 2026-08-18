@@ -271,6 +271,17 @@ every other method on it, ``stream_document`` is not awaited:
 
 .. note::
 
+   **Stopping early on the async surface needs an explicit close.** If you
+   ``break`` out of the ``async for`` — sniffing a magic number, hashing the
+   first block, aborting on a size check — the response stays checked out of the
+   connection pool until the event loop's async-generator finalizer runs, which
+   is a garbage-collection cycle away (measured). Use
+   ``contextlib.aclosing(client.stream_document(doc))``, or call ``aclose()``
+   yourself, so the connection is released at the ``break``. The synchronous
+   surface releases it immediately by refcounting and needs nothing.
+
+.. note::
+
    **Only the download streams.** There is no streaming upload, and it is not an
    oversight: EasyVista takes an attachment as base64 inside a JSON body, so
    ``add_document`` has to materialise the whole payload before it can send anything.
@@ -468,13 +479,43 @@ range is instead an interval in the *value position*:
 
    search = ev_since_filter("LAST_UPDATE", watermark)   # LAST_UPDATE:(...;)
    if search is not None:
-       for ticket in client.iter_tickets(search=search):
+       seen = set()
+       for ticket in client.iter_tickets(search=search, sort="LAST_UPDATE"):
+           if ticket.rfc_number in seen:
+               continue
+           seen.add(ticket.rfc_number)
            ...
 
 ``watermark`` may be a :class:`datetime.datetime` (preferred) or a timestamp
 string. Pass a ``datetime`` and the bound cannot be malformed; ``Request``
 timestamps are already aware datetimes (see :ref:`timestamps`), so a value read
-from one ticket can be fed straight back in.
+from one ticket can be fed straight back in. A string naming a time is
+re-rendered into the one form the wire honours (millisecond precision with an
+offset), so a stored watermark string and the ``datetime`` it came from produce
+byte-identical bounds.
+
+The bound is **inclusive**, and milliseconds are honoured (verified live on
+three independent boundaries). A watermark set to ``max(t.last_update)``
+therefore re-reads that boundary record on the next sweep — hence the
+de-duplication above.
+
+.. warning::
+
+   **Sort the sweep; an unsorted one can skip a record permanently.**
+   ``iter_tickets`` walks the result set by *offset*, and the rows a change
+   window selects are by construction the rows that are changing. A ticket
+   touched between page N and page N+1 gets a new ``LAST_UPDATE``, and in the
+   server's unspecified default order it may land *before* the read cursor and
+   never be yielded at all. The miss is permanent, not deferred: the next sweep
+   starts from a later watermark. Sorting **ascending on the same column the
+   window filters** — bare ``LAST_UPDATE``, or ``LAST_UPDATE ASC``; both are
+   honoured, measured live — moves a re-touched row toward the tail instead, so
+   it is seen twice rather than not at all. De-duplicate by ``rfc_number``.
+
+   The sort token must stay space-separated. ``LAST_UPDATE:DESC``,
+   ``-LAST_UPDATE`` and ``DESC(LAST_UPDATE)`` are each **silently ignored**
+   (measured live) and degrade to the server's default order with no error, so a
+   sweep written with one of those forms is an unsorted sweep that looks sorted.
 
 .. warning::
 
@@ -518,7 +559,26 @@ same local offset as ``LAST_UPDATE``.
 
 Only the *read* path is parsed. The accepted *write* format is still
 unverified, so no write model accepts a ``datetime`` — set a date-typed field
-with a raw request if you need to.
+with a raw request if you need to. That includes ``custom_fields``: a
+``datetime`` placed there is not serialisable and fails inside the HTTP layer
+with a bare ``TypeError``, so render it yourself first.
+
+Only the *declared* columns are parsed. An instance-specific date column reached
+through ``classify_fields().custom`` or plain ``extra="allow"`` attribute access
+is still the raw wire string, so within one record dump
+``official["CREATION_DATE_UT"]`` is a ``datetime`` while
+``official["EXPECTED_START_DATE_UT"]`` is a ``str`` — comparing the two raises
+``TypeError``. Pass the undeclared one through
+:func:`~easyvista_python_client.parse_ev_datetime` before comparing them.
+
+.. note::
+
+   **A record dump is no longer directly JSON-serialisable.** ``model_dump()``
+   and ``classify_fields()`` yield ``datetime`` objects for the columns above, so
+   ``json.dumps(ticket.classify_fields().official)`` raises
+   ``TypeError: Object of type datetime is not JSON serializable``. Pass
+   ``model_dump(mode="json")`` — or otherwise render the values — on any path
+   that caches, exports or logs a record as JSON.
 
 Use :func:`~easyvista_python_client.format_ev_datetime` to render a
 ``datetime`` back into the literal EasyVista's grammar accepts (e.g. as an

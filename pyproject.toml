@@ -94,7 +94,10 @@ dev = [
     "sphinx>=7.2,<8.2",
     "sphinx-rtd-theme>=2.0",
     "tomli>=2.0; python_version < '3.11'",
-    "twine>=5.1",
+    # >=7.0 for Metadata-Version 2.5 support: hatchling >=1.32 stamps 2.5, and
+    # twine <=6.2 monkeypatches packaging's valid-metadata list to end at 2.4, so
+    # `twine check` fails a perfectly good wheel and sdist (measured).
+    "twine>=7.0",
     # Exact-pinned, not a range: unasync_build.py --check is a byte-equality
     # gate between _async/ and the checked-in _sync/, and a different
     # generator version can regenerate byte-different-but-equally-"correct"
@@ -254,8 +257,10 @@ fail_under = 95
 #
 # The other two entries are pre-emptive, not repairs: as of this commit the
 # source contains no `if TYPE_CHECKING:` block and no `raise
-# NotImplementedError`, and adding them left the total at 1272 statements /
-# 99.21% exactly. They are here so the first one written does not read as a
+# NotImplementedError`, so adding them excluded nothing and changed no number.
+# (For reference, the gate reports 1437 statements / 99.37% here; treat that as
+# a snapshot, not a canary -- it moves with every added line.) They are here so
+# the first one written does not read as a
 # coverage gap -- a TYPE_CHECKING body exists for mypy and cannot execute, and
 # an unimplemented-stub line is not a line anyone can test. `if TYPE_CHECKING:`
 # excludes the guard and its whole body.

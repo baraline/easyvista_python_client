@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/baraline/easyvista_python_client/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/baraline/easyvista_python_client/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/baraline/easyvista_python_client/branch/main/graph/badge.svg)](https://codecov.io/gh/baraline/easyvista_python_client)
-[![License](https://img.shields.io/github/license/baraline/easyvista_python_client)](LICENSE)
+[![License](https://img.shields.io/github/license/baraline/easyvista_python_client)](https://github.com/baraline/easyvista_python_client/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/baraline/easyvista_python_client)
 [![Docs](https://readthedocs.org/projects/easyvista-python-client/badge/?version=latest)](https://easyvista-python-client.readthedocs.io/en/latest/)
 
@@ -10,7 +10,8 @@
 Typed Python client for the EasyVista Service Manager REST API. Sync + async,
 Pydantic models, Bearer or Basic auth.
 
-While the package is preparing for 1.0, alot of potential breaking change might happen between versions. A deprecation policy will be put in place once 1.0 is out and the package have been stabilized.
+While the package is preparing for 1.0, breaking changes may land between
+minor versions; a deprecation policy will follow the 1.0 release.
 
 ## Documentation
 
@@ -117,7 +118,7 @@ then call `EasyvistaConfig.from_env()`.
 `skills/` holds Agent Skills for driving this client from an AI agent — one per
 domain (client setup, search syntax, tickets, actions, documents, assets,
 directory, reporting and context). Each is a directory with a `SKILL.md`
-following the Agent Skills specification; see [skills/README.md](skills/README.md)
+following the Agent Skills specification; see [skills/README.md](https://github.com/baraline/easyvista_python_client/blob/main/skills/README.md)
 for the index.
 
 They are source-tree material: present in the git repository and the source
@@ -125,11 +126,11 @@ distribution, absent from the installed wheel.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and quality checks.
+See [CONTRIBUTING.md](https://github.com/baraline/easyvista_python_client/blob/main/CONTRIBUTING.md) for development setup and quality checks.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/baraline/easyvista_python_client/blob/main/LICENSE).
 
 ## Sponsoring
 

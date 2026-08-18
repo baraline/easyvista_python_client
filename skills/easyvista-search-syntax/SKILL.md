@@ -34,6 +34,18 @@ something here looks wrong.
   was tested with. `:` never expands a wildcard, even when one is present in
   the value: `FIELD:"abc*"` matches nothing. Use `ev_contains_filter` /
   `ev_starts_with_filter` rather than building the pattern by hand.
+- `*` and `%` are not the only metacharacters under `~`. `_` matches any
+  **single** character and `[` opens a character class — measured live,
+  replacing one character of an RFC that matched 1 row with `_`, or with
+  `[0-9]`, matched 9. There is **no escape**: `\_` returned 0 rows, i.e. the
+  backslash is compared literally. `ev_contains_filter` /
+  `ev_starts_with_filter` therefore raise `ValueError` for a value containing
+  any of `* % _ [`, because silently matching more rows is worse than failing.
+  This bites on ordinary input, not exotic input: `_` is pervasive in EasyVista
+  codes, and `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` would otherwise also
+  match `LAPTOP-01` and `LAPTOP001` with HTTP 200 and no hint. If you need a
+  literal `_`, filter server-side on a wider condition and match exactly in
+  Python.
 - `,` combines conditions: **OR** when every condition names the same field,
   **AND** across different fields.
 - `;` is **not** a combinator; it is swallowed into the quoted value.
@@ -89,6 +101,27 @@ offset-less literal and reads it in another zone, moving the bound later and
 skipping records with no error (measured live: 13 rows with the offset, 11
 without, same wall-clock text). A bare date is fine; it has no time to misplace.
 
+An admitted string bound naming a **time** is re-rendered to millisecond
+precision with an offset, because that is the only time rendering the wire
+honours: `LAST_UPDATE:(2025-11-28T16:14:41+01:00;)` — second precision with an
+offset, the most obvious way to satisfy the rule above — is **HTTP 590**, as are
+minute precision and a space instead of `T` (what `str(aware_datetime)`
+produces). So the string and `datetime` paths emit identical bounds; do not
+hand-build the literal.
+
+The lower bound is **inclusive** and milliseconds are honoured (verified live on
+three independent boundaries), so a watermark taken as `max(t.last_update)`
+re-reads the boundary record on the next sweep. De-duplicate by `rfc_number`.
+
+**Sort a sweep, or it can skip a record permanently.** `iter_*` walks the result
+set by *offset*, and the rows a change window selects are by construction the
+rows that are changing: a ticket touched between two pages gets a new
+`LAST_UPDATE` and, in the server's unspecified default order, may land before the
+read cursor and never be yielded. The miss is permanent — the next sweep starts
+from a later watermark. Sort **ascending on the same column the window filters**
+(bare `LAST_UPDATE`, or `LAST_UPDATE ASC`; both honoured, measured live) so a
+re-touched row moves toward the tail and is seen twice instead of never.
+
 ## What is searchable
 
 Only **top-level scalar columns**. Two families are returned but not
@@ -99,6 +132,15 @@ searchable, and naming one matches everything:
 - the sub-keys of a nested reference object (`STATUS_EN` / `STATUS_FR`
   inside `STATUS`) — they are not top-level columns at all. Filter
   `STATUS_ID`.
+
+A **dotted path across a relation** is the exception and IS honoured in
+`search`: `REQUEST.RFC_NUMBER:"<rfc>"` on `/actions` genuinely scopes, and it is
+what `list_actions` is built on (pinned by
+`integration_tests/test_live_ticket_history.py::test_list_actions_filters_to_the_requested_ticket`).
+What is silently ignored is a **bare** nested sub-key (`STATUS_EN`) and a
+`*_PATH` display column — not the dotted form. Note `fields` does not accept the
+dotted form even where `search` does: a projection like `DESCRIPTION.HREF` is
+silently dropped.
 
 The rule is about **nesting, not language**: `DEPARTMENT_FR` is a top-level
 column on `departments` and filters correctly. `CATALOG_GUID` is not an
@@ -209,7 +251,17 @@ with EasyvistaClient.from_env() as client:
     # in as a watermark for "everything changed since this ticket".
     search = ev_since_filter("LAST_UPDATE", ticket.last_update)
     if search is not None:
-        for changed in client.iter_tickets(search=search, page_size=100):
+        # The sort is load-bearing: an UNSORTED offset sweep over a change
+        # window can skip a row that is touched mid-sweep, permanently. Sorting
+        # ascending on the filtered column moves such a row toward the tail, so
+        # it is seen twice -- hence the de-duplication.
+        seen = set()
+        for changed in client.iter_tickets(
+            search=search, sort="LAST_UPDATE", page_size=100
+        ):
+            if changed.rfc_number in seen:
+                continue
+            seen.add(changed.rfc_number)
             print(changed.rfc_number)
 ```
 
@@ -221,11 +273,13 @@ with EasyvistaClient.from_env() as client:
   `escape_ev_value` does.
 - `ev_equals_filter` returns `None` for a blank value; passing that straight
   through as `search=` silently means "no filter".
-- The descending-sort token must be **space-separated**: `FIELD DESC` (or
-  `field desc`) genuinely reorders the result, verified live 2026-08-17 by
+- The sort token must be **space-separated**: `FIELD DESC` (or `field desc`)
+  genuinely reorders the result, and bare `FIELD` / `FIELD ASC` both sort
+  ascending — verified live by
   `integration_tests/test_live_change_window.py`. `FIELD:DESC`, `-FIELD` and
   `DESC(FIELD)` are all silently ignored — the query falls back to the
-  server's default order with no error. This is what
+  server's default order with no error, so a sweep written with one of those
+  looks sorted and is not. Nothing validates the token locally. This is what
   `easyvista_python_client/directory.py`'s `RECENT_TICKETS_SORT` relies on
   (closes open item O-DIR-1).
 - `count_tickets` is the cheap way to check a filter: it sends `max_rows=1`

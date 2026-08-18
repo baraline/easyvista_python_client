@@ -129,7 +129,21 @@ with EasyvistaClient.from_env() as client:
   enough to buffer.
 - `stream_document` is a generator: nothing is requested until you start
   iterating, so a `ValueError` for a missing URL or an `EasyvistaError` for a
-  foreign one surfaces on the first step, not at the call.
+  foreign one surfaces on the first step, not at the call. A non-positive
+  `chunk_size` raises `ValueError` there too, rather than escaping as an httpx
+  internal error.
+- **Stopping early on the async client needs an explicit close.** After
+  `break`ing out of an `async for`, the response stays checked out of the
+  connection pool until the event loop's async-generator finalizer runs — a
+  garbage-collection cycle later. Use
+  `contextlib.aclosing(client.stream_document(doc))` or call `aclose()`, or a
+  prefix-reading fan-out under a bounded `max_connections` will stall on
+  connections it looks like it released. The sync client releases at the `break`.
+- **Streamed bytes are not proof of instance origin.** An absolute URL in a
+  response *body* is refused when it names another host, but an HTTP *redirect*
+  off the instance is followed (signed-location hops need it); the credential is
+  dropped on the foreign request, and the foreign bytes are returned as the
+  attachment's content.
 - It is `stream_document`, not `iter_document`: every `iter_*` method on this
   client iterates *records*, and this one iterates the bytes of one document.
 - `download_document` raises `ValueError` only when **neither** `DDL_HREF` nor

@@ -38,6 +38,12 @@ one call, degrading around profile restrictions instead of failing.
   `CREATION_DATE_UT`, accepting a `datetime` or an ISO-8601 string, applied
   client-side. A ticket with a missing or unparseable date is excluded when a
   bound is set. A malformed bound string raises `ValueError`.
+- An **offset-less** bound string is interpreted as **UTC**, not instance-local.
+  On a `+02:00` instance, `created_since="2026-01-01T00:00:00"` silently excludes
+  tickets created between 00:00 and 02:00 local on 1 January. Pass an aware
+  `datetime` or an offset-bearing string. (This client-side filter is
+  deliberately more permissive than `ev_since_filter`, which refuses an
+  offset-less time outright.)
 
 ## Context bundles
 
@@ -166,10 +172,16 @@ with EasyvistaClient.from_env() as client:
   the async surface lets siblings already in flight settle before the error
   propagates, so a failing call can issue more requests than the sync surface
   would.
-- `recent_tickets` is genuinely sorted newest-first: `RECENT_TICKETS_SORT`
-  uses the space-separated descending token (`RFC_NUMBER DESC`), which
-  EasyVista honours — verified live 2026-08-17 by
+- `recent_tickets` is genuinely sorted **by descending `RFC_NUMBER`**:
+  `RECENT_TICKETS_SORT` uses the space-separated descending token
+  (`RFC_NUMBER DESC`), which EasyVista honours — verified live 2026-08-17 by
   `integration_tests/test_live_change_window.py` (closes open item O-DIR-1).
+  That is newest-first only where RFC numbers are issued monotonically. It is a
+  varchar (`I240101_0001`), so a descending *string* sort orders by the
+  request-type prefix first: on an instance issuing more than one prefix letter,
+  every `R…` ticket outranks every `I…` ticket regardless of date. What is
+  measured is the descending-ness, not the recency — sort a date column yourself
+  if you need a date guarantee.
   A colon-separated token (`RFC_NUMBER:DESC`), `-RFC_NUMBER` and
   `DESC(RFC_NUMBER)` are all silently ignored instead, falling back to the
   server's default order with no error — that was the earlier, unconfirmed
