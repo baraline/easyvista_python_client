@@ -9,10 +9,14 @@ failing it.
 
 They are not read-only. A full run creates and closes **21 tickets** (one shared
 ``rich_ticket``, two ``probe_tickets``, and 18 from ``ticket_factory``), plus 8
-actions, 5 document uploads and 4 updates; ``test_live_smoke`` additionally
-issues one create the server is *expected to reject*, so no ticket persists from
-it. Every created ticket is registered for cleanup before it is asserted on, and
-closed in teardown. Point them at a preprod/test instance, never production.
+actions, 5 document uploads and **6 to 14 ticket updates** (4 fixed PUTs --
+title, rename, description, external reference -- plus the ``IMPACT_ID`` /
+``OWNER_ID`` read-back in the ticket-identity test, which tries up to 5
+candidate values per column and stops at the first the instance accepts, some
+of which it may reject outright); ``test_live_smoke`` additionally issues one
+create the server is *expected to reject*, so no ticket persists from it. Every
+created ticket is registered for cleanup before it is asserted on, and closed
+in teardown. Point them at a preprod/test instance, never production.
 
 Credentials resolve from an uppercase env var first, then a lowercase file under
 ``secrets/``:
