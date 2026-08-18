@@ -152,9 +152,13 @@ class AsyncEasyvistaClient:
         default order with no error, so an unsorted result looks sorted. This is
         not validated locally, so the token is the caller's to get right.
 
-        Sorting is not cosmetic when the filter selects rows that are changing --
+        Sorting is not cosmetic when the filter selects rows that are changing:
         an unsorted offset sweep over a change window can skip a record
-        permanently. See :func:`~easyvista_python_client.ev_since_filter`.
+        permanently, and the two sort DIRECTIONS do not fail the same way --
+        descending defers such a miss to the next sweep, ascending loses it. See
+        :func:`~easyvista_python_client.ev_since_filter`, which rules on the
+        direction and names the keyset alternative for a caller who cannot
+        tolerate even a deferred miss.
         """
         if page_size is None:
             page_size = self.config.default_max_rows

@@ -113,14 +113,35 @@ The lower bound is **inclusive** and milliseconds are honoured (verified live on
 three independent boundaries), so a watermark taken as `max(t.last_update)`
 re-reads the boundary record on the next sweep. De-duplicate by `rfc_number`.
 
-**Sort a sweep, or it can skip a record permanently.** `iter_*` walks the result
+**Sort a sweep `LAST_UPDATE DESC`, and de-duplicate.** `iter_*` walks the result
 set by *offset*, and the rows a change window selects are by construction the
-rows that are changing: a ticket touched between two pages gets a new
-`LAST_UPDATE` and, in the server's unspecified default order, may land before the
-read cursor and never be yielded. The miss is permanent — the next sweep starts
-from a later watermark. Sort **ascending on the same column the window filters**
-(bare `LAST_UPDATE`, or `LAST_UPDATE ASC`; both honoured, measured live) so a
-re-touched row moves toward the tail and is seen twice instead of never.
+rows that are changing, so a ticket touched between two pages moves *within the
+set being paged*. An unsorted sweep can drop such a row silently — and so can
+either sort direction. What differs is where the dropped row's own timestamp
+lands relative to the watermark this sweep records:
+
+- **`LAST_UPDATE DESC`**: the re-touched row jumps to the head, behind the read
+  cursor, so this sweep misses it — but its stamp is now *above* the watermark,
+  so the next sweep selects it again. **Deferred, self-healing.**
+- **`LAST_UPDATE` / `LAST_UPDATE ASC`**: the re-touched row moves to the tail and
+  everything behind it shifts one place head-ward, so the row that crosses the
+  cursor is one whose own stamp did **not** change. It falls *below* the new
+  watermark and no later sweep selects it. **Permanent miss.**
+
+Both tokens are honoured (measured live); descending is chosen for the reason
+above. De-duplicate by `rfc_number` — the duplicates are the deferred rows
+arriving on a later sweep, plus the inclusive-boundary re-read.
+
+If even a deferred miss is unacceptable, do not use `iter_*`: page
+`search_tickets` yourself with **keyset** pagination — sort ascending and, after
+each page, advance the *window* to `ev_since_filter(field, max(stamps on the
+page))` at `offset=0` instead of incrementing an offset. With no offset there is
+no cursor for a row to shift past. `iter_tickets` cannot express this because it
+owns its own offset.
+
+(An earlier version of this skill recommended ascending, reasoning that it turns
+a permanent miss into a duplicate. That was wrong: the row an ascending sweep
+drops is not the re-touched one.)
 
 ## What is searchable
 
@@ -251,13 +272,13 @@ with EasyvistaClient.from_env() as client:
     # in as a watermark for "everything changed since this ticket".
     search = ev_since_filter("LAST_UPDATE", ticket.last_update)
     if search is not None:
-        # The sort is load-bearing: an UNSORTED offset sweep over a change
-        # window can skip a row that is touched mid-sweep, permanently. Sorting
-        # ascending on the filtered column moves such a row toward the tail, so
-        # it is seen twice -- hence the de-duplication.
+        # The sort direction is load-bearing. Descending on the filtered
+        # column defers a mid-sweep miss to the next sweep (the row's stamp
+        # ends up above the watermark); ascending loses it for good. Hence
+        # the de-duplication -- see "Filtering by a change window".
         seen = set()
         for changed in client.iter_tickets(
-            search=search, sort="LAST_UPDATE", page_size=100
+            search=search, sort="LAST_UPDATE DESC", page_size=100
         ):
             if changed.rfc_number in seen:
                 continue

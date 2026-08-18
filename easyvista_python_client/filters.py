@@ -225,28 +225,51 @@ def ev_since_filter(field: str, start: str | datetime | None) -> str | None:
         search = ev_since_filter("LAST_UPDATE", watermark)
         if search is not None:
             seen = set()
-            for ticket in client.iter_tickets(search=search, sort="LAST_UPDATE"):
+            for ticket in client.iter_tickets(
+                search=search, sort="LAST_UPDATE DESC"
+            ):
                 if ticket.rfc_number in seen:
                     continue
                 seen.add(ticket.rfc_number)
                 ...
 
-    **The sort is load-bearing, not decoration.** ``iter_tickets`` walks the
-    result set by offset, and the rows this filter selects are by construction
-    the rows that are changing: a ticket touched between page N and page N+1
-    gets a new ``LAST_UPDATE``, and in the server's unspecified default order it
-    may land *before* the read cursor and never be yielded at all — a permanent
-    miss, because the next sweep starts from a later watermark. Sorting
-    **ascending on the same column the window filters** (bare ``LAST_UPDATE``,
-    or ``LAST_UPDATE ASC``; both are honoured, measured live) moves a re-touched
-    row toward the tail instead, so it is seen twice rather than not at all —
-    hence the de-duplication by ``rfc_number`` above.
+    **The sort is load-bearing, and its DIRECTION decides whether a dropped row
+    ever comes back.** ``iter_tickets`` walks the result set by offset, and the
+    rows this filter selects are by construction the rows that are changing, so
+    a row touched between page N and page N+1 moves *within the very set being
+    paged*. Either direction can drop a row from the current sweep; what differs
+    is where the dropped row's own timestamp ends up relative to the watermark
+    this sweep will record:
+
+    * **Descending** (``LAST_UPDATE DESC``) — the re-touched row jumps to the
+      *head*, behind the read cursor, so this sweep misses it. But its
+      ``LAST_UPDATE`` is now *above* the watermark, so the next sweep selects it
+      again: the miss is **deferred and self-healing**.
+    * **Ascending** (bare ``LAST_UPDATE``, or ``LAST_UPDATE ASC``) — the
+      re-touched row moves to the tail, and every row between its old place and
+      the tail shifts one position head-ward. The row that crosses the cursor is
+      therefore one whose own stamp did **not** change; it falls *below* the new
+      watermark, so no later sweep selects it either. The miss is **permanent**.
+
+    So sweep **descending** and de-duplicate by ``rfc_number`` as above. Both
+    directions are honoured tokens (measured live); the direction is chosen for
+    this reason, not for availability. An earlier docstring in this package
+    recommended ascending, on the reasoning that it turns a permanent miss into a
+    duplicate — that was wrong: the row an ascending sweep drops is not the
+    re-touched one.
+
+    Descending is the safe direction, not a guarantee: ``iter_tickets`` owns its
+    offset. A caller who cannot tolerate even a deferred miss should page
+    :meth:`~easyvista_python_client.EasyvistaClient.search_tickets` directly
+    with **keyset** pagination: sort ascending and, after each page, advance the
+    *window* — ``ev_since_filter(field, max(stamps on the page))`` read again at
+    ``offset=0`` — instead of incrementing an offset. With no offset there is no
+    cursor for a row to shift past. ``iter_tickets`` cannot express this.
 
     The lower bound is **INCLUSIVE** and milliseconds are honoured (verified
     live on three independent boundaries), so a watermark taken as
-    ``max(t.last_update)`` re-reads that boundary record on the next sweep. That
-    is the same duplicate the sort deliberately creates, and the same
-    de-duplication handles it.
+    ``max(t.last_update)`` re-reads that boundary record on the next sweep —
+    another duplicate the same de-duplication absorbs.
 
     ``start`` may be a ``datetime`` (the preferred input) or a timestamp
     string; a string naming a time is re-rendered to the one form the wire

@@ -480,7 +480,7 @@ range is instead an interval in the *value position*:
    search = ev_since_filter("LAST_UPDATE", watermark)   # LAST_UPDATE:(...;)
    if search is not None:
        seen = set()
-       for ticket in client.iter_tickets(search=search, sort="LAST_UPDATE"):
+       for ticket in client.iter_tickets(search=search, sort="LAST_UPDATE DESC"):
            if ticket.rfc_number in seen:
                continue
            seen.add(ticket.rfc_number)
@@ -501,16 +501,41 @@ de-duplication above.
 
 .. warning::
 
-   **Sort the sweep; an unsorted one can skip a record permanently.**
-   ``iter_tickets`` walks the result set by *offset*, and the rows a change
-   window selects are by construction the rows that are changing. A ticket
-   touched between page N and page N+1 gets a new ``LAST_UPDATE``, and in the
-   server's unspecified default order it may land *before* the read cursor and
-   never be yielded at all. The miss is permanent, not deferred: the next sweep
-   starts from a later watermark. Sorting **ascending on the same column the
-   window filters** — bare ``LAST_UPDATE``, or ``LAST_UPDATE ASC``; both are
-   honoured, measured live — moves a re-touched row toward the tail instead, so
-   it is seen twice rather than not at all. De-duplicate by ``rfc_number``.
+   **Sort the sweep descending, and de-duplicate.** ``iter_tickets`` walks the
+   result set by *offset*, and the rows a change window selects are by
+   construction the rows that are changing, so a ticket touched between page N
+   and page N+1 moves *within the very set being paged*. An unsorted sweep can
+   drop such a row with no way to tell — and so can either sort direction. What
+   differs is where the dropped row's own timestamp lands relative to the
+   watermark this sweep records:
+
+   - **Descending** (``LAST_UPDATE DESC``): the re-touched row jumps to the head,
+     behind the read cursor, so this sweep misses it — but its ``LAST_UPDATE`` is
+     now *above* the watermark, so the next sweep selects it again. The miss is
+     **deferred and self-healing**.
+   - **Ascending** (bare ``LAST_UPDATE``, or ``LAST_UPDATE ASC``): the re-touched
+     row moves to the tail and everything behind it shifts one place head-ward,
+     so the row that crosses the cursor is one whose own stamp did **not**
+     change. It falls *below* the new watermark and no later sweep selects it.
+     The miss is **permanent**.
+
+   Both tokens are honoured (measured live); descending is chosen for the reason
+   above, not for availability. De-duplicate by ``rfc_number``: the duplicates
+   are the deferred rows arriving on a later sweep, plus the inclusive-boundary
+   re-read described above.
+
+   Descending is the safe direction, not a guarantee. If even a deferred miss is
+   unacceptable, page
+   :meth:`~easyvista_python_client.EasyvistaClient.search_tickets` yourself with
+   **keyset** pagination: sort ascending and, after each page, advance the
+   *window* — ``ev_since_filter("LAST_UPDATE", max(stamps on the page))`` read
+   again at ``offset=0`` — instead of incrementing an offset. With no offset there
+   is no cursor for a row to shift past. ``iter_tickets`` cannot express this,
+   because it owns its own offset.
+
+   An earlier release of this guide recommended sorting *ascending* here, on the
+   reasoning that it turns a permanent miss into a duplicate. That was wrong: the
+   row an ascending sweep drops is not the re-touched one.
 
    The sort token must stay space-separated. ``LAST_UPDATE:DESC``,
    ``-LAST_UPDATE`` and ``DESC(LAST_UPDATE)`` are each **silently ignored**

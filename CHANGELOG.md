@@ -299,15 +299,19 @@ Nothing yet.
 - **Documented, not changed:** the interval's lower bound is **inclusive** and
   milliseconds are honoured (verified live on three independent boundaries), so
   a watermark set to `max(t.last_update)` re-reads that boundary record on the
-  next sweep. And an offset-pagination sweep over a change window **must be
-  sorted**: the rows the filter selects are by construction the rows that are
-  changing, so a ticket touched between two pages can move ahead of the read
-  cursor in the server's unspecified default order and be missed *permanently*,
-  because the next sweep starts from a later watermark. Sorting ascending on the
-  same column the window filters (`sort="LAST_UPDATE"`) moves a re-touched row
-  toward the tail instead, so it is seen twice and de-duplicated by
-  `rfc_number`. The sweep examples in `ev_since_filter`, the user guide and the
-  search-syntax skill now all carry the sort and the de-duplication.
+  next sweep. And an offset-pagination sweep over a change window must be sorted
+  **descending** (`sort="LAST_UPDATE DESC"`) and de-duplicated: the rows the
+  filter selects are by construction the rows that are changing, so a ticket
+  touched between two pages moves within the set being paged and can slip past
+  the read cursor. Descending, the row that slips is the re-touched one, whose
+  stamp is now *above* the watermark, so the next sweep picks it up — the miss is
+  deferred. Ascending, the row that slips is a neighbour whose stamp did *not*
+  change, so it falls *below* the watermark and is lost. A caller who cannot
+  tolerate even a deferred miss must page `search_tickets` with keyset
+  pagination (advance the window to the last row's stamp instead of an offset),
+  which `iter_tickets` cannot express. The sweep examples in `ev_since_filter`,
+  the user guide and the search-syntax skill all carry the sort and the
+  de-duplication.
 - `Request`/`Action`/`Employee` timestamp columns now **raise** on a malformed
   value instead of falling through to pydantic's own datetime parser, which is
   far more permissive than EasyVista's format and invented plausible-looking

@@ -315,22 +315,40 @@ def test_only_some_timestamp_renderings_are_accepted_as_an_interval_bound(
 
 
 def test_descending_sort_needs_the_space_separated_token(
-    live_client: EasyvistaClient,
+    live_client: EasyvistaClient, split_instants
 ):
     """EV-R6: `FIELD DESC` sorts; `FIELD:DESC` is silently ignored.
 
     Comparing against the UNSORTED order is what makes this meaningful — a
     monotonicity check alone cannot distinguish "sorted descending" from "the
     default order happens to be descending".
+
+    Measured with the change **window applied**, because that is the claim the
+    docs rest on: ``ev_since_filter``, the user guide and the search-syntax skill
+    all now tell a caller to sweep
+    ``iter_tickets(search=ev_since_filter("LAST_UPDATE", w), sort="LAST_UPDATE
+    DESC")`` — sort and filter together. ``sort`` has the same silent-failure mode
+    a search condition has (three token shapes are ignored with no error), so
+    "DESC is honoured when a ``search`` is also present" has to be measured, not
+    inferred from the unfiltered case. If this instance dropped ``sort`` whenever
+    ``search`` was set, that entire remedy would be inert while every surface
+    asserted it works.
     """
     proj = ["RFC_NUMBER", "LAST_UPDATE"]
+    early, _late = split_instants
+    window = ev_since_filter("LAST_UPDATE", early)
+    assert window is not None, "split_instants did not yield a usable window bound"
 
     def rfcs(sort: str | None) -> list[str | None]:
-        page = live_client.search_tickets(sort=sort, fields=proj, max_rows=20)
+        page = live_client.search_tickets(
+            search=window, sort=sort, fields=proj, max_rows=20
+        )
         return [r.rfc_number for r in page.records]
 
     def stamps(sort: str | None) -> list:
-        page = live_client.search_tickets(sort=sort, fields=proj, max_rows=20)
+        page = live_client.search_tickets(
+            search=window, sort=sort, fields=proj, max_rows=20
+        )
         return [r.last_update for r in page.records if r.last_update is not None]
 
     unsorted_order = rfcs(None)
@@ -356,27 +374,34 @@ def test_descending_sort_needs_the_space_separated_token(
     )
 
 
-def test_the_ascending_sort_token_the_docs_recommend_is_honoured(
-    live_client: EasyvistaClient,
+def test_the_ascending_sort_tokens_are_honoured_too(
+    live_client: EasyvistaClient, split_instants
 ):
-    """Pins the ASCENDING token, which the watermark-sweep guidance now requires.
+    """Pins the two ASCENDING tokens: bare ``FIELD`` and ``FIELD ASC``.
 
-    ``ev_since_filter``'s docstring, the user guide's change-window section and
-    the search-syntax skill all now tell a caller to sweep with
-    ``sort="LAST_UPDATE"`` -- ascending on the filtered column -- because an
-    unsorted offset sweep over a change window can skip a row that is touched
-    mid-sweep, permanently. Only the DESC form was pinned live; the form the docs
-    recommend was merely remembered. Both bare ``FIELD`` and ``FIELD ASC`` were
-    measured ascending, so both are checked.
+    **Not the recommended sweep form.** The change-window guidance is
+    ``LAST_UPDATE DESC`` (see ``ev_since_filter``): under offset pagination an
+    ascending sweep drops a row whose own stamp did *not* change, which falls
+    below the next watermark and is lost, while descending drops the re-touched
+    row, whose stamp is above the watermark and is re-selected. This test exists
+    only because both tokens' *availability* is a documented fact -- the docs name
+    them when explaining why the direction is a choice -- and a fact this package
+    states should be measured rather than remembered.
 
-    Deliberately paired against the UNSORTED order, the same reasoning as the
-    DESC test above: monotonicity alone cannot tell "sorted ascending" apart
-    from "the default order happens to be ascending".
+    Measured with the change window applied, the same reasoning as the DESC test
+    above, and deliberately paired against the UNSORTED order of the same
+    filtered query: monotonicity alone cannot tell "sorted ascending" apart from
+    "the default order happens to be ascending".
     """
     proj = ["RFC_NUMBER", "LAST_UPDATE"]
+    early, _late = split_instants
+    window = ev_since_filter("LAST_UPDATE", early)
+    assert window is not None, "split_instants did not yield a usable window bound"
 
     def page(sort: str | None) -> tuple[list[str | None], list]:
-        result = live_client.search_tickets(sort=sort, fields=proj, max_rows=20)
+        result = live_client.search_tickets(
+            search=window, sort=sort, fields=proj, max_rows=20
+        )
         return (
             [r.rfc_number for r in result.records],
             [r.last_update for r in result.records if r.last_update is not None],
