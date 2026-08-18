@@ -9,6 +9,10 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-08-18
+
 ### Added
 
 - `EasyvistaClient.stream_document` / `AsyncEasyvistaClient.stream_document`
@@ -310,5 +314,6 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/baraline/easyvista_python_client/releases/tag/v0.1.0
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...v0.2.0
+[0.1.0]: https://github.com/baraline/easyvista_python_client/releases/tag/0.1.0
