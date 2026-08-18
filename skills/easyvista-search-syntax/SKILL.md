@@ -43,9 +43,11 @@ something here looks wrong.
   any of `* % _ [`, because silently matching more rows is worse than failing.
   This bites on ordinary input, not exotic input: `_` is pervasive in EasyVista
   codes, and `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` would otherwise also
-  match `LAPTOP-01` and `LAPTOP001` with HTTP 200 and no hint. If you need a
-  literal `_`, filter server-side on a wider condition and match exactly in
-  Python.
+  match `LAPTOP-01` and `LAPTOP001` with HTTP 200 and no hint. For an **exact**
+  match on such a value use `ev_equals_filter` — `:` does not expand a wildcard,
+  so a `_` in the value is compared literally there. Only if you need to
+  pattern-match *around* a literal `_` are you stuck: filter server-side on a
+  wider condition and match exactly in Python.
 - `,` combines conditions: **OR** when every condition names the same field,
   **AND** across different fields.
 - `;` is **not** a combinator; it is swallowed into the quoted value.

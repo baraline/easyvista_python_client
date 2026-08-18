@@ -330,7 +330,10 @@ def _wildcard_filter(field: str, value: str | None, pattern: str) -> str | None:
             "These builders add the wildcards themselves; a metacharacter "
             "inside the value would change which records match rather than "
             "being compared literally, and EasyVista provides no escape for it "
-            "-- a backslash is taken literally (verified live)."
+            "-- a backslash is taken literally (verified live). For an EXACT "
+            "match on a value containing one, use ev_equals_filter: ':' does "
+            "not expand a wildcard. To pattern-match around one, filter "
+            "server-side on a wider condition and compare exactly in Python."
         )
     return f'{field}~"{pattern.format(v=escape_ev_value(text))}"'
 
@@ -350,13 +353,21 @@ def ev_contains_filter(field: str, value: str | None) -> str | None:
     opens a character class), and no escape for them exists. Refusing beats
     silently matching records the caller did not ask for —
     ``ev_contains_filter("ASSET_TAG", "LAPTOP_01")`` would otherwise also match
-    ``LAPTOP-01`` and ``LAPTOP001`` with HTTP 200 and no hint.
+    ``LAPTOP-01`` and ``LAPTOP001`` with HTTP 200 and no hint. For an **exact**
+    match on such a value use :func:`ev_equals_filter`, whose ``:`` does not
+    expand a wildcard; only pattern-matching *around* a literal metacharacter is
+    impossible, and that needs a wider server-side condition plus an exact
+    comparison in Python.
     """
     return _wildcard_filter(field, value, "*{v}*")
 
 
 def ev_starts_with_filter(field: str, value: str | None) -> str | None:
-    """Build a prefix match: ``FIELD~"value*"`` (verified live: 32 rows)."""
+    """Build a prefix match: ``FIELD~"value*"`` (verified live: 32 rows).
+
+    Refuses the same four metacharacters in ``value`` as
+    :func:`ev_contains_filter`, for the same reason and with the same exit.
+    """
     return _wildcard_filter(field, value, "{v}*")
 
 

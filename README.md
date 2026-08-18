@@ -89,7 +89,10 @@ with EasyvistaClient(EasyvistaConfig.from_env()) as client:
     found = client.search_assets(search=tag_filter, max_rows=50)
 
     # `~` needs an explicit wildcard to mean "contains" -- a bare value is exact
-    # match, identical to `:`. ev_contains_filter adds the wildcard for you.
+    # match, identical to `:`. ev_contains_filter adds the wildcard for you, and
+    # raises ValueError if the value itself carries one of * % _ [ (all four are
+    # metacharacters to `~`, with no escape). For an exact match on a tag like
+    # "LAPTOP_01", use ev_equals_filter: `:` does not expand a wildcard.
     partial = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
 
     # attach a file to a ticket (uploaded as base64 inside the JSON body)

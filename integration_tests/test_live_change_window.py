@@ -590,11 +590,13 @@ def test_every_refused_metacharacter_really_is_one_under_tilde(
     # this sampled stem has no sibling to widen onto, a data gap the module
     # skips on elsewhere; `> exact` is the measured behaviour.
     stem, last = rfc[:-1], rfc[-1]
+    widened_by: dict[str, int] = {}
     for probe, name in (
         (f'RFC_NUMBER~"{stem}_"', "_"),
         (f'RFC_NUMBER~"{stem}[0-9]"', "[0-9]"),
     ):
         widened = _count(live_client, probe)
+        widened_by[name] = widened
         # `name` is a literal authored here, never a value read from the
         # instance, so it is printable under P2. `stem` is NOT printed.
         assert widened > 0, (
@@ -611,6 +613,20 @@ def test_every_refused_metacharacter_really_is_one_under_tilde(
             f"{name!r} matched the whole table, which is what a SILENTLY DROPPED "
             "condition also looks like -- inconclusive as evidence"
         )
+
+    # The EXIT the builders' error message, the user guide, the README and the
+    # asset skill now name: `:` does not expand a wildcard, so an exact match on
+    # a value containing `_` is expressible even though `~` refuses it. Decisive
+    # because `~` on this very pattern widened above -- if `:` expanded `_` too,
+    # this count would match that one instead of being far smaller.
+    by_colon = _count(live_client, f'RFC_NUMBER:"{stem}_"')
+    colon_did_not_expand = by_colon < widened_by["_"]
+    assert colon_did_not_expand, (
+        "':' expanded '_' as a wildcard (or the condition was dropped and the "
+        "whole table came back) -- ev_equals_filter is then NOT the exact-match "
+        "exit that the wildcard builders' error message and the docs point at "
+        "for a value containing '_'"
+    )
 
     # A one-character class matching only the real final character must behave
     # like the exact match: that is what shows the class is evaluated rather

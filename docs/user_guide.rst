@@ -216,6 +216,10 @@ Assets
 
    # A bare '~' is exact match, identical to ':' -- substring search needs an
    # explicit wildcard, which ev_contains_filter adds for you: ASSET_TAG~"*LAPTOP*"
+   # The value itself must carry none of * % _ [ -- all four are metacharacters
+   # to '~', and ev_contains_filter raises ValueError rather than widening the
+   # match silently. So "LAPTOP_01" raises; use ev_equals_filter for an exact
+   # match on a tag containing '_'. See "Searching and pagination" below.
    laptops = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"), max_rows=50)
 
 Documents
@@ -360,6 +364,18 @@ The verified search grammar is:
   in the value: ``:"I26081*"`` matched **0** rows on the same data. Build the pattern with
   :func:`~easyvista_python_client.ev_contains_filter` (``FIELD~"*value*"``) or
   :func:`~easyvista_python_client.ev_starts_with_filter` (``FIELD~"value*"``) rather than by hand.
+- ``*`` and ``%`` are **not** the only metacharacters under ``~``. ``_`` matches any **single**
+  character and ``[`` opens a character class — measured live 2026-08-18: replacing one character
+  of an RFC that matched 1 row with ``_``, or with ``[0-9]``, matched 9, while ``[<the real
+  character>x]`` still matched 1. There is **no escape**: ``\_`` matched 0 rows, i.e. the backslash
+  is compared literally. Both builders above therefore raise ``ValueError`` for a value containing
+  any of ``* % _ [`` rather than silently matching records you did not ask for. This bites on
+  ordinary input: ``_`` is pervasive in EasyVista codes, and
+  ``ev_contains_filter("ASSET_TAG", "LAPTOP_01")`` raises for that reason — unhandled, it would
+  also have matched ``LAPTOP-01`` and ``LAPTOP001`` with HTTP 200 and no hint. For an **exact**
+  match on such a value use :func:`~easyvista_python_client.ev_equals_filter`, since ``:`` does not
+  expand a wildcard; to pattern-match *around* one, filter server-side on a wider condition and
+  compare exactly in Python.
 - ``,`` — combines conditions: **OR** when every condition names the same field, **AND** across
   different fields. ``;`` is *not* a combinator.
 

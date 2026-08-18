@@ -113,7 +113,8 @@ from easyvista_python_client import EasyvistaClient, ev_contains_filter
 
 with EasyvistaClient.from_env() as client:
     # A bare '~' is exact match, just like ':' -- ev_contains_filter adds the
-    # explicit wildcard a partial-tag search needs: ASSET_TAG~"*LAPTOP*"
+    # explicit wildcard a partial-tag search needs: ASSET_TAG~"*LAPTOP*".
+    # The value must carry none of * % _ [ -- "LAPTOP_01" raises ValueError.
     found = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
     print(found.total_record_count)
 ```
@@ -130,6 +131,17 @@ with EasyvistaClient.from_env() as client:
   (verified live
   `integration_tests/test_live_search_syntax.py::test_tilde_without_a_wildcard_is_exact_on_asset_tag`;
   see `easyvista-search-syntax` for the full grammar).
+- **An asset tag containing `_` or `[` cannot go through the pattern builders.**
+  `*` and `%` are not the only metacharacters under `~`: `_` matches any single
+  character and `[` opens a character class (measured live), and there is no
+  escape — a backslash is compared literally. So `ev_contains_filter` /
+  `ev_starts_with_filter` raise `ValueError` for a value containing any of
+  `* % _ [`, and `_` is pervasive in asset tags: `ev_contains_filter("ASSET_TAG",
+  "LAPTOP_01")` raises rather than also matching `LAPTOP-01` and `LAPTOP001` with
+  HTTP 200 and no hint. For an **exact** match on such a tag use
+  `ev_equals_filter("ASSET_TAG", "LAPTOP_01")` — `:` does not expand a wildcard.
+  To pattern-match around one, filter server-side on a wider condition and
+  compare exactly in Python.
 - The `Asset` model declares only `asset_id`, `asset_tag`, `serial_number`,
   `status_id` and `href`; everything else the instance returns is preserved
   by `extra="allow"` and reachable through `classify_fields()`. `reference()`
