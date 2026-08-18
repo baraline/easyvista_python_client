@@ -10,7 +10,9 @@ metadata:
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
 > use `async with`, `await` every call, and `async for` over the `iter_*`
-> methods — the method names and arguments are identical. See
+> methods and `stream_document` — the method names and arguments are identical.
+> `stream_document` is an async generator, so `await client.stream_document(...)`
+> is a `TypeError`; iterate it. See
 > `easyvista-client-setup`.
 
 Documents are attachments on a ticket. Five methods: `add_document(rfc,

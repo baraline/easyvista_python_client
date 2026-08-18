@@ -16,7 +16,7 @@ and never a claim that holds on only one of them.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
@@ -323,7 +323,7 @@ class Transport(BaseTransport):
 
     async def stream_bytes(
         self, path_or_url: str, *, chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncGenerator[bytes, None]:
         """GET raw bytes (an attachment) in chunks, never as one object.
 
         The streaming twin of :meth:`get_bytes`, and deliberately identical to

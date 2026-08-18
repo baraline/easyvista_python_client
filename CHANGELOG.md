@@ -13,13 +13,17 @@ a deprecation policy will follow the 1.0 release.
 
 - `EasyvistaClient.stream_document` / `AsyncEasyvistaClient.stream_document`
   yield an attachment's bytes in chunks (64 KiB by default, `chunk_size=` to
-  change it) instead of returning them whole. Measured motivation: a consumer
-  mirroring attachments had to buffer, and with the base64 inflation an upload
-  applies a 32 MB attachment peaked near 76 MB of worker memory. Accepts exactly
-  what `download_document` accepts and resolves the URL identically, so the
-  same-origin refusal, the `follow_redirects` behaviour and the error mapping
-  (a 403 is still `EasyvistaAuthError`, a 590 is still not retried) are the same
-  on both paths.
+  change it) instead of returning them whole. Motivation: a consumer mirroring
+  attachments had no choice but to buffer, because `download_document`
+  materialises the whole file before it returns anything. What this removes is
+  that download buffer and only that -- one attachment's worth of memory, so a
+  32 MB file is held a chunk at a time instead of whole. The upload leg is
+  unaffected: `add_document` takes `content: bytes` and base64-encodes it, so a
+  mirror that re-uploads still materialises that payload in full (see below for
+  why no streaming upload is possible). Accepts exactly what `download_document`
+  accepts and resolves the URL identically, so the same-origin refusal, the
+  `follow_redirects` behaviour and the error mapping (a 403 is still
+  `EasyvistaAuthError`, a 590 is still not retried) are the same on both paths.
   **Only the download direction streams, and that is the API's constraint:**
   EasyVista takes an attachment as base64 inside a JSON body, so `add_document`
   must materialise the whole payload before it can send anything — no streaming

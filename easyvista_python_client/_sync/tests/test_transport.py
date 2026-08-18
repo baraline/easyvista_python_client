@@ -466,6 +466,20 @@ class _StreamThatFailsMidBody(httpx.SyncByteStream):
         raise httpx.ReadError("connection dropped mid-body")
 
 
+class _StreamThatFailsBeforeTheFirstByte(httpx.SyncByteStream):
+    """A response body that drops the connection without yielding anything.
+
+    The sibling of :class:`_StreamThatFailsMidBody`, for the *other* side of the
+    retry boundary: the status line arrived, so this is past the point respx can
+    fail a request, but no byte has reached the caller yet, so restarting is
+    still safe and must happen.
+    """
+
+    def __iter__(self) -> Iterator[bytes]:
+        raise httpx.ReadError("dropped before the first byte")
+        yield b""  # unreachable; makes this a generator rather than a coroutine
+
+
 def _collect(chunks: Iterator[bytes]) -> list[bytes]:
     """Every chunk a stream yields, kept separate rather than joined."""
     return [chunk for chunk in chunks]
@@ -473,7 +487,10 @@ def _collect(chunks: Iterator[bytes]) -> list[bytes]:
 
 @respx.mock
 def test_stream_bytes_reassembles_to_the_whole_body():
-    body = bytes(range(256)) * 40  # 10240 bytes, not a multiple of the chunk size
+    # 10244 bytes at chunk_size=1024: deliberately NOT a multiple of it, so the
+    # last chunk is a short one. A body sized to an exact multiple never
+    # exercises the ragged tail, and the join above would pass either way.
+    body = bytes(range(256)) * 40 + b"tail"
     respx.get(f"{ROOT}/documents/1/content").mock(
         return_value=httpx.Response(200, content=body)
     )
@@ -484,8 +501,30 @@ def test_stream_bytes_reassembles_to_the_whole_body():
     assert b"".join(chunks) == body
     # More than one chunk, and each bounded: proves the body is delivered
     # progressively rather than read whole and handed over in a single piece.
-    assert len(chunks) == 10
+    assert len(chunks) == 11
     assert max(len(chunk) for chunk in chunks) <= 1024
+    assert len(chunks[-1]) == 4, "the short final chunk was padded or dropped"
+
+
+@respx.mock
+def test_stream_bytes_chunks_at_the_documented_default_size():
+    """The default chunk size is 64 KiB, and this is what says so.
+
+    ``DEFAULT_STREAM_CHUNK_SIZE`` is quoted as "64 KiB" in the CHANGELOG, in the
+    document-workflow skill and in the constant's own comment (whose "a 32 MB
+    attachment is ~512 iterations" arithmetic only holds at that value). Every
+    other chunk-counting test passes ``chunk_size`` explicitly, so without this
+    one the constant could change to anything and leave all three false with a
+    green suite. 160 KiB of body -> three chunks, the last a short one.
+    """
+    body = bytes(range(256)) * 640  # 163840 bytes == 2.5 * 64 KiB
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+    with Transport(_cfg()) as transport:
+        chunks = _collect(transport.stream_bytes("documents/1/content"))
+    assert b"".join(chunks) == body
+    assert [len(chunk) for chunk in chunks] == [65536, 65536, 32768]
 
 
 @respx.mock
@@ -565,6 +604,33 @@ def test_stream_bytes_transport_error_on_the_open_raises_connection_error():
     with Transport(_cfg()) as transport:
         with pytest.raises(EasyvistaConnectionError):
             _collect(transport.stream_bytes("documents/1/content"))
+
+
+@respx.mock
+def test_stream_bytes_retries_a_failure_fetching_the_first_chunk():
+    """The first chunk is fetched INSIDE the retried unit. This is what pins it.
+
+    ``_open_stream`` takes the first chunk itself, so a body that dies before
+    yielding a byte is still a safe restart -- nothing has reached the caller, so
+    replaying the request cannot deliver anything twice. Move that fetch out of
+    the retried unit (open there, iterate the whole body here) and the failure
+    below escapes as ``EasyvistaConnectionError`` on the first attempt instead,
+    with ``call_count == 1``. Every other ``stream_bytes`` test passes under both
+    arrangements, including the mid-body one just after this: the two differ only
+    on a first-chunk failure, which is only this test.
+    """
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        side_effect=[
+            httpx.Response(200, stream=_StreamThatFailsBeforeTheFirstByte()),
+            httpx.Response(200, content=b"0123456789abcdef"),
+        ]
+    )
+    with Transport(_cfg(max_retries=2)) as transport:
+        chunks = _collect(
+            transport.stream_bytes("documents/1/content", chunk_size=8)
+        )
+    assert b"".join(chunks) == b"0123456789abcdef"
+    assert route.call_count == 2, "a pre-first-byte failure was not retried"
 
 
 @respx.mock

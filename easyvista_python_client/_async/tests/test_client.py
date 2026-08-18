@@ -11,6 +11,7 @@ which is hand-written on both sides and never generated.
 """
 
 import json
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
@@ -328,7 +329,10 @@ async def test_download_document_refuses_a_foreign_download_url(config):
 
 @respx.mock
 async def test_stream_document_chunks_reassemble_to_the_download(config):
-    body = bytes(range(256)) * 12  # 3072 bytes: several chunks at 512
+    # 3076 bytes at chunk_size=512: six full chunks and a 4-byte tail. Sized off
+    # the boundary on purpose -- an exact multiple never exercises a short final
+    # chunk, and reassembly passes either way.
+    body = bytes(range(256)) * 12 + b"tail"
     respx.get("https://ev.test/dl/7").mock(
         return_value=httpx.Response(200, content=body)
     )
@@ -340,7 +344,57 @@ async def test_stream_document_chunks_reassemble_to_the_download(config):
         async for chunk in client.stream_document(doc, chunk_size=512):
             chunks.append(chunk)
     assert b"".join(chunks) == body
-    assert len(chunks) == 6, "the body arrived in one piece instead of streaming"
+    assert len(chunks) == 7, "the body arrived in one piece instead of streaming"
+    assert len(chunks[-1]) == 4, "the short final chunk was padded or dropped"
+
+
+class _ClosableStream(httpx.AsyncByteStream):
+    """A response body that records when the transport closed it.
+
+    ``closed`` flips in ``aclose()``, which httpx calls when the response is
+    released -- which is what ``stream_bytes`` does in its own ``finally``. So
+    the flag answers "has the connection gone back to the pool yet".
+    """
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._body
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@respx.mock
+async def test_stream_document_closes_the_inner_stream_when_stopped_early(config):
+    """Stopping early releases the connection there and then, not eventually.
+
+    ``stream_document`` hands out chunks from an inner ``stream_bytes``
+    generator, and only *that* generator's ``finally`` closes the response and
+    returns its connection to the httpx pool. Closing the outer generator
+    unwinds its loop with ``GeneratorExit`` and does not close the inner one, so
+    without the explicit close in ``stream_document`` the release waits for the
+    inner generator to be collected -- and this asserts with no ``gc`` round and
+    no scheduling hop in between. Until the release happens the connection stays
+    checked out, which a caller with a small ``max_connections`` feels.
+
+    Closing explicitly is also the only moment both client trees share: a caller
+    that just stops iterating leaves the outer generator to be collected, and
+    when that happens is a property of the runtime, not of this method.
+    """
+    stream = _ClosableStream(b"0123456789abcdef")
+    respx.get("https://ev.test/dl/7").mock(
+        return_value=httpx.Response(200, stream=stream)
+    )
+    doc = Document.model_validate({"DDL_HREF": "https://ev.test/dl/7"})
+    async with AsyncEasyvistaClient(config) as client:
+        chunks = client.stream_document(doc, chunk_size=8)
+        assert await chunks.__anext__() == b"01234567"
+        assert not stream.closed, "closed while the caller was still reading"
+        await chunks.aclose()
+        assert stream.closed, "the abandoned stream still holds its connection"
 
 
 @respx.mock

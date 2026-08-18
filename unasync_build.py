@@ -83,9 +83,23 @@ HAND_WRITTEN = {"_concurrency.py", "tests/test_concurrency.py"}
 #: * **httpx's own async method names**, which are spelled with a leading
 #:   ``a`` rather than the ``Async`` prefix the convention knows about, so
 #:   nothing infers them. ``aclose``, ``aread`` and ``aiter_bytes`` all have
-#:   sync twins in httpx that differ only by that letter, and every one of
-#:   them would otherwise be emitted verbatim into a tree where the name does
-#:   not exist -- an ``AttributeError`` the first time that line runs.
+#:   sync twins in httpx that differ only by that letter, and an unmapped one
+#:   is emitted verbatim into the sync tree. Only ``aclose`` **on the client**
+#:   then fails loudly: ``httpx.Client`` has no ``aclose``, so that line raises
+#:   ``AttributeError``. Every other case is *silent*, which is the real reason
+#:   this dict has to cover them all -- httpx defines both spellings on
+#:   ``httpx.Response`` (checked against 0.28.1: ``aread``, ``aiter_bytes`` and
+#:   ``aclose`` are all present on the one class), so the attribute exists in
+#:   sync code and merely does the wrong thing. ``response.aread()`` without an
+#:   ``await`` builds a coroutine and drops it -- a ``RuntimeWarning`` and an
+#:   unread body, after which the next line's ``_raise_for_response`` raises
+#:   ``httpx.ResponseNotRead`` instead of the mapped EasyVista exception; and
+#:   ``for chunk in response.aiter_bytes(...)`` raises ``TypeError:
+#:   'async_generator' object is not iterable``. A wrong exception escaping the
+#:   client, not a missing attribute -- exactly the silent-collision class
+#:   ``testing/test_unasync_codegen.py`` says a diff of the two trees cannot
+#:   catch, so a new httpx async method must be added here rather than trusted
+#:   to blow up on its own.
 #: * **This package's own public class name**, which differs between the two
 #:   surfaces by design. ``aclose`` is in both categories: httpx's method and
 #:   this package's public async API.

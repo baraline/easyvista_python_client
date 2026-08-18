@@ -447,8 +447,24 @@ class AsyncEasyvistaClient:
         stream = self._transport.stream_bytes(
             documents_res.download_href(document), chunk_size=chunk_size
         )
-        async for chunk in stream:
-            yield chunk
+        # Close the inner generator explicitly rather than leave it to be
+        # collected. `stream`'s own `finally` is what releases the response and
+        # returns its connection to the pool, and unwinding *this* generator --
+        # which is what a caller that stops early, by `break` or by an
+        # exception, causes -- does not reach it on its own: the loop below just
+        # exits. Without the `finally` here the release waits on `stream`
+        # becoming garbage, which the sync tree does by refcount but the async
+        # one defers to the garbage collector *and* the event loop's
+        # async-generator finalizer, and until then the connection stays checked
+        # out -- a real cost to a caller with a small connection pool.
+        # `contextlib.closing`/`aclosing` would say this in one line, but those
+        # two names differ by more than a token so the codegen cannot generate
+        # the pair; `stream.close()`/`stream.aclose()` it can.
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            await stream.aclose()
 
     # --- departments ----------------------------------------------------------
     async def get_department(self, department_id: str | int) -> Department:

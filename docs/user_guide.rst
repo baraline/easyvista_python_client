@@ -260,6 +260,15 @@ URL the same way, including the same refusal of a URL outside the configured ins
 The name is ``stream_`` rather than ``iter_`` because every ``iter_*`` method on the
 client iterates *records*; this one iterates the bytes of a single document.
 
+The async client streams with ``async for`` — like the ``iter_*`` methods and unlike
+every other method on it, ``stream_document`` is not awaited:
+
+.. code-block:: python
+
+   with Path("downloaded.pdf").open("wb") as sink:
+       async for chunk in client.stream_document(attachments[0]):
+           sink.write(chunk)
+
 .. note::
 
    **Only the download streams.** There is no streaming upload, and it is not an
