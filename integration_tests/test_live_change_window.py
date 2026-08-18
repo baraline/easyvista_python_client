@@ -247,7 +247,17 @@ def test_a_comparison_operator_never_narrows_the_result(
     # Only this rendering breaks FIELD:"value" structure altogether (no
     # colon), so it is the one that actually reaches the silent-ignore path.
     got = _count(live_client, f'LAST_UPDATE>="{early}"')
-    assert got == tickets_baseline, (
+    # Re-measured now, not the session-cached `tickets_baseline`: one concurrent
+    # create on the shared instance between that fixture's capture and this
+    # assertion makes the live unfiltered count `tickets_baseline + 1`, and a
+    # strict `== tickets_baseline` would fail claiming the opposite of what
+    # happened -- "a bare comparison operator was honoured" -- for an ordinary
+    # write elsewhere on the instance. Comparing against a same-instant
+    # unfiltered re-read keeps the property under test (an unparseable
+    # comparison operator does not narrow the result) without assuming the
+    # instance is quiescent.
+    current_unfiltered = _count(live_client)
+    assert got == current_unfiltered, (
         "a bare comparison operator was honoured — the interval builders may "
         "no longer be the only option"
     )
@@ -310,14 +320,24 @@ def test_only_some_timestamp_renderings_are_accepted_as_an_interval_bound(
     for name, (low, high) in honoured.items():
         got_low = _count(live_client, f"LAST_UPDATE:({low};)")
         got_high = _count(live_client, f"LAST_UPDATE:({high};)")
-        # `name` is authored here; the counts and the literals derived from live
-        # data are not printed (P2).
-        assert 0 < got_low <= tickets_baseline, (
+        # `name` is authored here. The counts are NOT kept out of pytest's
+        # output by binding them to a local -- pytest's assertion rewriter
+        # reprints BOTH operands of a comparison even when the assert carries a
+        # message, so `assert got_low <= tickets_baseline` would still emit the
+        # live integers. Only binding the comparison itself to a bool closes
+        # that channel, which is why it is done below (the same idiom
+        # `is_non_increasing` and `colon_did_not_expand` use elsewhere in this
+        # module). Aggregate row counts are the one live-derived value this
+        # module accepts printing (P2) -- record fields, RFCs and timestamps
+        # are not -- and even that is avoided here where it costs nothing.
+        bound_was_honoured = 0 < got_low <= tickets_baseline
+        assert bound_was_honoured, (
             f"the {name!r} rendering was expected to be honoured as an interval "
             "bound and returned nothing -- format_ev_datetime may no longer emit "
             "a literal this grammar accepts"
         )
-        assert got_high < got_low, (
+        later_bound_narrowed = got_high < got_low
+        assert later_bound_narrowed, (
             f"a later bound in the {name!r} rendering did not return strictly "
             "fewer rows than an earlier one -- the condition is being silently "
             "dropped and the whole table returned, which is what this rendering "
@@ -396,7 +416,23 @@ def test_descending_sort_needs_the_space_separated_token(
     reordered = rfcs("LAST_UPDATE DESC") != unsorted_order
     assert reordered, "'LAST_UPDATE DESC' returned the default order unchanged"
 
-    colon_ignored = rfcs("LAST_UPDATE:DESC") == unsorted_order
+    # Re-take the unsorted snapshot immediately before comparing, rather than
+    # reusing `unsorted_order` from three round trips ago. With a window
+    # applied, a ticket whose LAST_UPDATE sits just below the bound can be
+    # touched by anyone on the shared instance in those seconds and ENTER the
+    # filtered set within the first 20 rows -- membership differs, not order,
+    # which the stale snapshot would misattribute to 'LAST_UPDATE:DESC' now
+    # reordering results. Before the window was added, set membership was
+    # stable and only reordering could break this equality; a window makes it
+    # a race. One retry absorbs a second unlucky write in the same gap before
+    # this fails for the wrong reason.
+    colon_order = rfcs("LAST_UPDATE:DESC")
+    fresh_unsorted = rfcs(None)
+    colon_ignored = colon_order == fresh_unsorted
+    if not colon_ignored:
+        colon_order = rfcs("LAST_UPDATE:DESC")
+        fresh_unsorted = rfcs(None)
+        colon_ignored = colon_order == fresh_unsorted
     assert colon_ignored, (
         "'LAST_UPDATE:DESC' now reorders results — it used to be silently "
         "ignored, and RECENT_TICKETS_SORT was changed on that basis"
