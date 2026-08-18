@@ -37,20 +37,31 @@ def _empty_str_to_none_datetime(value: Any) -> Any:
     value -- including a ``datetime`` handed in directly, not just a string --
     routes through :func:`~easyvista_python_client.timestamps.parse_ev_datetime`,
     which normalizes a naive ``datetime`` to UTC and returns ``None`` for
-    anything it cannot parse. When it returns ``None`` this hands the *original*
-    value back rather than substituting ``None`` itself, so pydantic's own
-    datetime validation still runs and raises a ``ValidationError`` naming the
-    field -- silently returning ``None`` for junk would hide a format change.
-    One consequence of that fallthrough: pydantic's own parser accepts a
-    numeric string as Unix epoch seconds (e.g. ``"1724000000"`` ->
-    ``2024-08-18T03:53:20+00:00``), since an unparseable string reaches it
-    unchanged. Harmless while EasyVista only ever sends ISO 8601, but worth
-    knowing before any future epoch-millis format change.
+    anything it cannot parse.
+
+    When it returns ``None`` this raises ``ValueError``, which pydantic wraps
+    into a ``ValidationError`` naming the field. It deliberately does **not**
+    fall through to pydantic's own datetime parser, which is far more permissive
+    than EasyVista's format and would invent a plausible-but-wrong instant
+    instead of reporting the mismatch: ``"20260817"`` (ISO-basic, no separators)
+    becomes ``1970-08-23T12:00:17Z``, 56 years off, and ``1755434441610`` --
+    what an epoch-millis format change would look like -- becomes a wholly
+    credible ``2025-08-17T12:40:41.610Z``. Absorbing the one format change this
+    guard exists to surface is the opposite of the intended behaviour, so junk
+    raises here instead.
     """
     if isinstance(value, str) and not value.strip():
         return None
     parsed = parse_ev_datetime(value)
-    return parsed if parsed is not None else value
+    if parsed is None:
+        raise ValueError(
+            f"{value!r} is not an EasyVista timestamp. EasyVista sends ISO 8601 "
+            "with an explicit UTC offset (or '' for an unset date); anything "
+            "else is reported rather than guessed at, because pydantic's own "
+            "parser would turn a numeric or ISO-basic value into a plausible "
+            "but wrong instant and hide the format change."
+        )
+    return parsed
 
 
 OptionalDateTime = Annotated[

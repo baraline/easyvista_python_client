@@ -85,9 +85,18 @@ def ev_in_filter(field: str, values: Iterable[str | int | None]) -> str | None:
 # An interval bound is rendered UNQUOTED inside `(...)`, so the quote-based
 # defence the other builders rely on does not apply here: a ';' would append a
 # second bound and a ')' would close the interval early. Validating the shape is
-# therefore the guard, not escaping. Deliberately strict — it accepts only the
-# renderings measured live: a date, a second-precision ISO timestamp, or the
-# full offset-bearing literal the API returns.
+# therefore the guard, not escaping.
+#
+# This regex is the ADMISSION gate — which strings a caller may hand in — and it
+# is deliberately WIDER than the set the wire honours, because
+# :func:`_interval_bound` re-renders every admitted time through
+# :func:`~easyvista_python_client.format_ev_datetime` before emitting it.
+# Measured live 2026-08-18, a *time* bound is honoured only at millisecond
+# precision with an explicit offset (or ``Z``); second precision with an offset
+# (``2025-11-28T16:14:41+01:00``), minute precision, and a space instead of
+# ``T`` are all HTTP 590. A bare date is honoured as written. Admitting the
+# wider set and normalising is what lets a caller pass a stored watermark string
+# at all instead of having to pre-render it in exactly one shape.
 #
 # This is a SHAPE gate only, not a validity gate: `[0-9]` (not `\d`, which is
 # Unicode-aware) keeps non-ASCII digits out, and `fullmatch` anchors both ends
@@ -96,12 +105,19 @@ def ev_in_filter(field: str, values: Iterable[str | int | None]) -> str | None:
 # `.strip()` above having already removed one. Calendar/time validity (e.g.
 # ``9999-99-99``, ``25:61:61``) is not this regex's job; :func:`_interval_bound`
 # checks that separately via :func:`~easyvista_python_client.parse_ev_datetime`.
+# ``z`` is accepted lowercase because ``parse_ev_datetime`` accepts it on the
+# read path; refusing it here would reject a value this package itself produced.
 _TIMESTAMP_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}"  # YYYY-MM-DD
     r"(?:[T ][0-9]{2}:[0-9]{2}:[0-9]{2}"  # optional T HH:MM:SS
     r"(?:\.[0-9]{1,6})?"  # optional fractional seconds
-    r"(?:Z|[+-][0-9]{2}:[0-9]{2})?)?"  # optional offset
+    r"(?:[Zz]|[+-][0-9]{2}:[0-9]{2})?)?"  # optional offset
 )
+
+# A bare calendar date, which is passed through UNCHANGED rather than
+# normalised: it has day granularity, the API honours it as written, and
+# re-rendering it would invent a midnight instant in some zone.
+_DATE_ONLY_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 # A datetime carrying NO ``Z`` and no ``+-HH:MM``. The wire accepts these, and
 # reads them in another zone -- measured live 2026-08-18, the same wall-clock
@@ -112,6 +128,34 @@ _TIMESTAMP_RE = re.compile(
 _OFFSETLESS_TIME_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"
 )
+
+
+def _render_interval_bound(moment: datetime) -> str:
+    """Render one time bound in the single form measured live as honoured.
+
+    :func:`~easyvista_python_client.format_ev_datetime` emits millisecond
+    precision with an explicit offset, which is the ONLY time rendering the
+    interval grammar accepts: second precision with an offset, minute precision
+    and a space separator instead of ``T`` are each HTTP 590 (measured live
+    2026-08-18).
+
+    The rendering is re-checked against :data:`_TIMESTAMP_RE` rather than
+    trusted, because a zone whose UTC offset is not a whole number of minutes --
+    every pre-1900 ``zoneinfo`` entry has one, e.g. ``Asia/Kolkata`` at
+    ``+05:53:20`` -- renders as ``+05:53:20``, which the string path refuses and
+    which the wire has no reason to honour either. Without this check the
+    datetime path could emit a bound the string path would reject, which is the
+    asymmetry this function exists to remove.
+    """
+    rendered = format_ev_datetime(moment)
+    if not _TIMESTAMP_RE.fullmatch(rendered):
+        raise ValueError(
+            f"{moment!r} renders as {rendered!r}, which EasyVista's interval "
+            "grammar cannot express: its UTC offset is not a whole number of "
+            "minutes (historical zoneinfo zones carry such offsets). Convert "
+            "the datetime to UTC, or to a zone with a whole-minute offset."
+        )
+    return rendered
 
 
 def _interval_bound(value: str | datetime | None) -> str:
@@ -131,15 +175,26 @@ def _interval_bound(value: str | datetime | None) -> str:
     never have. :func:`~easyvista_python_client.format_ev_datetime` already
     refuses a naive ``datetime`` on this reasoning; this keeps the string path
     consistent with it. A bare date stays legal.
+
+    Past those gates an admitted **time** is NORMALISED rather than passed
+    through: it is re-rendered by :func:`_render_interval_bound`, so the string
+    and datetime paths emit byte-identical bounds and both emit the one
+    rendering measured live as honoured. This is not cosmetic --
+    ``"2025-11-28T16:14:41+01:00"``, the most natural way to comply with the
+    offset gate, is HTTP 590 on the wire as written and becomes
+    ``2025-11-28T16:14:41.000+01:00`` here. Sub-millisecond precision is
+    truncated to milliseconds, EasyVista's own precision. A bare **date** is
+    passed through unchanged (see :data:`_DATE_ONLY_RE`).
     """
     if value is None:
         return ""
     if isinstance(value, datetime):
-        return format_ev_datetime(value)
+        return _render_interval_bound(value)
     text = str(value).strip()
     if not text:
         return ""
-    if not _TIMESTAMP_RE.fullmatch(text) or parse_ev_datetime(text) is None:
+    parsed = parse_ev_datetime(text) if _TIMESTAMP_RE.fullmatch(text) else None
+    if parsed is None:
         raise ValueError(
             f"{value!r} is not an EasyVista timestamp. An interval bound is "
             "interpolated unquoted, so only a date or an ISO-8601 timestamp is "
@@ -153,7 +208,9 @@ def _interval_bound(value: str | datetime | None) -> str:
             "datetime and let format_ev_datetime render it. A date alone is "
             "accepted -- it has no time to misplace."
         )
-    return text
+    if _DATE_ONLY_RE.fullmatch(text):
+        return text
+    return _render_interval_bound(parsed)
 
 
 def ev_since_filter(field: str, start: str | datetime | None) -> str | None:
@@ -167,12 +224,34 @@ def ev_since_filter(field: str, start: str | datetime | None) -> str | None:
 
         search = ev_since_filter("LAST_UPDATE", watermark)
         if search is not None:
-            for ticket in client.iter_tickets(search=search):
+            seen = set()
+            for ticket in client.iter_tickets(search=search, sort="LAST_UPDATE"):
+                if ticket.rfc_number in seen:
+                    continue
+                seen.add(ticket.rfc_number)
                 ...
 
+    **The sort is load-bearing, not decoration.** ``iter_tickets`` walks the
+    result set by offset, and the rows this filter selects are by construction
+    the rows that are changing: a ticket touched between page N and page N+1
+    gets a new ``LAST_UPDATE``, and in the server's unspecified default order it
+    may land *before* the read cursor and never be yielded at all — a permanent
+    miss, because the next sweep starts from a later watermark. Sorting
+    **ascending on the same column the window filters** (bare ``LAST_UPDATE``,
+    or ``LAST_UPDATE ASC``; both are honoured, measured live) moves a re-touched
+    row toward the tail instead, so it is seen twice rather than not at all —
+    hence the de-duplication by ``rfc_number`` above.
+
+    The lower bound is **INCLUSIVE** and milliseconds are honoured (verified
+    live on three independent boundaries), so a watermark taken as
+    ``max(t.last_update)`` re-reads that boundary record on the next sweep. That
+    is the same duplicate the sort deliberately creates, and the same
+    de-duplication handles it.
+
     ``start`` may be a ``datetime`` (the preferred input) or a timestamp
-    string. Blank or ``None`` returns ``None``, matching the other builders so
-    callers compose without conditionals.
+    string; a string naming a time is re-rendered to the one form the wire
+    honours (see :func:`_interval_bound`). Blank or ``None`` returns ``None``,
+    matching the other builders so callers compose without conditionals.
     """
     bound = _interval_bound(start)
     if not bound:
@@ -196,6 +275,20 @@ def ev_between_filter(
     return f"{field}:({low};{high})"
 
 
+# Every character that is a metacharacter to `~`, measured live 2026-08-18
+# against one instance:
+#   *  %  multi-character wildcards, interchangeable
+#   _     SINGLE-character wildcard -- replacing one character of an RFC that
+#         matched 1 row turned it into 9
+#   [     opens a character class -- `[0-9]` in the same position also gave 9,
+#         and `[<realchar>x]` gave 1, so the class is genuinely evaluated
+# There is no escape: `\_` returned 0 rows, i.e. the backslash is compared
+# literally. So these builders refuse rather than silently changing which
+# records match -- and `_` is not exotic in EasyVista, it is pervasive in asset
+# tags, catalog codes and `e_*` column values.
+_PATTERN_METACHARS = ("*", "%", "_", "[")
+
+
 def _wildcard_filter(field: str, value: str | None, pattern: str) -> str | None:
     """Shared body for the ``~`` pattern builders.
 
@@ -208,11 +301,13 @@ def _wildcard_filter(field: str, value: str | None, pattern: str) -> str | None:
         # A blank value would render `FIELD~"**"`, which matches every row —
         # the silent-widening failure these builders exist to prevent.
         return None
-    if any(char in text for char in ("*", "%")):
+    if any(char in text for char in _PATTERN_METACHARS):
         raise ValueError(
-            f"{value!r} contains a wildcard character (* or %). These builders "
-            "add the wildcards themselves; one inside the value would change "
-            "which records match rather than being compared literally."
+            f"{value!r} contains a pattern metacharacter (one of * % _ [). "
+            "These builders add the wildcards themselves; a metacharacter "
+            "inside the value would change which records match rather than "
+            "being compared literally, and EasyVista provides no escape for it "
+            "-- a backslash is taken literally (verified live)."
         )
     return f'{field}~"{pattern.format(v=escape_ev_value(text))}"'
 
@@ -226,6 +321,13 @@ def ev_contains_filter(field: str, value: str | None) -> str | None:
     Without a wildcard, ``~`` degenerates to exact match, which is why this
     package previously documented it as "exact-match, not contains" — that
     conclusion held only for the inputs it was tested with.
+
+    A value containing ``*``, ``%``, ``_`` or ``[`` raises ``ValueError``: all
+    four are metacharacters to ``~`` (``_`` matches any single character, ``[``
+    opens a character class), and no escape for them exists. Refusing beats
+    silently matching records the caller did not ask for —
+    ``ev_contains_filter("ASSET_TAG", "LAPTOP_01")`` would otherwise also match
+    ``LAPTOP-01`` and ``LAPTOP001`` with HTTP 200 and no hint.
     """
     return _wildcard_filter(field, value, "*{v}*")
 

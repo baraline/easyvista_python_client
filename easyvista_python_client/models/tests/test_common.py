@@ -101,9 +101,38 @@ def test_an_unparseable_timestamp_raises_rather_than_silently_becoming_none():
     """
     with pytest.raises(pydantic.ValidationError) as exc_info:
         _Probe.model_validate({"when": "not-a-date"})
-    # The whole reason _empty_str_to_none_datetime hands the original string
-    # back instead of raising itself is so pydantic's own error names the
-    # field -- confirm it actually does, not just that *some* error was raised.
+    # _empty_str_to_none_datetime raises ValueError, which pydantic wraps into a
+    # ValidationError naming the field -- confirm it actually does, not just
+    # that *some* error was raised.
+    assert exc_info.value.errors()[0]["loc"] == ("when",)
+
+
+@pytest.mark.parametrize(
+    "junk",
+    [
+        # ISO-basic, no separators. Pydantic's own parser reads this as epoch
+        # seconds -> 1970-08-23T12:00:17Z, an instant 56 years off, SILENTLY.
+        "20260817",
+        # What an epoch-millis format change would look like on the wire.
+        # Pydantic reads it as 2025-08-17T12:40:41.610Z -- entirely plausible,
+        # which is exactly why absorbing it would defeat this guard.
+        1755434441610,
+        "1755434441610",
+        # A plausible alternative "unset" sentinel; pydantic reads it as the
+        # epoch rather than reporting that EasyVista's sentinel is "".
+        0,
+        "0",
+    ],
+)
+def test_a_numeric_shaped_value_raises_instead_of_becoming_an_epoch_instant(junk):
+    """The guard must not fall through to pydantic's much broader parser.
+
+    Every value here is one pydantic accepts with a credible-looking result, so
+    a fallthrough would turn the one signal this guard exists to raise -- a
+    change in EasyVista's timestamp format -- into wrong data with no error.
+    """
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        _Probe.model_validate({"when": junk})
     assert exc_info.value.errors()[0]["loc"] == ("when",)
 
 

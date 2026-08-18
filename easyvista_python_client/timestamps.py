@@ -14,6 +14,18 @@ Two consequences worth stating, because both have bitten callers:
 * An **unset** date is the empty string, not ``null``. A parser that only guards
   ``None`` raises on real data.
 
+One deliberate asymmetry, stated here because it looks like an inconsistency
+otherwise. On the **read** path :func:`parse_ev_datetime` assumes UTC for a
+literal that carries no offset, because an extractor must never fail a record
+over one column. On the **write/query** path
+:func:`easyvista_python_client.filters._interval_bound` *refuses* the identical
+shape, because a mis-zoned interval bound silently moves the window and skips
+records — the one failure a watermark must not have, and there a ``ValueError``
+costs the caller nothing but a corrected input. So a naive stamp read back from
+an instance becomes a confidently offset-bearing ``datetime``: if a deployment
+ever returns offset-less timestamps, that guess is laundered past the filter
+guard, and the assumption -- not the guard -- is what to revisit.
+
 This module is a leaf: it imports nothing from the package, so both ``models/``
 and ``filters.py`` can use it without a cycle.
 """

@@ -68,11 +68,47 @@ def test_is_safe_predicate_never_raises():
 def test_since_emits_the_open_ended_interval():
     """``FIELD:(a;)`` — the form measured live as a watermark lower bound.
 
-    The literal carries its offset because the bound gate now requires one on
-    any time; this test is about the emitted *shape*, so it uses a legal one.
+    The bound is NORMALISED, not passed through. The literal below is the most
+    natural way for a caller to satisfy the offset gate, and measured live
+    2026-08-18 it is HTTP 590 exactly as written -- second precision with an
+    offset is not a rendering the interval grammar accepts. So the builder
+    re-renders it at millisecond precision, which is.
     """
     got = ev_since_filter("LAST_UPDATE", "2025-11-28T16:14:41+01:00")
-    assert got == "LAST_UPDATE:(2025-11-28T16:14:41+01:00;)"
+    assert got == "LAST_UPDATE:(2025-11-28T16:14:41.000+01:00;)"
+
+
+def test_since_normalises_a_space_separated_literal_to_the_T_form():
+    """``str(aware_datetime)`` uses a space, which is HTTP 590 on the wire.
+
+    Measured live 2026-08-18 (and again in round 1). Normalising is what makes
+    the most obvious Python rendering of an aware datetime usable at all.
+    """
+    got = ev_since_filter("LAST_UPDATE", "2025-11-28 16:14:41.133+01:00")
+    assert got == "LAST_UPDATE:(2025-11-28T16:14:41.133+01:00;)"
+
+
+def test_since_accepts_a_lowercase_z_the_read_path_already_accepts():
+    """``parse_ev_datetime`` accepts ``z``; the gate must not contradict it.
+
+    Rejecting a value this package's own read path produces -- with a message
+    reading "is not an EasyVista timestamp" -- would be actively misleading.
+    """
+    got = ev_since_filter("LAST_UPDATE", "2025-11-28T15:14:41.133z")
+    assert got == "LAST_UPDATE:(2025-11-28T15:14:41.133+00:00;)"
+
+
+def test_the_string_and_datetime_paths_emit_byte_identical_bounds():
+    """The last asymmetry between the two input paths, closed by normalisation.
+
+    Before this, the same instant emitted two different literals depending on
+    whether the caller had already stringified it -- and only one of the two was
+    a rendering the wire honours.
+    """
+    dt = datetime(2025, 11, 28, 16, 14, 41, 133000, tzinfo=_CET)
+    assert ev_since_filter("LAST_UPDATE", dt) == ev_since_filter(
+        "LAST_UPDATE", dt.isoformat()
+    )
 
 
 def test_since_accepts_a_datetime_and_formats_the_offset_literal():
@@ -139,24 +175,48 @@ def test_interval_refuses_a_well_shaped_but_impossible_timestamp(bad):
 
 
 @pytest.mark.parametrize(
-    "literal",
+    ("literal", "emitted"),
     [
-        # A date alone is legal: day granularity, no time to misplace. Measured
-        # live as honoured (round 1: 4107 rows against a 4316-row table).
-        "2025-11-28",
-        "2025-11-28T16:14:41.133+01:00",
-        "2025-11-28T16:14:41.133456Z",
+        # A date alone is legal AND is passed through unchanged: day
+        # granularity, no time to misplace, and measured live as honoured
+        # (round 1: 4107 rows against a 4316-row table). Re-rendering it would
+        # invent a midnight instant in some zone.
+        ("2025-11-28", "2025-11-28"),
+        # Already the one honoured time rendering: normalisation is a no-op.
+        ("2025-11-28T16:14:41.133+01:00", "2025-11-28T16:14:41.133+01:00"),
+        # Microseconds are truncated to EasyVista's own millisecond precision.
+        ("2025-11-28T16:14:41.133456Z", "2025-11-28T16:14:41.133+00:00"),
     ],
 )
-def test_interval_accepts_every_rendering_measured_live(literal):
+def test_interval_accepts_every_rendering_measured_live(literal, emitted):
     """The guard's acceptance side: a regression here fails CLOSED on real
     watermarks, which no rejection test would catch.
+
+    Accepted is not the same as emitted verbatim -- every admitted *time* is
+    re-rendered into the one form measured live as honoured. See
+    ``test_since_emits_the_open_ended_interval``.
 
     The offset-less *time* renderings that round 1 measured as accepted by the
     API moved to ``test_interval_refuses_a_time_without_an_offset``: the wire
     takes them, but it reads them in another zone. See that test.
     """
-    assert ev_since_filter("LAST_UPDATE", literal) == f"LAST_UPDATE:({literal};)"
+    assert ev_since_filter("LAST_UPDATE", literal) == f"LAST_UPDATE:({emitted};)"
+
+
+def test_interval_refuses_a_sub_minute_utc_offset_on_either_path():
+    """A whole-minute offset is not a given: historical zoneinfo zones break it.
+
+    ``format_ev_datetime`` would render ``+05:53:20``, which no shape this
+    grammar accepts can express -- and which the string path already refused.
+    Validating the RENDERED bound is what keeps the datetime path from emitting
+    something its own sibling path would reject.
+    """
+    odd = timezone(timedelta(hours=5, minutes=53, seconds=20))
+    aware = datetime(2025, 11, 28, 16, 14, 41, tzinfo=odd)
+    with pytest.raises(ValueError, match="whole number of minutes"):
+        ev_since_filter("LAST_UPDATE", aware)
+    with pytest.raises(ValueError, match="timestamp"):
+        ev_since_filter("LAST_UPDATE", aware.isoformat())
 
 
 @pytest.mark.parametrize(
@@ -209,18 +269,45 @@ def test_wildcard_builders_reject_a_double_quote():
         ev_contains_filter("ASSET_TAG", 'LAP"TOP')
 
 
-@pytest.mark.parametrize("bad", ["LAP*TOP", "LAP%TOP"])
-def test_wildcard_builders_reject_a_wildcard_inside_the_value(bad):
-    """A '*' in the middle would silently change what the caller asked for.
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "LAP*TOP",
+        "LAP%TOP",
+        # `_` is a SINGLE-character wildcard under `~`, measured live: replacing
+        # one character of an RFC that matched 1 row gave 9. Underscores are
+        # pervasive in EasyVista codes, so this is the routine case, not the
+        # exotic one -- `ASSET_TAG~"*LAPTOP_01*"` also matches `LAPTOP-01`.
+        "LAP_TOP",
+        "LAPTOP_01",
+        # `[` opens a character class; `[0-9]` in the same position also gave 9.
+        "LAP[0-9]TOP",
+        # A backslash does NOT escape it (`\\_` returned 0 rows live), so an
+        # escaped-looking value is refused too rather than silently mismatching.
+        r"LAP\_TOP",
+    ],
+)
+def test_wildcard_builders_reject_a_metacharacter_inside_the_value(bad):
+    """A metacharacter in the middle silently changes what the caller asked for.
 
     ``ev_contains_filter("A*B")`` would match "A" then anything then "B" rather
     than the literal "A*B", so refuse instead of quietly widening the query.
+    All four of ``* % _ [`` behave this way under ``~`` (measured live) and none
+    of them can be escaped, so all four are refused on the identical rationale.
     """
-    with pytest.raises(ValueError, match="wildcard"):
+    with pytest.raises(ValueError, match="metacharacter"):
         ev_contains_filter("ASSET_TAG", bad)
+    with pytest.raises(ValueError, match="metacharacter"):
+        ev_starts_with_filter("ASSET_TAG", bad)
 
 
-def test_blank_wildcard_value_returns_none_not_a_match_everything_pattern():
-    """``FIELD~"**"`` would match every row — the exact silent-widening shape."""
-    assert ev_contains_filter("ASSET_TAG", "") is None
-    assert ev_starts_with_filter("ASSET_TAG", "   ") is None
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_blank_wildcard_value_returns_none_not_a_match_everything_pattern(blank):
+    """``FIELD~"**"`` would match every row — the exact silent-widening shape.
+
+    ``None`` is included because the signature says ``str | None``: without the
+    guard, ``str(None)`` would render ``FIELD~"*None*"``, a pattern that both
+    widens silently and matches on a value no caller ever supplied.
+    """
+    assert ev_contains_filter("ASSET_TAG", blank) is None
+    assert ev_starts_with_filter("ASSET_TAG", blank) is None
