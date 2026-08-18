@@ -528,6 +528,25 @@ async def test_stream_bytes_chunks_at_the_documented_default_size():
     assert [len(chunk) for chunk in chunks] == [65536, 65536, 32768]
 
 
+@pytest.mark.parametrize("bad", [0, -8])
+async def test_stream_bytes_refuses_a_non_positive_chunk_size(bad):
+    """The newest public parameter must fail as bad input, not as a library bug.
+
+    Left unguarded, httpx raises from inside its own ``ByteChunker`` several
+    frames below this client: ``chunk_size=0`` surfaces as "range() arg 3 must
+    not be zero" and a negative one as "list index out of range". A caller
+    computing a chunk size reads either as our bug. No request is made, so this
+    needs no mock -- and because ``stream_bytes`` is a generator, the raise lands
+    on the first iteration step, matching the deferred ``ValueError`` for a
+    record with no download URL.
+    """
+    async with Transport(_cfg()) as transport:
+        with pytest.raises(ValueError, match="chunk_size must be positive"):
+            await _collect(
+                transport.stream_bytes("documents/1/content", chunk_size=bad)
+            )
+
+
 @respx.mock
 async def test_stream_bytes_yields_nothing_for_an_empty_body():
     respx.get(f"{ROOT}/documents/1/content").mock(

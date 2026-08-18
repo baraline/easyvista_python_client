@@ -93,6 +93,19 @@ def test_list_actions_omits_fields_when_not_requested():
     assert "fields" not in spec.params
 
 
+def test_list_actions_sends_the_row_cap_explicitly_when_given_one():
+    """The cap must be the CLIENT's, not the server's unstated default.
+
+    This call returns one page and does not paginate, so whoever owns the cap
+    owns where the action log gets truncated. Every sibling search on the client
+    injects ``config.default_max_rows``; this one used to be the single search
+    that deferred to the server (25 on the verified instance), which a caller
+    could neither see nor raise.
+    """
+    spec, _parse = build_list_actions("I240101_0001", max_rows=200)
+    assert spec.params["max_rows"] == 200
+
+
 def test_build_get_action_targets_the_top_level_path():
     spec, _ = build_get_action(52990)
     assert spec.method == "GET"

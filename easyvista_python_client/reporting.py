@@ -94,6 +94,18 @@ def aggregate_tickets(
     missing/unparseable date is excluded when a bound is set. Raises ``ValueError``
     for a malformed bound string.
 
+    **An offset-less bound is interpreted as UTC**, not as instance-local time,
+    because it routes through
+    :func:`~easyvista_python_client.parse_ev_datetime`. On a ``+02:00`` instance
+    ``created_since="2026-01-01T00:00:00"`` therefore silently excludes every
+    ticket created between 00:00 and 02:00 local on 1 January -- a two-hour hole
+    in a bound this docstring calls inclusive. Pass an aware ``datetime``, or an
+    offset-bearing string, when the boundary matters. Note this filter is
+    client-side and deliberately more permissive than the *wire* builders, which
+    refuse an offset-less time outright
+    (:func:`~easyvista_python_client.ev_since_filter`); making the two agree is a
+    behaviour change and a candidate follow-up.
+
     The "unparseable" half of that per-ticket guard is unreachable for a
     ``Request`` built the normal way: ``Request.model_validate`` itself now
     rejects a malformed ``CREATION_DATE_UT`` before this function ever sees the

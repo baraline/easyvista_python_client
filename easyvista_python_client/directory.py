@@ -18,6 +18,15 @@ from .reporting import TicketStatistics
 # `recent_tickets` was never actually sorted. The rule is syntactic rather than
 # field-specific, so it is applied to RFC_NUMBER here by inference;
 # integration_tests/test_live_change_window.py pins this exact token live.
+#
+# What is measured is the DESCENDING-ness, not recency. RFC_NUMBER is a varchar
+# (`I240101_0001`), so a descending string sort orders by the request-type
+# prefix FIRST and the date second: on an instance that issues more than one
+# prefix letter, every `R...` ticket outranks every `I...` ticket regardless of
+# date. Hence the docstrings say "descending RFC_NUMBER" rather than
+# "newest-first". Switching to a date column (`CREATION_DATE_UT DESC`) would
+# make recency literal and is a candidate follow-up; it is a behaviour change
+# and wants its own live check first.
 RECENT_TICKETS_SORT = "RFC_NUMBER DESC"
 
 

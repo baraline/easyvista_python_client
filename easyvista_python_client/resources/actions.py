@@ -37,7 +37,10 @@ def build_create_action(
 
 
 def build_list_actions(
-    rfc_number: str, *, fields: Iterable[str] | str | None = None
+    rfc_number: str,
+    *,
+    fields: Iterable[str] | str | None = None,
+    max_rows: int | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], list[Action]]]:
     # Actions are listed via the TOP-LEVEL /actions resource filtered by the
     # request number, not a nested requests/{rfc}/actions path (which the API
@@ -48,15 +51,26 @@ def build_list_actions(
     # search=None would list every action just as surely.
     #
     # ``fields`` is honoured by this endpoint and grants every scalar requested
-    # (verified live 2026-08-17), which is what lets a caller read every action's
-    # timestamps and author in ONE request instead of an item fetch per action.
-    # Two limits, both silent: the memo bodies (``DESCRIPTION``, ``COMMENT``)
+    # (verified live 2026-08-17), which is what lets a caller read a PAGE of
+    # actions' timestamps and authors in ONE request instead of an item fetch
+    # per action.
+    # Three limits, all silent: the memo bodies (``DESCRIPTION``, ``COMMENT``)
     # come back as HREF objects under any projection — the text is never inlined
-    # — and ``fields=*`` is NOT a wildcard: it silently reduces to ``ACTION_ID``.
+    # —, ``fields=*`` is NOT a wildcard (it silently reduces to ``ACTION_ID``),
+    # and this call returns ONE PAGE. It does not paginate: a ticket with more
+    # actions than ``max_rows`` is truncated with no error, and the envelope's
+    # ``total_record_count`` is discarded by the parser below, so the caller
+    # cannot even detect it. ``max_rows`` is nonetheless passed explicitly so
+    # the cap is the client's configured page size rather than an unstated
+    # server default (25 on the verified instance) — a caller who is told the
+    # cap can raise it. Real pagination is a follow-up: it needs live
+    # verification that this endpoint's ``@next`` behaves like the others'.
     search = ev_equals_filter("REQUEST.RFC_NUMBER", rfc_number)
     if search is None:
         raise ValueError("rfc_number is required to list a ticket's actions")
-    spec, parse_search = build_search(ACTIONS, search=search, fields=fields)
+    spec, parse_search = build_search(
+        ACTIONS, search=search, fields=fields, max_rows=max_rows
+    )
 
     def parse(data: Any) -> list[Action]:
         return parse_search(data).records

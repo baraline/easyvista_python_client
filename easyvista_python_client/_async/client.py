@@ -144,6 +144,17 @@ class AsyncEasyvistaClient:
 
         Pages of ``page_size`` (default ``config.default_max_rows``) until the
         server reports no further page (``@next``) or ``max_records`` is reached.
+
+        ``sort`` is forwarded to the wire and its token must be
+        **space-separated** — ``"LAST_UPDATE"`` or ``"LAST_UPDATE DESC"``.
+        ``"LAST_UPDATE:DESC"``, ``"-LAST_UPDATE"`` and ``"DESC(LAST_UPDATE)"``
+        are each **silently ignored** (measured live): the server returns its
+        default order with no error, so an unsorted result looks sorted. This is
+        not validated locally, so the token is the caller's to get right.
+
+        Sorting is not cosmetic when the filter selects rows that are changing --
+        an unsorted offset sweep over a change window can skip a record
+        permanently. See :func:`~easyvista_python_client.ev_since_filter`.
         """
         if page_size is None:
             page_size = self.config.default_max_rows
@@ -258,7 +269,7 @@ class AsyncEasyvistaClient:
         ``ACTION_LABEL_FR``, ``ACTION_NUMBER``, ``DONE_BY_ID`` and
         ``EXPECTED_START_DATE_UT`` but **no** ``CREATION_DATE_UT`` or
         ``LAST_UPDATE``. Pass ``fields`` to project them onto the list and read
-        every action's timestamps and author in one request rather than one
+        a page of actions' timestamps and authors in one request rather than one
         item fetch each::
 
             actions = client.list_actions(
@@ -266,6 +277,14 @@ class AsyncEasyvistaClient:
                 fields=["ACTION_ID", "ACTION_TYPE_ID", "CREATION_DATE_UT",
                         "LAST_UPDATE", "DONE_BY_ID"],
             )
+
+        **Returns at most ONE page and does not paginate.** The cap is
+        ``config.default_max_rows``; a ticket with more actions than that is
+        **truncated with no error**, and this method discards the envelope's
+        total, so a caller cannot detect the truncation from the result. This is
+        not hypothetical: a freshly created ticket already carries about twelve
+        actions, most of them workflow-generated. Raise
+        ``EasyvistaConfig.default_max_rows`` if a ticket's whole log matters.
 
         The note text is never projectable — ``DESCRIPTION`` and ``COMMENT``
         are Memo sub-resources and come back as HREF objects under every
@@ -275,7 +294,9 @@ class AsyncEasyvistaClient:
         it silently reduces to ``ACTION_ID`` alone — and a dotted path such as
         ``DESCRIPTION.HREF`` is silently dropped.
         """
-        spec, parse = actions_res.build_list_actions(rfc_number, fields=fields)
+        spec, parse = actions_res.build_list_actions(
+            rfc_number, fields=fields, max_rows=self.config.default_max_rows
+        )
         return parse(await self._transport.send(spec))
 
     async def get_action(self, action_id: str | int) -> Action:
@@ -294,6 +315,12 @@ class AsyncEasyvistaClient:
         status code. Note that an action can be edited but **not deleted** —
         ``DELETE actions/{id}`` is refused with HTTP 403 — so there is
         deliberately no ``delete_action``.
+
+        The returned :class:`Action` is the API's own echo and is **not
+        verified**: the PUT's response body has never been captured, and if it
+        answers empty or href-only the parser yields an ``Action`` whose fields
+        are all ``None``. Re-read with :meth:`get_action` rather than reading
+        fields off the return value.
         """
         spec, parse = actions_res.build_update_action(action_id, update)
         return parse(await self._transport.send(spec))
@@ -443,6 +470,15 @@ class AsyncEasyvistaClient:
         :class:`ValueError` for a record carrying no download URL and
         :class:`EasyvistaError` for one pointing off the instance both surface
         on the first step rather than at the call.
+
+        **Stopping early:** on the async surface a bare ``break`` leaves the
+        response checked out of the connection pool until the event loop's
+        async-generator finalizer runs, which is a garbage-collection cycle away
+        (measured) -- so a caller that reads only a prefix of many attachments
+        under a bounded ``max_connections`` can stall on connections it appears
+        to have released. Close the generator instead (``aclose()``, or
+        ``contextlib.aclosing``). On the sync surface refcounting releases it at
+        the ``break`` and nothing is needed.
         """
         stream = self._transport.stream_bytes(
             documents_res.download_href(document), chunk_size=chunk_size
@@ -680,6 +716,13 @@ class AsyncEasyvistaClient:
         It costs two extra requests per action; pass ``False`` to skip it when
         you only need the action list.
 
+        **The action log is capped at one page.** It comes from
+        :meth:`list_actions`, which returns at most ``config.default_max_rows``
+        actions and does not paginate, so on a busy ticket
+        :attr:`TicketContext.actions` — and therefore
+        :meth:`TicketContext.to_markdown`'s rendered log — is silently truncated
+        with no error. Raise ``default_max_rows`` if completeness matters.
+
         On the async surface the independent requests (the two memos plus the
         actions and documents lists) are issued concurrently, in up to three
         waves; on the sync surface they run one after another in source order,
@@ -781,7 +824,10 @@ class AsyncEasyvistaClient:
         403/404 degrades it to ``[]`` / ``None`` / ``0`` (same pattern as
         :meth:`get_ticket_context`). The flags trim the heavier related calls.
         Tickets and assets filter on ``DEPARTMENT_ID:"<id>"``. ``recent_tickets``
-        is ordered newest-first by ``RECENT_TICKETS_SORT``. The token must stay
+        is ordered by **descending ``RFC_NUMBER``** (``RECENT_TICKETS_SORT``),
+        which is newest-first only where RFC numbers are issued monotonically:
+        it is a varchar, so the sort orders by the request-type prefix letter
+        before the date. The token must stay
         space-separated: a colon form is silently ignored and degrades to the
         API's default order with no error (measured live 2026-08-17). Ordering
         therefore depends on the server honouring that token, which the live

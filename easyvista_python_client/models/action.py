@@ -31,8 +31,21 @@ class Action(EasyvistaModel):
     ``REQUEST``) — since the declared fields alias the top-level key,
     ``action_type_id``/``request_id`` read ``None`` off a default list row
     even though the API did return the data. Pass ``fields=`` to
-    ``list_actions`` to get every one of these top-level in one request
-    instead of an item fetch per action.
+    ``list_actions`` to get these top-level for a whole PAGE of actions in one
+    request instead of an item fetch per action — ``list_actions`` returns one
+    page and does not paginate, so it is a page's worth, not a ticket's.
+
+    Naming: this model calls its two timestamps ``created_at``/``updated_at``
+    where :class:`~easyvista_python_client.models.request.Request` and
+    :class:`~easyvista_python_client.models.employee.Employee` mirror the wire
+    and call the identical columns ``creation_date_ut``/``last_update``. The
+    divergence is only in the Python surface; the aliases
+    (``CREATION_DATE_UT``/``LAST_UPDATE``) are the same on all three. Code that
+    spans record types should therefore reach for the wire name via
+    :meth:`~easyvista_python_client.models.common.EasyvistaModel.classify_fields`
+    or ``.reference()`` rather than a shared attribute name, because
+    ``getattr(record, "last_update")`` raises ``AttributeError`` on an
+    ``Action``.
     """
 
     action_id: OptionalInt = Field(default=None, alias="ACTION_ID")

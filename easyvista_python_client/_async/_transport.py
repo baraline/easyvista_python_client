@@ -71,8 +71,16 @@ class BaseTransport:
         That check is load-bearing, not decoration. Every request this transport
         makes carries the instance's Bearer token, so following an absolute URL
         taken out of a response body (an attachment's ``DDL_HREF``, say) would
-        hand that credential to whatever host the body named. The API is trusted
-        to describe its own instance, not to redirect us off it.
+        hand that credential to whatever host the body named.
+
+        What is guaranteed is exactly that and no more: a foreign URL in a
+        response **body** is refused. An HTTP **redirect** off the instance is
+        still *followed* -- both download paths run with
+        ``follow_redirects=True``, which signed-location hops depend on -- and it
+        merely loses the credential (verified: no ``authorization`` header on the
+        foreign request, for Bearer and for Basic; a same-host redirect keeps
+        it). So streamed or downloaded bytes are not proof of instance origin,
+        and a caller must not treat them as such.
         """
         parsed = urlsplit(path_or_url)
         if not parsed.scheme and not parsed.netloc:
@@ -349,8 +357,18 @@ class Transport(BaseTransport):
         silently duplicating data.
 
         No request is made until iteration begins. This is a generator, so a
-        refused URL raises on the first step rather than at the call.
+        refused URL -- and a non-positive ``chunk_size`` -- raises on the first
+        step rather than at the call.
         """
+        if chunk_size <= 0:
+            # Guarded here rather than left to httpx, which raises from inside
+            # its own ByteChunker: `chunk_size=0` surfaces as
+            # "ValueError: range() arg 3 must not be zero" and a negative one as
+            # "IndexError: list index out of range" -- both several frames below
+            # this client, so a caller computing a size (`total // n`, a config
+            # value that defaulted to 0) reads it as a library bug rather than
+            # bad input.
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
         retryer = AsyncRetrying(
             stop=stop_after_attempt(self.config.max_retries + 1),
             wait=wait_exponential(multiplier=0.5, max=10),

@@ -159,6 +159,23 @@ async def test_list_actions_forwards_a_fields_projection(config):
 
 
 @respx.mock
+async def test_list_actions_sends_the_configured_row_cap(config):
+    """``list_actions`` returns one page, so the cap must be the client's own.
+
+    Without this the request carried no ``max_rows`` at all and the truncation
+    point was the server's unstated default -- invisible to the caller and not
+    raisable by configuration.
+    """
+    route = respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        expected = str(client.config.default_max_rows)
+        await client.list_actions("I240101_0001")
+    assert route.calls.last.request.url.params["max_rows"] == expected
+
+
+@respx.mock
 async def test_get_action_fetches_the_item_level_record(config):
     respx.get(f"{ROOT}/actions/52990").mock(
         return_value=httpx.Response(
