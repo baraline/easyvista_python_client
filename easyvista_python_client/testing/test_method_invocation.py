@@ -100,6 +100,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "search_departments": ((), {}),
     "search_employees": ((), {}),
     "search_tickets": ((), {}),
+    "stream_document": (("requests/I1/documents/1",), {}),
     "ticket_statistics": ((), {"max_records": 1}),
     "update_action": ((1, ActionUpdate()), {}),
     "update_department": ((1, DepartmentUpdate()), {}),

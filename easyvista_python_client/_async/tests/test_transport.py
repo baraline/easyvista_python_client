@@ -7,6 +7,8 @@ has open -- never "the async twin of ...", and never a claim that holds on
 only one surface.
 """
 
+from collections.abc import AsyncIterator
+
 import httpx
 import pytest
 import respx
@@ -433,4 +435,208 @@ async def test_get_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
     async with Transport(_cfg()) as transport:
         content = await transport.get_bytes("https://ev.test/download/42")
     assert content == b"blob"
+    assert signed.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+# --- stream_bytes ------------------------------------------------------------
+#
+# The streaming download. Its contract is "identical to get_bytes except that
+# the body arrives in pieces", so most of these are the get_bytes assertions
+# above re-made against the chunked path -- that duplication is the point, since
+# the two implementations share no code past `resolve_url`. The one claim with
+# no get_bytes counterpart is the retry boundary: retrying stops once a byte has
+# reached the caller, because restarting would deliver it twice.
+
+
+class _StreamThatFailsMidBody(httpx.AsyncByteStream):
+    """A response body that delivers ``prefix`` and then drops the connection.
+
+    ``respx`` can fail a request before a response exists, which is what the
+    ``side_effect=httpx.ConnectError`` mocks elsewhere in this module do. It has
+    no way to fail one *after* the status line, and that is exactly the case the
+    retry boundary is about -- so the failure is injected into the body stream
+    itself, which httpx surfaces as a real ``TransportError`` while iterating.
+    """
+
+    def __init__(self, prefix: bytes) -> None:
+        self._prefix = prefix
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._prefix
+        raise httpx.ReadError("connection dropped mid-body")
+
+
+async def _collect(chunks: AsyncIterator[bytes]) -> list[bytes]:
+    """Every chunk a stream yields, kept separate rather than joined."""
+    return [chunk async for chunk in chunks]
+
+
+@respx.mock
+async def test_stream_bytes_reassembles_to_the_whole_body():
+    body = bytes(range(256)) * 40  # 10240 bytes, not a multiple of the chunk size
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+    async with Transport(_cfg()) as transport:
+        chunks = await _collect(
+            transport.stream_bytes("documents/1/content", chunk_size=1024)
+        )
+    assert b"".join(chunks) == body
+    # More than one chunk, and each bounded: proves the body is delivered
+    # progressively rather than read whole and handed over in a single piece.
+    assert len(chunks) == 10
+    assert max(len(chunk) for chunk in chunks) <= 1024
+
+
+@respx.mock
+async def test_stream_bytes_yields_nothing_for_an_empty_body():
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(200, content=b"")
+    )
+    async with Transport(_cfg()) as transport:
+        assert await _collect(transport.stream_bytes("documents/1/content")) == []
+
+
+@respx.mock
+async def test_stream_bytes_sends_the_bearer_header():
+    route = respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(200, content=b"ok")
+    )
+    async with Transport(_cfg()) as transport:
+        await _collect(transport.stream_bytes("https://ev.test/download/42"))
+    assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+@respx.mock
+async def test_stream_bytes_maps_403_to_auth_error():
+    # The status is on an unread streaming response, whose `.content` raises
+    # until the body is read -- so the error mapping cannot simply be reused, it
+    # has to read the body first. This asserts the mapped type AND that the
+    # parsed EasyVista fields survived that detour.
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(403, json={"error": "forbidden", "code": "9"})
+    )
+    async with Transport(_cfg()) as transport:
+        with pytest.raises(EasyvistaAuthError) as ei:
+            await _collect(transport.stream_bytes("documents/1/content"))
+    assert ei.value.status_code == 403
+    assert ei.value.ev_message == "forbidden"
+    assert ei.value.ev_code == "9"
+
+
+@respx.mock
+async def test_stream_bytes_does_not_retry_a_590():
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(590, json={"error": "rejected"})
+    )
+    async with Transport(_cfg(max_retries=3)) as transport:
+        with pytest.raises(EasyvistaValidationError):
+            await _collect(transport.stream_bytes("documents/1/content"))
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_stream_bytes_retries_a_retryable_status_on_the_open():
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, content=b"bytes")]
+    )
+    async with Transport(_cfg(max_retries=2)) as transport:
+        chunks = await _collect(transport.stream_bytes("documents/1/content"))
+    assert b"".join(chunks) == b"bytes"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_stream_bytes_exhausts_retries_raises_server_error():
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(503)
+    )
+    async with Transport(_cfg(max_retries=1)) as transport:
+        with pytest.raises(EasyvistaServerError):
+            await _collect(transport.stream_bytes("documents/1/content"))
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_stream_bytes_transport_error_on_the_open_raises_connection_error():
+    respx.get(f"{ROOT}/documents/1/content").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+    async with Transport(_cfg()) as transport:
+        with pytest.raises(EasyvistaConnectionError):
+            await _collect(transport.stream_bytes("documents/1/content"))
+
+
+@respx.mock
+async def test_stream_bytes_does_not_retry_after_a_chunk_has_been_yielded():
+    """A mid-body failure is the caller's to handle, never silently restarted.
+
+    Retrying here would hand the caller the opening bytes a second time, so the
+    request is committed the moment a chunk is delivered. The delivered prefix
+    stays visible -- the caller keeps what it already collected -- and the
+    failure arrives as a mapped ``EasyvistaConnectionError``, not as a raw httpx
+    error. A "helpful" change making this resumable fails on the call count.
+    """
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(
+            200, stream=_StreamThatFailsMidBody(b"0123456789abcdef")
+        )
+    )
+    collected: list[bytes] = []
+    async with Transport(_cfg(max_retries=3)) as transport:
+        with pytest.raises(EasyvistaConnectionError):
+            async for chunk in transport.stream_bytes(
+                "documents/1/content", chunk_size=8
+            ):
+                collected.append(chunk)
+    assert b"".join(collected) == b"0123456789abcdef"
+    assert route.call_count == 1, "a mid-stream failure was retried"
+
+
+async def test_stream_bytes_rejects_a_foreign_origin():
+    # The same-origin guard is a security property of the download path, not of
+    # one method on it: every request carries the instance Bearer token. Nothing
+    # is requested until iteration starts, so the refusal surfaces there.
+    async with Transport(_cfg()) as transport:
+        with pytest.raises(EasyvistaError, match="outside the configured instance"):
+            await _collect(transport.stream_bytes("https://attacker.test/download/42"))
+
+
+@respx.mock
+async def test_stream_bytes_drops_the_bearer_token_on_a_cross_host_redirect():
+    # `follow_redirects=True` is as deliberate here as on get_bytes (a download
+    # URL commonly redirects to a signed location), and so is the reason it is
+    # safe: httpx strips Authorization when a redirect leaves the origin. Pinned
+    # on this path too, because the streaming send() call passes the flag itself
+    # rather than inheriting anything from the non-streaming one.
+    respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://cdn.attacker.test/blob/42"}
+        )
+    )
+    foreign = respx.get("https://cdn.attacker.test/blob/42").mock(
+        return_value=httpx.Response(200, content=b"blob")
+    )
+    async with Transport(_cfg()) as transport:
+        chunks = await _collect(transport.stream_bytes("https://ev.test/download/42"))
+    assert b"".join(chunks) == b"blob"
+    leaked = "authorization" in foreign.calls.last.request.headers
+    assert not leaked, "the instance token followed a redirect off the instance"
+
+
+@respx.mock
+async def test_stream_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
+    # Control for the test above, exactly as on get_bytes: without it, a path
+    # that never sent Authorization at all would look like a pass.
+    respx.get("https://ev.test/download/42").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "https://ev.test/download/42/signed"}
+        )
+    )
+    signed = respx.get("https://ev.test/download/42/signed").mock(
+        return_value=httpx.Response(200, content=b"blob")
+    )
+    async with Transport(_cfg()) as transport:
+        chunks = await _collect(transport.stream_bytes("https://ev.test/download/42"))
+    assert b"".join(chunks) == b"blob"
     assert signed.calls.last.request.headers["Authorization"] == "Bearer tok"

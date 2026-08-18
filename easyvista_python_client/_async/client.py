@@ -14,7 +14,10 @@ from collections.abc import AsyncIterator, Iterable, Sequence
 from datetime import datetime
 
 from easyvista_python_client._async._concurrency import Semaphore, settle
-from easyvista_python_client._async._transport import Transport
+from easyvista_python_client._async._transport import (
+    DEFAULT_STREAM_CHUNK_SIZE,
+    Transport,
+)
 from easyvista_python_client._transport import RequestSpec
 from easyvista_python_client.config import EasyvistaConfig
 from easyvista_python_client.context import TicketContext
@@ -405,6 +408,47 @@ class AsyncEasyvistaClient:
         :meth:`~easyvista_python_client._async._transport.BaseTransport.resolve_url`).
         """
         return await self._transport.get_bytes(documents_res.download_href(document))
+
+    async def stream_document(
+        self, document: Document | str, *, chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE
+    ) -> AsyncIterator[bytes]:
+        """Fetch an attachment's bytes in chunks, without holding the file whole.
+
+        Accepts exactly what :meth:`download_document` accepts -- a
+        :class:`Document` from :meth:`list_documents` or a raw href/path -- and
+        resolves it identically, refusing a URL outside the configured instance
+        for the same reason. Use this when the bytes are on their way somewhere
+        else in pieces (a file on disk, a hash, another API) and
+        :meth:`download_document` when a single ``bytes`` object is what you
+        wanted anyway.
+
+        Called ``stream_`` rather than ``iter_`` on purpose: every ``iter_*``
+        method on this client iterates *records*, and this iterates the bytes of
+        one document.
+
+        The opposite direction cannot stream at all. :meth:`add_document` sends
+        base64 inside a JSON body, so an upload has to materialise the whole
+        payload however it is called; the asymmetry is the API's, not an
+        oversight here.
+
+        Retrying covers opening the download only. Once the first chunk has been
+        handed over the request is committed, and a transport failure raises
+        :class:`~easyvista_python_client.exceptions.EasyvistaConnectionError`
+        rather than starting again -- starting again would re-deliver bytes the
+        caller already has. A partly consumed stream is never resumed, so
+        deciding what to do with a mid-stream failure is the caller's. See
+        :meth:`~easyvista_python_client._async._transport.Transport.stream_bytes`.
+
+        Nothing is requested until iteration begins: this is a generator, so
+        :class:`ValueError` for a record carrying no download URL and
+        :class:`EasyvistaError` for one pointing off the instance both surface
+        on the first step rather than at the call.
+        """
+        stream = self._transport.stream_bytes(
+            documents_res.download_href(document), chunk_size=chunk_size
+        )
+        async for chunk in stream:
+            yield chunk
 
     # --- departments ----------------------------------------------------------
     async def get_department(self, department_id: str | int) -> Department:

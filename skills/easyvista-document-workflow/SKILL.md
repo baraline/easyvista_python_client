@@ -1,6 +1,6 @@
 ---
 name: easyvista-document-workflow
-description: "Attach, list, download and delete files on an EasyVista ticket with easyvista_python_client — add_document, list_documents, download_document and delete_document with the Document model. Use for ticket attachments, uploading evidence or logs to a request, fetching an attachment's bytes, or removing one."
+description: "Attach, list, download, stream and delete files on an EasyVista ticket with easyvista_python_client — add_document, list_documents, download_document, stream_document and delete_document with the Document model. Use for ticket attachments, uploading evidence or logs to a request, fetching an attachment's bytes whole or chunk by chunk without buffering a large file, or removing one."
 license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the documents sub-resource."
 metadata:
@@ -13,10 +13,11 @@ metadata:
 > methods — the method names and arguments are identical. See
 > `easyvista-client-setup`.
 
-Documents are attachments on a ticket. Four methods: `add_document(rfc,
-filename=, content=)`, `list_documents(rfc)`, `download_document(document)`
-and `delete_document(rfc, document_id)`. All are ticket-scoped — there is no
-standalone document resource on this client.
+Documents are attachments on a ticket. Five methods: `add_document(rfc,
+filename=, content=)`, `list_documents(rfc)`, `download_document(document)`,
+`stream_document(document, chunk_size=)` and `delete_document(rfc,
+document_id)`. All are ticket-scoped — there is no standalone document
+resource on this client.
 
 ## Procedure
 
@@ -25,8 +26,12 @@ standalone document resource on this client.
 2. List with `list_documents(rfc)` → `list[Document]`.
 3. Download with `download_document(document)` → `bytes`. Pass the `Document`
    from the list, or a raw href/path.
-4. Write the bytes yourself; the client does not touch the filesystem.
-5. Remove an attachment with `delete_document(rfc, document.document_id)`. It
+4. For a large attachment, iterate `stream_document(document)` instead → byte
+   chunks (64 KiB by default, `chunk_size=` to change it). Same accepted
+   inputs and same URL resolution as `download_document`; the file never has
+   to exist in memory whole.
+5. Write the bytes yourself; the client does not touch the filesystem.
+6. Remove an attachment with `delete_document(rfc, document.document_id)`. It
    returns nothing (the API answers with an empty body) — re-list to confirm.
 
 ## The Document model
@@ -38,6 +43,7 @@ observed shape), `name`, `document`, `document_id`, `download_href` (the API's
 `download_document` resolves the URL as `download_href or href` — it prefers
 `DDL_HREF` and **falls back to `HREF`**. Either field on its own is enough, so
 a record with an empty `download_href` may still be perfectly downloadable.
+`stream_document` resolves it exactly the same way.
 
 ## Examples
 
@@ -79,6 +85,21 @@ with EasyvistaClient.from_env() as client:
 ```
 
 ```python
+from pathlib import Path
+
+from easyvista_python_client import EasyvistaClient
+
+# Streaming: the bytes go straight to disk, so a 32 MB attachment never sits
+# in memory whole. Only the download streams -- see the Gotchas on upload.
+with EasyvistaClient.from_env() as client:
+    for document in client.list_documents("YOUR_RFC_NUMBER"):
+        target = Path(document.filename or "attachment.bin")
+        with target.open("wb") as sink:
+            for chunk in client.stream_document(document, chunk_size=1024 * 1024):
+                sink.write(chunk)
+```
+
+```python
 from easyvista_python_client import EasyvistaClient
 
 with EasyvistaClient.from_env() as client:
@@ -92,18 +113,35 @@ with EasyvistaClient.from_env() as client:
 ## Gotchas
 
 - `content` must be `bytes`. Read files in binary mode.
+- **Upload cannot stream, and that is the API's constraint, not a gap here.**
+  EasyVista takes an attachment as base64 inside a JSON body, so
+  `add_document` has to materialise the whole payload before it can send
+  anything. Only the download direction has a chunked form.
+- **`stream_document` does not retry a mid-stream failure.** Opening the
+  download is retried under the usual policy, but from the first chunk onwards
+  the request is committed and a transport failure raises
+  `EasyvistaConnectionError` instead of starting over — restarting would hand
+  you bytes you already have. Nothing resumes a partly consumed stream, so
+  either discard what you collected and stream again, or use
+  `download_document`, which retries the whole fetch, when the file is small
+  enough to buffer.
+- `stream_document` is a generator: nothing is requested until you start
+  iterating, so a `ValueError` for a missing URL or an `EasyvistaError` for a
+  foreign one surfaces on the first step, not at the call.
+- It is `stream_document`, not `iter_document`: every `iter_*` method on this
+  client iterates *records*, and this one iterates the bytes of one document.
 - `download_document` raises `ValueError` only when **neither** `DDL_HREF` nor
   `HREF` is set. Guard on both (`download_href is None and href is None`), or
   catch the `ValueError`. Skipping a record because `download_href` alone is
   unset silently drops attachments the client would have fetched through
   `href`.
 - A download URL pointing outside the configured instance raises
-  `EasyvistaError`. Downloads follow redirects (signed URLs are common), and
-  httpx strips the `Authorization` header on a cross-origin redirect, so a
-  foreign host would receive the request unauthenticated — refusing is
-  deliberate.
-- A 403 on an attachment still surfaces as `EasyvistaAuthError`; the binary
-  path reuses the same error mapping and retry policy as the JSON one.
+  `EasyvistaError`, on the streaming path as well as the buffered one.
+  Downloads follow redirects (signed URLs are common), and httpx strips the
+  `Authorization` header on a cross-origin redirect, so a foreign host would
+  receive the request unauthenticated — refusing is deliberate.
+- A 403 on an attachment still surfaces as `EasyvistaAuthError`; both binary
+  paths reuse the same error mapping and the same retry policy as the JSON one.
 - `filename` is derived, not always sent by the API. Fall back to a literal
   name before writing to disk.
 - `delete_document(rfc, document_id)` is **ticket-scoped**: it calls the

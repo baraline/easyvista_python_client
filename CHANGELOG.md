@@ -11,6 +11,29 @@ a deprecation policy will follow the 1.0 release.
 
 ### Added
 
+- `EasyvistaClient.stream_document` / `AsyncEasyvistaClient.stream_document`
+  yield an attachment's bytes in chunks (64 KiB by default, `chunk_size=` to
+  change it) instead of returning them whole. Measured motivation: a consumer
+  mirroring attachments had to buffer, and with the base64 inflation an upload
+  applies a 32 MB attachment peaked near 76 MB of worker memory. Accepts exactly
+  what `download_document` accepts and resolves the URL identically, so the
+  same-origin refusal, the `follow_redirects` behaviour and the error mapping
+  (a 403 is still `EasyvistaAuthError`, a 590 is still not retried) are the same
+  on both paths.
+  **Only the download direction streams, and that is the API's constraint:**
+  EasyVista takes an attachment as base64 inside a JSON body, so `add_document`
+  must materialise the whole payload before it can send anything — no streaming
+  upload is possible, and the asymmetry is not an oversight here.
+  **A mid-stream failure is not retried.** Opening the download is retried under
+  the usual policy, and the first chunk is fetched inside that retried unit so a
+  failure fetching it is still safe to restart; from that chunk onwards the
+  request is committed and a transport error raises `EasyvistaConnectionError`
+  rather than starting over, because starting over would re-deliver bytes the
+  caller already holds. Nothing resumes a partly consumed stream, so a caller
+  that must survive a mid-stream failure decides for itself whether to discard
+  what it collected and ask again; `download_document` retries the whole fetch
+  and stays the simpler choice for a file small enough to buffer.
+
 - Python 3.13 and 3.14 are now tested and declared supported (classifiers, and
   the CI/release matrices, now span 3.10--3.14). No code changed: the suite
   passes unmodified on both, with the same statement count and coverage as on

@@ -19,7 +19,7 @@ import respx
 from easyvista_python_client._async import client as client_module
 from easyvista_python_client._async.client import AsyncEasyvistaClient
 from easyvista_python_client.directory import DepartmentContext
-from easyvista_python_client.exceptions import EasyvistaError
+from easyvista_python_client.exceptions import EasyvistaAuthError, EasyvistaError
 from easyvista_python_client.models.action import ActionUpdate, PostAction
 from easyvista_python_client.models.asset import PostAsset
 from easyvista_python_client.models.department import (
@@ -324,6 +324,76 @@ async def test_download_document_refuses_a_foreign_download_url(config):
     async with AsyncEasyvistaClient(config) as client:
         with pytest.raises(EasyvistaError, match="outside the configured instance"):
             await client.download_document(doc)
+
+
+@respx.mock
+async def test_stream_document_chunks_reassemble_to_the_download(config):
+    body = bytes(range(256)) * 12  # 3072 bytes: several chunks at 512
+    respx.get("https://ev.test/dl/7").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+    doc = Document.model_validate(
+        {"DOCUMENT": "big.bin", "DDL_HREF": "https://ev.test/dl/7"}
+    )
+    chunks = []
+    async with AsyncEasyvistaClient(config) as client:
+        async for chunk in client.stream_document(doc, chunk_size=512):
+            chunks.append(chunk)
+    assert b"".join(chunks) == body
+    assert len(chunks) == 6, "the body arrived in one piece instead of streaming"
+
+
+@respx.mock
+async def test_stream_document_accepts_a_relative_path_like_download_document(config):
+    """Same accepted inputs as download_document, resolved the same way."""
+    respx.get(f"{ROOT}/documents/7/content").mock(
+        return_value=httpx.Response(200, content=b"bytes")
+    )
+    path = "documents/7/content"
+    async with AsyncEasyvistaClient(config) as client:
+        streamed = [chunk async for chunk in client.stream_document(path)]
+        downloaded = await client.download_document(path)
+    assert b"".join(streamed) == downloaded == b"bytes"
+
+
+@respx.mock
+async def test_stream_document_and_download_document_agree_on_a_403(config):
+    """One error mapping, not two: the streaming path must not soften a failure.
+
+    Asserted as an equality between the paths rather than against a hardcoded
+    type, so the two cannot drift apart without this failing -- which is the
+    actual risk, since a streaming response needs its body read before the
+    mapping can look at it at all.
+    """
+    respx.get("https://ev.test/dl/7").mock(
+        return_value=httpx.Response(403, json={"error": "forbidden"})
+    )
+    doc = Document.model_validate({"DDL_HREF": "https://ev.test/dl/7"})
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaError) as streamed:
+            [chunk async for chunk in client.stream_document(doc)]
+        with pytest.raises(EasyvistaError) as downloaded:
+            await client.download_document(doc)
+    assert type(streamed.value) is type(downloaded.value) is EasyvistaAuthError
+    assert streamed.value.status_code == downloaded.value.status_code == 403
+    assert streamed.value.ev_message == downloaded.value.ev_message == "forbidden"
+
+
+async def test_stream_document_refuses_a_foreign_download_url(config):
+    # The same-origin guard covers the streaming path too: it is a property of
+    # the download, not of one method. Nothing is requested until iteration
+    # begins, so the refusal lands on the first step.
+    doc = Document.model_validate({"DDL_HREF": "https://attacker.test/dl/7"})
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaError, match="outside the configured instance"):
+            [chunk async for chunk in client.stream_document(doc)]
+
+
+async def test_stream_document_needs_a_download_url(config):
+    doc = Document.model_validate({"DOCUMENT": "orphan.txt"})
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="no download URL"):
+            [chunk async for chunk in client.stream_document(doc)]
 
 
 # --- pagination --------------------------------------------------------------

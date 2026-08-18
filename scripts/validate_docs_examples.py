@@ -328,6 +328,7 @@ def run_offline(r: Results) -> None:
             "add_document": {"rfc_number", "filename", "content"},
             "list_documents": {"rfc_number"},
             "download_document": {"document"},
+            "stream_document": {"document", "chunk_size"},
         }
         problems = []
         for method, params in expected.items():
@@ -364,6 +365,7 @@ def run_offline(r: Results) -> None:
             "add_document",
             "list_documents",
             "download_document",
+            "stream_document",
             "from_env",
         }
         missing = [m for m in public if not hasattr(AsyncEasyvistaClient, m)]
@@ -371,6 +373,11 @@ def run_offline(r: Results) -> None:
         # iter_tickets must be an async generator on the async client.
         assert inspect.isasyncgenfunction(AsyncEasyvistaClient.iter_tickets), (
             "AsyncEasyvistaClient.iter_tickets is not an async generator"
+        )
+        # And so must stream_document: the user guide documents it as something
+        # you iterate, which on the async surface means `async for`.
+        assert inspect.isasyncgenfunction(AsyncEasyvistaClient.stream_document), (
+            "AsyncEasyvistaClient.stream_document is not an async generator"
         )
 
     r.check(

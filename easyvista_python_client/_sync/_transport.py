@@ -16,6 +16,7 @@ and never a claim that holds on only one of them.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
@@ -38,6 +39,17 @@ from easyvista_python_client.exceptions import (
     EasyvistaServerError,
     EasyvistaValidationError,
 )
+
+#: Default chunk size, in bytes, for :meth:`Transport.stream_bytes`.
+#:
+#: 64 KiB is the ceiling this default is chosen to set: a caller streams an
+#: attachment precisely so the whole file never sits in memory, and the chunk
+#: size is what one step of that costs. Large enough that a 32 MB attachment is
+#: ~512 iterations rather than tens of thousands, small enough that the resident
+#: peak stays negligible beside the file. Deliberately not a config field --
+#: nobody has asked for an instance-wide value, and the one caller who cares
+#: about a specific payload can pass ``chunk_size`` per call.
+DEFAULT_STREAM_CHUNK_SIZE = 64 * 1024
 
 
 class BaseTransport:
@@ -264,3 +276,101 @@ class Transport(BaseTransport):
             self._raise_for_response(exc.response)
         except httpx.TransportError as exc:
             raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
+
+    def _open_stream(
+        self, path_or_url: str, chunk_size: int
+    ) -> tuple[httpx.Response, Iterator[bytes], list[bytes]]:
+        """Open a streaming GET and take its first chunk, as one retryable unit.
+
+        Returns the still-open response, its chunk iterator, and the first chunk
+        wrapped in a list -- empty for an empty body, which is how "the body is
+        over" is distinguished from "there is a chunk" without a sentinel.
+
+        Taking the first chunk *here* rather than in :meth:`stream_bytes` is the
+        whole point of this helper: everything inside it can be retried safely
+        because nothing it produces has reached the caller yet, so restarting
+        the request cannot deliver a byte twice. See :meth:`stream_bytes` for
+        the policy that rests on it.
+
+        Two details are forced by streaming. The response must be closed on
+        every failure path, because an unread streaming response holds its
+        connection open. And :meth:`BaseTransport._raise_for_response` reads
+        ``.content``, which on a streaming response raises until the body has
+        actually been read -- hence the read before each raise, which is what
+        makes the error mapping identical to :meth:`get_bytes`.
+        """
+        response = self._client.send(
+            self._client.build_request("GET", self.resolve_url(path_or_url)),
+            stream=True,
+            follow_redirects=True,
+        )
+        try:
+            if self.is_retryable_status(response.status_code):
+                response.read()
+                raise _RetryableResponse(response)
+            if not response.is_success:
+                response.read()
+                self._raise_for_response(response)
+            chunks = response.iter_bytes(chunk_size)
+            first: list[bytes] = []
+            for chunk in chunks:
+                first.append(chunk)
+                break
+        except BaseException:
+            response.close()
+            raise
+        return response, chunks, first
+
+    def stream_bytes(
+        self, path_or_url: str, *, chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE
+    ) -> Iterator[bytes]:
+        """GET raw bytes (an attachment) in chunks, never as one object.
+
+        The streaming twin of :meth:`get_bytes`, and deliberately identical to
+        it everywhere it can be: the same URL resolution through
+        :meth:`BaseTransport.resolve_url` (so a URL outside the configured
+        instance is refused here too), the same ``follow_redirects=True`` for
+        the signed-location hop, the same attempt count and backoff, and the
+        same error mapping -- a 403 on an attachment still raises
+        :class:`EasyvistaAuthError`, and a 590 is still not retried. What
+        differs is that the body is handed over in ``chunk_size`` pieces as it
+        arrives, so a large attachment never has to exist in memory whole.
+
+        **Retrying stops as soon as a byte reaches the caller.** A retryable
+        status or a transport error while opening the download is retried like
+        any other request, and the first chunk is fetched inside that retried
+        unit so that a failure fetching it is still safe to restart. From that
+        chunk onwards the request is committed: a transport failure raises
+        :class:`EasyvistaConnectionError` instead of starting over, because
+        starting over would re-deliver bytes the caller already has. Nothing
+        resumes a partly consumed stream -- a caller that must survive a
+        mid-stream failure has to decide for itself whether to discard what it
+        collected and ask again, and this method will not make that choice by
+        silently duplicating data.
+
+        No request is made until iteration begins. This is a generator, so a
+        refused URL raises on the first step rather than at the call.
+        """
+        retryer = Retrying(
+            stop=stop_after_attempt(self.config.max_retries + 1),
+            wait=wait_exponential(multiplier=0.5, max=10),
+            retry=retry_if_exception_type((_RetryableResponse, httpx.TransportError)),
+            reraise=True,
+        )
+        opened: tuple[httpx.Response, Iterator[bytes], list[bytes]]
+        try:
+            opened = retryer(self._open_stream, path_or_url, chunk_size)
+        except _RetryableResponse as exc:
+            self._raise_for_response(exc.response)
+        except httpx.TransportError as exc:
+            raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
+        response, chunks, first = opened
+        try:
+            for chunk in first:
+                yield chunk
+            for chunk in chunks:
+                yield chunk
+        except httpx.TransportError as exc:
+            raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
+        finally:
+            response.close()

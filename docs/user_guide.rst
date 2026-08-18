@@ -241,6 +241,43 @@ Attach a file to a ticket (uploaded as base64 inside the JSON body) and list a t
    another host is refused rather than followed. Multipart upload is still not
    implemented; uploads go as base64 inside the JSON body.
 
+Streaming a large attachment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:meth:`~easyvista_python_client.EasyvistaClient.stream_document` yields the same bytes in
+chunks instead of returning them in one object, so a large attachment never has to exist
+in memory whole. It accepts exactly what ``download_document`` accepts and resolves the
+URL the same way, including the same refusal of a URL outside the configured instance.
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   with Path("downloaded.pdf").open("wb") as sink:
+       for chunk in client.stream_document(attachments[0], chunk_size=1024 * 1024):
+           sink.write(chunk)
+
+The name is ``stream_`` rather than ``iter_`` because every ``iter_*`` method on the
+client iterates *records*; this one iterates the bytes of a single document.
+
+.. note::
+
+   **Only the download streams.** There is no streaming upload, and it is not an
+   oversight: EasyVista takes an attachment as base64 inside a JSON body, so
+   ``add_document`` has to materialise the whole payload before it can send anything.
+   The asymmetry belongs to the API, not to this client.
+
+.. warning::
+
+   **A mid-stream failure is not retried.** Opening the download is retried under the
+   usual policy, but from the first chunk onwards the request is committed: a transport
+   failure raises :class:`~easyvista_python_client.EasyvistaConnectionError` rather than
+   starting over, because starting over would hand you bytes you already have. Nothing
+   resumes a partly consumed stream, so if you must survive a mid-stream failure, decide
+   for yourself whether to discard what you collected and stream the document again.
+   ``download_document`` retries the whole fetch and is the simpler choice when the file
+   is small enough to buffer.
+
 Exporting a ticket to Markdown
 ------------------------------
 
