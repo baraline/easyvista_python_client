@@ -93,6 +93,20 @@ def test_a_missing_key_is_none():
     assert _Probe.model_validate({}).when is None
 
 
+def test_an_explicit_none_is_none_not_an_error():
+    """A JSON ``null`` is an ordinary absence on a ``datetime | None`` column.
+
+    Regression guard. When the validator was tightened so a malformed value
+    raises instead of becoming a bogus epoch instant, it began raising on
+    ``None`` too -- so a wire payload carrying ``"LAST_UPDATE": null``, or a
+    caller passing the field's own default explicitly, failed validation. The
+    tightening is about *junk*; an absence is not junk, and this column's own
+    type says ``None`` is legal.
+    """
+    assert _Probe.model_validate({"when": None}).when is None
+    assert _Probe(when=None).when is None
+
+
 def test_an_unparseable_timestamp_raises_rather_than_silently_becoming_none():
     """A malformed date is a real signal; swallowing it would hide a format change.
 

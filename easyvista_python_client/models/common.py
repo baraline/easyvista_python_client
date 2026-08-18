@@ -33,8 +33,9 @@ def _empty_str_to_none_datetime(value: Any) -> Any:
     """Coerce EasyVista's ``""`` sentinel for an absent date to ``None``.
 
     Distinct from :func:`_empty_str_to_none`: a *malformed* timestamp must still
-    raise, so this only maps the documented empty-string sentinel; every other
-    value -- including a ``datetime`` handed in directly, not just a string --
+    raise, so this maps only the two documented absences -- ``None`` (a JSON
+    ``null``, and the field's own default) and EasyVista's ``""`` sentinel. Every
+    other value -- including a ``datetime`` handed in directly, not just a string --
     routes through :func:`~easyvista_python_client.timestamps.parse_ev_datetime`,
     which normalizes a naive ``datetime`` to UTC and returns ``None`` for
     anything it cannot parse.
@@ -50,6 +51,8 @@ def _empty_str_to_none_datetime(value: Any) -> Any:
     guard exists to surface is the opposite of the intended behaviour, so junk
     raises here instead.
     """
+    if value is None:
+        return None
     if isinstance(value, str) and not value.strip():
         return None
     parsed = parse_ev_datetime(value)
