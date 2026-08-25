@@ -9,7 +9,59 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
-Nothing yet.
+### Removed
+
+- **BREAKING**: `RequestUpdate.status_id`. There is no flat status update on this
+  API and this field never worked. Sent alone the PUT is rejected 590/2013; sent
+  beside any other field the PUT returns **200, applies the other field, and
+  drops the status in silence** — measured on one ticket, title updated,
+  `STATUS_ID` unchanged. A write that reports success and stores nothing is worse
+  than one that fails, so the field is gone; `extra="forbid"` now makes
+  `RequestUpdate(status_id=...)` raise at construction. Use `set_status`.
+
+### Added
+
+- `EasyvistaClient.set_status` / `AsyncEasyvistaClient.set_status` set a ticket's
+  status, addressed by `STATUS_GUID`. This sends the documented
+  `{"closed": {"status_GUID": ...}}` body — the same request `close_ticket`
+  sends, under a name that matches what it does. Despite the wire name, the
+  envelope is **not** limited to closing: handed each of six different status
+  GUIDs in turn, a fresh ticket landed on exactly the status requested every
+  time, non-terminal ones included. Status GUIDs are per-instance configuration
+  and are not portable between deployments; read one off any ticket already in
+  that status (the nested `STATUS` object carries `STATUS_GUID`).
+
+### Fixed
+
+- `PostRequest`'s docstring claimed a ticket "needs at minimum `catalog_code`
+  plus `title`". That was wrong in a way that cost real debugging time. **Send
+  the whole documented create body** — `catalog_code`, `origin`, `title`,
+  `description`, `department_id`, `urgency_id`, `impact_id`. The full body is
+  accepted everywhere tried; the same body minus those ids is accepted on some
+  catalogs and rejected on others with the *identical* remaining bytes. The
+  rejection's message is a bare **SQL parser error** naming no field
+  (`=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...`), which reads
+  like a server-side defect and is not one — it is what an under-specified create
+  looks like here. Every id in that body was verified to persist by reading it
+  back under an explicit projection (these columns are absent from the default
+  projection, like `TITLE`, so an unprojected read shows `None` regardless).
+- Documented that **a rejected create may still have created the ticket**: 12
+  attempts returned 3 `RFC_NUMBER`s and afterwards all 12 tickets existed. A 590
+  therefore means *possibly created*, never *not created* — retrying duplicates,
+  and the caller never learns the id. The `external_reference` marker does
+  survive the failed insert and is searchable, which is the only way to reconcile
+  such an orphan.
+- `integration_tests/test_live_smoke.py` leaked one ticket per live run. Its
+  `test_missing_mandatory_field_raises_validation_error` asserted that a create
+  with a catalog but no title is rejected "(no ticket created), so this stays
+  read-only-safe by construction" — both halves false: `title` is not the
+  mandatory field (the full documented body with no title creates fine), and the
+  rejection does create a row. Replaced by
+  `test_an_underspecified_create_body_raises_validation_error`, which omits the
+  ids that really are required and reconciles the leftover ticket by its marker
+  in a `finally`. Two tests added beside it: one pinning that the documented body
+  lands every id, one pinning that `set_status` reaches a **non-terminal**
+  status.
 
 ## [0.2.0] - 2026-08-18
 

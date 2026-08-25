@@ -75,8 +75,8 @@ def test_post_request_custom_fields_get_e_prefix():
 
 
 def test_request_update_to_api_omits_none():
-    update = RequestUpdate(status_id=5)
-    assert update.to_api() == {"status_id": 5}
+    update = RequestUpdate(impact_id=5)
+    assert update.to_api() == {"impact_id": 5}
 
 
 def test_request_declares_title_and_core_scalars():
@@ -186,7 +186,7 @@ def test_request_update_serializes_title():
 
 
 def test_request_update_omits_unset_fields():
-    assert RequestUpdate(status_id=3).to_api() == {"status_id": 3}
+    assert RequestUpdate(impact_id=3).to_api() == {"impact_id": 3}
 
 
 def test_request_declares_the_official_time_fields():
@@ -308,3 +308,49 @@ def test_external_reference_longer_than_fifty_characters_is_refused_locally():
         RequestUpdate(external_reference="X" * 50).to_api()["external_reference"]
         == "X" * 50
     )
+
+
+def test_request_update_refuses_status_id():
+    """``RequestUpdate(status_id=...)`` must not be constructible.
+
+    A regression guard with teeth, because the field existed and its failure was
+    invisible: measured live, a flat status write is rejected 590 when sent alone
+    and -- far worse -- returns 200, applies its companion field and drops the
+    status silently when sent beside one. Anything that reinstates this field
+    reinstates a write that reports success and stores nothing. The status route
+    is ``set_status`` / the ``{"closed": {"status_GUID": ...}}`` envelope.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        RequestUpdate(status_id=2)
+    assert "status_id" in str(excinfo.value)
+
+
+def test_post_request_carries_the_whole_documented_create_body():
+    """Every field of the documented create body survives ``to_api``.
+
+    The documented body (``docs/API_Info.md``) is catalog_code + origin + title +
+    description + department_id + urgency_id + impact_id, and sending a SUBSET is
+    what produces the 590 whose message is a bare SQL parser error. So the shape
+    is pinned here: a field silently dropped from this model would reintroduce
+    exactly that failure, on some catalogs only.
+    """
+    body = PostRequest(
+        catalog_code="SYNTH_INC_001",
+        origin=7,
+        title="t",
+        description="d",
+        department_id=9,
+        urgency_id=7,
+        impact_id=21,
+        external_reference="X",
+    ).to_api()
+    assert body == {
+        "catalog_code": "SYNTH_INC_001",
+        "origin": 7,
+        "title": "t",
+        "description": "d",
+        "department_id": 9,
+        "urgency_id": 7,
+        "impact_id": 21,
+        "external_reference": "X",
+    }

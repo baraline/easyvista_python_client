@@ -232,7 +232,38 @@ class EasyvistaClient:
         )
 
     def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
+        """Update a ticket's writable fields.
+
+        Cannot set a status: there is no flat status update on this API. See
+        :meth:`set_status`, and :class:`RequestUpdate` for the measurements.
+        """
         spec, parse = requests_res.build_update_ticket(rfc_number, update)
+        return parse(self._transport.send(spec))
+
+    def set_status(
+        self, rfc_number: str, *, status_guid: str, comment: str | None = None
+    ) -> Request:
+        """Set a ticket's status, addressed by ``STATUS_GUID``.
+
+        This is the API's only working status write, and it reaches **every**
+        status rather than only terminal ones: given six different status GUIDs
+        in turn, a fresh ticket landed on exactly the status requested every
+        time, non-terminal ones included.
+
+        It sends the documented ``{"closed": {"status_GUID": ...}}`` body -- the
+        same request :meth:`close_ticket` sends, under a name that matches what
+        it does, because "close" is what the wire calls it and not what it is
+        limited to.
+
+        Note the addressing. A ``STATUS_GUID`` is not a ``STATUS_ID``; the two
+        are different columns, and only the GUID works here. Read a status's GUID
+        off any ticket in that status (the nested ``STATUS`` object carries
+        ``STATUS_GUID``) -- they are stable per instance but are **not**
+        portable between instances.
+        """
+        spec, parse = requests_res.build_set_status(
+            rfc_number, status_guid=status_guid, comment=comment
+        )
         return parse(self._transport.send(spec))
 
     def close_ticket(

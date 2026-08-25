@@ -111,7 +111,7 @@ async def test_update_and_close_ticket(config):
         return_value=httpx.Response(200, json={"records": [{"RFC_NUMBER": "I1"}]})
     )
     async with AsyncEasyvistaClient(config) as client:
-        await client.update_ticket("I1", RequestUpdate(status_id=4))
+        await client.update_ticket("I1", RequestUpdate(impact_id=4))
         await client.close_ticket("I1", comment="resolved")
 
 

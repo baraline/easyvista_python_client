@@ -71,6 +71,7 @@ NO_TRANSPORT = {
 ARGS: dict[str, tuple[tuple, dict]] = {
     "add_document": (("I1",), {"filename": "d.txt", "content": b"x"}),
     "close_ticket": (("I1",), {}),
+    "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
     "count_tickets": ((), {}),
     "create_action": (("I1", PostAction()), {}),
     "create_asset": ((PostAsset(catalog_id=1),), {}),

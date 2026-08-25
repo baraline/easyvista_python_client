@@ -79,10 +79,10 @@ def test_build_search_tickets_includes_offset():
 
 
 def test_build_update_ticket():
-    spec, _parser = r.build_update_ticket("I1", RequestUpdate(status_id=3))
+    spec, _parser = r.build_update_ticket("I1", RequestUpdate(impact_id=3))
     assert spec.method == "PUT"
     assert spec.path == "requests/I1"
-    assert spec.json == {"status_id": 3}
+    assert spec.json == {"impact_id": 3}
 
 
 def test_build_close_ticket_default_and_comment():
@@ -108,3 +108,24 @@ def test_build_close_ticket_full_documented_shape():
             "comment": "resolved",
         }
     }
+
+
+def test_build_set_status_sends_the_closed_envelope():
+    """``set_status`` is the ``closed`` envelope, addressed by GUID.
+
+    Pins both halves of the call shape that took several wrong turns to find: the
+    body is wrapped in ``closed`` (not flat), and the key is ``status_GUID`` (not
+    ``STATUS_ID``). The envelope is not limited to closing -- six different status
+    GUIDs each landed on exactly the status requested.
+    """
+    spec, _parser = r.build_set_status("I1", status_guid="{G}", comment="c")
+    assert spec.method == "PUT"
+    assert spec.path == "requests/I1"
+    assert spec.json == {"closed": {"status_GUID": "{G}", "comment": "c"}}
+
+
+def test_build_set_status_matches_build_close_ticket():
+    """The two builders are the same request; only the name differs."""
+    a, _ = r.build_set_status("I1", status_guid="{G}")
+    b, _ = r.build_close_ticket("I1", status_guid="{G}")
+    assert (a.method, a.path, a.json) == (b.method, b.path, b.json)

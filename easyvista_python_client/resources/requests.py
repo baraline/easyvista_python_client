@@ -68,12 +68,22 @@ def build_close_ticket(
     delete_actions: int | None = None,
     comment: str | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Request]]:
-    """Build a close (PUT) spec.
+    """Build the ``{"closed": {...}}`` PUT spec — the API's status-set route.
 
-    ``status_guid`` is the instance's "closed" status GUID (EasyVista
-    ``status_GUID``); without it the API may not actually transition the ticket.
-    ``delete_actions=1`` drops the ticket's actions on close. Shapes follow the
-    documented close body (``docs/API_Info.md``), verified live.
+    Despite the wire name, this envelope is **not limited to closing**. It is the
+    only working way to set a ticket's status, and it reaches every status:
+    handed each of six different ``STATUS_GUID``s in turn, a fresh ticket landed
+    on exactly the status requested every time -- including non-terminal ones
+    like "A prendre en compte" and "En cours". Nothing was forced to the closed
+    status.
+
+    Note the addressing: ``status_GUID``, not ``STATUS_ID``. There is no flat
+    status update on this API -- see :class:`RequestUpdate` for what happens if
+    you try one. :func:`build_set_status` is the same spec under a name that says
+    what it does.
+
+    ``delete_actions=1`` drops the ticket's actions. Shapes follow the documented
+    close body (``docs/API_Info.md``), verified live.
     """
     closed: dict[str, Any] = {}
     if status_guid is not None:
@@ -89,3 +99,19 @@ def build_close_ticket(
         return Request.model_validate(records[0] if records else data)
 
     return spec, parse
+
+
+def build_set_status(
+    rfc_number: str,
+    *,
+    status_guid: str,
+    comment: str | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Request]]:
+    """Build a spec that sets ``rfc_number``'s status to ``status_guid``.
+
+    The same request :func:`build_close_ticket` builds, named for what it
+    actually does. ``status_guid`` is required here rather than optional: the
+    envelope without one is a close request with nothing to close to, and making
+    that unexpressible is the point of having this function at all.
+    """
+    return build_close_ticket(rfc_number, status_guid=status_guid, comment=comment)

@@ -119,13 +119,38 @@ class Request(EasyvistaModel):
 class PostRequest(EasyvistaWriteModel):
     """Payload for creating a ticket.
 
-    Field set matches the documented create body (``docs/API_Info.md``),
-    verified against a live instance: a ticket needs at minimum ``catalog_code``
-    plus ``title`` (and typically ``origin`` / ``department_id``). The exact
-    mandatory fields are configured **per catalog on the EasyVista side**, so the
-    client cannot know them statically; a missing one is rejected server-side and
-    surfaces as :class:`EasyvistaValidationError` (HTTP 590, code 2013), not a
-    retried server error. ``custom_fields`` values are serialized with an ``e_``
+    Field set matches the documented create body (``docs/API_Info.md``). **Send
+    the whole documented set** -- ``catalog_code``, ``origin``, ``title``,
+    ``description``, ``department_id``, ``urgency_id``, ``impact_id`` -- rather
+    than a subset. An earlier version of this docstring claimed a ticket needs
+    "at minimum ``catalog_code`` plus ``title``"; that is wrong, and the way it
+    is wrong is expensive:
+
+    * the full documented body creates successfully on every catalog tried;
+    * the same body minus the four ids creates on some catalogs and is rejected
+      on others -- measured on two catalogs of one instance with the *identical*
+      remaining bytes, accepted by one and rejected by the other;
+    * the rejection is HTTP 590 / code 2013 whose message is a **SQL parser
+      error** (``=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...``)
+      naming no field at all. It is easy to misread as a server-side defect. It
+      is not: it is what an under-specified create body looks like here.
+
+    Which fields a given catalog can do without is configured per catalog on the
+    EasyVista side, so the client cannot know it statically -- which is exactly
+    why sending the documented set is the only reliable shape.
+
+    Ids may be sent as JSON numbers or as strings; both are accepted (measured
+    side by side). The documented examples quote them; these fields are typed
+    ``int`` here and serialize as numbers, which the API takes.
+
+    **A rejected create may still have created the ticket.** Measured: 12
+    attempts returned 3 ``RFC_NUMBER``s and afterwards all 12 tickets existed --
+    9 of 9 failures had written a row, with the ids they were missing left null.
+    So a 590 here means *possibly created*, never *not created*: retrying
+    duplicates, and the caller never learns the id. Reconcile by
+    ``external_reference`` rather than trusting the error.
+
+    ``custom_fields`` values are serialized with an ``e_``
     prefix unless they already start with ``e_`` (see :class:`EasyvistaWriteModel`).
 
     ``catalog_code`` is the only verified way to name a catalog here. An earlier
@@ -182,10 +207,26 @@ class RequestUpdate(EasyvistaWriteModel):
 
     **Deliberately absent** (verified 2026-08-17):
 
+    * ``status_id`` — there is **no flat status update on this API**. It was a
+      field here until 2026-08-25 and it never worked: sent alone the PUT is
+      rejected 590/2013, and sent beside any other field the PUT returns **200,
+      applies the other field, and drops the status in silence** (measured:
+      title updated, ``STATUS_ID`` unchanged). A write that reports success and
+      stores nothing is worse than one that fails, so the field is gone and
+      ``extra="forbid"`` now makes ``RequestUpdate(status_id=...)`` raise at
+      construction instead.
+
+      Set a status with :meth:`~easyvista_python_client.EasyvistaClient.set_status`,
+      which sends the documented ``{"closed": {"status_GUID": ...}}`` body. That
+      route reaches **every** status, not just terminal ones -- all six statuses
+      tried landed on exactly the one requested. It is addressed by
+      ``STATUS_GUID``, not by ``STATUS_ID``.
     * ``severity_id`` — ``SEVERITY_ID`` is rejected with HTTP 590 (code 2013).
     * ``urgency_id`` — ``URGENCY_ID`` raised HTTP 590 *and the value still
       changed*, so the API's behaviour is not one this model can express
-      honestly. Set it with a raw request and re-read if you must.
+      honestly. Set it with a raw request and re-read if you must. Note this is
+      an **update**-path finding only: on the CREATE path ``urgency_id`` is part
+      of the documented body and lands cleanly (see :class:`PostRequest`).
     * a priority field — EasyVista derives priority from urgency x impact rather
       than exposing a writable column.
 
@@ -194,7 +235,6 @@ class RequestUpdate(EasyvistaWriteModel):
     trip is saved; over-length is rejected rather than truncated either way.
     """
 
-    status_id: int | None = None
     title: str | None = None
     description: str | None = None
     impact_id: int | None = None
