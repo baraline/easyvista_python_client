@@ -130,3 +130,39 @@ def test_update_action_uses_the_top_level_path():
 def test_update_action_drops_unset_fields():
     spec, _parse = build_update_action(1, ActionUpdate(description="only this"))
     assert "comment" not in spec.json
+
+
+def test_build_search_actions_exposes_the_envelope_a_pager_needs():
+    """The parser yields the whole ``SearchResult``, so ``@next`` is readable."""
+    spec, parse = a.build_search_actions("I240101_0001")
+    assert spec.path == "actions"
+    result = parse(
+        {
+            "records": [{"ACTION_ID": 1}, {"ACTION_ID": 2}],
+            "record_count": "2",
+            "total_record_count": "3",
+            "@next": "https://ev.test/api/v1/acme/actions?offset=2",
+        }
+    )
+    assert [x.action_id for x in result.records] == [1, 2]
+    assert result.total_record_count == 3
+    assert result.next_url == "https://ev.test/api/v1/acme/actions?offset=2"
+
+
+def test_build_search_actions_sends_the_offset():
+    spec, _parse = a.build_search_actions("I240101_0001", max_rows=25, offset=50)
+    assert spec.params["offset"] == 50
+    assert spec.params["max_rows"] == 25
+
+
+def test_build_search_actions_keeps_the_rfc_filter_on_every_page():
+    """A page-2 request that lost the filter would sweep the whole table."""
+    spec, _parse = a.build_search_actions("I240101_0001", offset=25)
+    assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'
+
+
+@pytest.mark.parametrize("rfc", ["", "   ", 'x",REQUEST.RFC_NUMBER:"y'])
+def test_build_search_actions_refuses_an_unsafe_or_blank_rfc(rfc):
+    """The guard is shared with ``build_list_actions``."""
+    with pytest.raises(ValueError):
+        a.build_search_actions(rfc)

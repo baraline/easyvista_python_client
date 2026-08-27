@@ -291,6 +291,14 @@ class AsyncEasyvistaClient:
         ``ACTION_ID`` (verified live). To address the action you just created,
         diff :meth:`list_actions` across the call — see
         ``integration_tests/test_live_ticket_history.py`` for the pattern.
+
+        An action carries no visibility flag, so an internal note is simply a
+        different ``action_type_id`` — see
+        :class:`~easyvista_python_client.PostAction`.
+
+        Creation is gated by the workflow's current stage: an otherwise valid
+        payload can be refused 590/2013 on a ticket that accepted the same body
+        earlier.
         """
         spec, parse = actions_res.build_create_action(rfc_number, action)
         return parse(await self._transport.send(spec))
@@ -318,8 +326,9 @@ class AsyncEasyvistaClient:
         **truncated with no error**, and this method discards the envelope's
         total, so a caller cannot detect the truncation from the result. This is
         not hypothetical: a freshly created ticket already carries about twelve
-        actions, most of them workflow-generated. Raise
-        ``EasyvistaConfig.default_max_rows`` if a ticket's whole log matters.
+        actions, most of them workflow-generated. Use
+        :meth:`iter_actions` to page the whole log, or raise
+        ``EasyvistaConfig.default_max_rows`` to widen this single page.
 
         The note text is never projectable — ``DESCRIPTION`` and ``COMMENT``
         are Memo sub-resources and come back as HREF objects under every
@@ -333,6 +342,50 @@ class AsyncEasyvistaClient:
             rfc_number, fields=fields, max_rows=self.config.default_max_rows
         )
         return parse(await self._transport.send(spec))
+
+    async def iter_actions(
+        self,
+        rfc_number: str,
+        *,
+        fields: Iterable[str] | str | None = None,
+        page_size: int | None = None,
+        max_records: int | None = None,
+    ) -> AsyncIterator[Action]:
+        """Yield a ticket's actions across pages, following offset pagination.
+
+        Pages of ``page_size`` (default ``config.default_max_rows``) until the
+        server reports no further page (``@next``) or ``max_records`` is
+        reached. ``fields`` and the ticket filter apply to every page. See
+        :meth:`list_actions` for what a projection can and cannot reach.
+
+        A blank or unsafe ``rfc_number`` raises ``ValueError`` on the first
+        iteration rather than at the call, since this is a generator.
+
+        .. warning::
+
+           The ``offset``/``@next`` contract is unverified on the ``actions``
+           endpoint. If an instance ignores ``offset``, page two repeats page
+           one and the sweep never ends; bound it with ``max_records``.
+        """
+        if page_size is None:
+            page_size = self.config.default_max_rows
+        offset = 0
+        yielded = 0
+        while max_records is None or yielded < max_records:
+            spec, parse = actions_res.build_search_actions(
+                rfc_number, fields=fields, max_rows=page_size, offset=offset
+            )
+            result = parse(await self._transport.send(spec))
+            if not result.records:
+                return
+            for record in result.records:
+                yield record
+                yielded += 1
+                if max_records is not None and yielded >= max_records:
+                    return
+            if result.next_url is None:
+                return
+            offset += len(result.records)
 
     async def get_action(self, action_id: str | int) -> Action:
         """Fetch one action, including the Memo links ``list_actions`` omits.

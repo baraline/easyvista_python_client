@@ -90,6 +90,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "get_employee": ((1,), {}),
     "get_ticket": (("I1",), {}),
     "get_ticket_context": (("I1",), {}),
+    "iter_actions": (("I1",), {"max_records": 1}),
     "iter_assets": ((), {"max_records": 1}),
     "iter_departments": ((), {"max_records": 1}),
     "iter_employees": ((), {"max_records": 1}),

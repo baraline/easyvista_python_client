@@ -23,7 +23,8 @@ with `async for`; `await client.stream_document(...)` raises `TypeError`.
 1. Pick the client class: `EasyvistaClient` for synchronous code,
    `AsyncEasyvistaClient` inside an event loop.
 2. Build an `EasyvistaConfig`: `server` (the instance root, no `/api`
-   segment) and `account` are always required.
+   segment) and `account` are always required. `account` is the **instance
+   identifier**, not a login — see the gotcha below before guessing it.
 3. Supply exactly one credential: `token=` for Bearer, or `login=` and
    `password=` for HTTP Basic. Neither present raises `ValueError` at
    construction.
@@ -45,7 +46,7 @@ Every `EasyvistaConfig` field, and its default:
 | Field | Default | Notes |
 | --- | --- | --- |
 | `server` | required | Instance root, no `/api` segment |
-| `account` | required | |
+| `account` | required | Instance id forming the last path segment of `api_root`, e.g. `"12345"`. **Not a login** — see Gotchas |
 | `token` | `None` | Bearer credential |
 | `login` | `None` | HTTP Basic credential, paired with `password` |
 | `password` | `None` | HTTP Basic credential, paired with `login` |
@@ -178,6 +179,14 @@ derive from `EasyvistaError`.
 - `server` is the instance root. Do **not** append `/api/v1/<account>`; the
   client composes `config.api_root` from `server`, `api_version` and
   `account`.
+- `account` is **not a user account**, despite sitting beside `login` and
+  `password` in the same config. It is the EasyVista *instance* identifier — a
+  number such as `"12345"` — that forms the last path segment of
+  `https://host/api/{version}/{account}`. Nothing authenticates with it; that is
+  `token`, or `login` + `password`, and those are unrelated values. If the
+  instance URL you were handed already reads
+  `https://my.easyvista.com/api/v1/12345`, then `server` is
+  `https://my.easyvista.com` and `account` is `12345`.
 - `EasyvistaConfig` is frozen. To change a setting, build a new config.
 - Constructing a config with neither `token` nor a complete `login`/`password`
   pair raises `ValueError` immediately — a credential problem surfaces before

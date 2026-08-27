@@ -11,6 +11,17 @@ class EasyvistaConfig:
     """Immutable connection settings.
 
     Provide either ``token`` (Bearer) or ``login`` + ``password`` (Basic).
+
+    ``account`` is **not a user account**, despite sitting next to ``login`` and
+    ``password``. It is the EasyVista *instance* identifier -- a number such as
+    ``"50004"`` -- that forms the final path segment of :attr:`api_root`,
+    ``https://host/api/{version}/{account}``. Every request is routed through it,
+    but nothing authenticates with it: authentication is ``token``, or ``login``
+    plus ``password``. The two are unrelated values and normally differ.
+
+    ``server`` is the bare instance host, e.g. ``"https://my.easyvista.com"``. A
+    trailing slash is stripped; do not append the ``/api/...`` path, which
+    :attr:`api_root` builds from ``api_version`` and ``account``.
     """
 
     server: str
@@ -48,6 +59,9 @@ class EasyvistaConfig:
         Reads ``EASYVISTA_URL`` (or ``EASYVISTA_SERVER``), ``EASYVISTA_ACCOUNT``,
         then ``EASYVISTA_TOKEN`` or ``EASYVISTA_TOKEN_FILE``, else
         ``EASYVISTA_LOGIN`` / ``EASYVISTA_PASSWORD``.
+
+        ``EASYVISTA_ACCOUNT`` is the instance identifier path segment, not a
+        username -- see the class docstring. ``EASYVISTA_LOGIN`` is the username.
         """
         server = os.environ.get("EASYVISTA_URL") or os.environ.get("EASYVISTA_SERVER")
         account = os.environ.get("EASYVISTA_ACCOUNT")

@@ -70,6 +70,31 @@ def test_absent_timestamps_are_none_not_an_error():
     assert action.updated_at is None
 
 
+def test_action_label_is_declared_not_left_in_model_extra():
+    """It rides the default list projection, and ``context.py`` reads it."""
+    action = Action.model_validate(
+        {"ACTION_ID": "1", "ACTION_LABEL_FR": "Analyse de Resolution"}
+    )
+    assert action.action_label_fr == "Analyse de Resolution"
+
+
+def test_a_bracketed_action_label_is_an_untranslated_placeholder_not_a_marker():
+    """Brackets mean "no translation", not "restricted".
+
+    A single-language instance echoes the default-language text wrapped in
+    ``[...]`` on every other language column; ``localized_label`` discards them.
+    """
+    from easyvista_python_client.references import localized_label
+
+    item = {
+        "ACTION_ID": "1",
+        "ACTION_LABEL_FR": "Analyse de Resolution",
+        "ACTION_LABEL_EN": "[Analyse de Resolution]",
+    }
+    assert Action.model_validate(item).action_label_fr == "Analyse de Resolution"
+    assert localized_label(item, "ACTION_LABEL") == "Analyse de Resolution"
+
+
 def test_done_by_reference_resolves_through_the_shared_resolver():
     action = Action.model_validate(_ITEM_PAYLOAD)
     assert action.reference("DONE_BY").id == "6117"

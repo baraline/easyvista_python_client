@@ -56,6 +56,12 @@ class Action(EasyvistaModel):
     # The live API returns ACTION_TYPE as a nested object (id/name/...), not a
     # bare string, so accept either (same polymorphism as Request.description).
     action_type: str | dict[str, Any] | None = Field(default=None, alias="ACTION_TYPE")
+    # The action's human label, present on the default list row. On a
+    # single-language instance the other language columns (``_EN``, ``_GE``,
+    # ``_IT``, ``_PO``, ``_SP``, ``_L1``..``_L6``) echo this text wrapped in
+    # brackets to mark it untranslated; ``localized_label`` skips those. The
+    # brackets carry no other meaning.
+    action_label_fr: str | None = Field(default=None, alias="ACTION_LABEL_FR")
     # --- item-level fields (EV-R1, verified live 2026-08-17) ------------------
     # All ten are present on ``GET actions/{id}``. On the LIST endpoint:
     # CREATION_DATE_UT, LAST_UPDATE, GROUP_ID, STAGE_ID, WORKFLOW_ID and
@@ -117,6 +123,12 @@ class PostAction(EasyvistaWriteModel):
     identify the action type via ``action_type_id`` (or ``action_type_name``) and
     the assigned group via ``group_id`` (or ``group_name``); ``description`` holds
     the note text. Inherits ``custom_fields``/``to_api()`` from EasyvistaWriteModel.
+
+    An action carries no visibility flag, so a "private" note is simply a
+    different ``action_type_id``. Which type ids a deployment treats as internal
+    is not discoverable -- ``GET action-types`` is 403 on a standard profile --
+    so ask the instance's administrator. Brackets in ``ACTION_LABEL_*`` mark an
+    untranslated label, not a restricted one.
     """
 
     action_type_id: int | None = None

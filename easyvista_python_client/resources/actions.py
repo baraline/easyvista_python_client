@@ -14,7 +14,7 @@ from typing import Any
 from .._transport import RequestSpec
 from ..filters import ev_equals_filter
 from ..models.action import Action, ActionUpdate, PostAction
-from ..pagination import extract_records
+from ..pagination import SearchResult, extract_records
 from .descriptor import ResourceDescriptor, build_get, build_search, build_update
 
 ACTIONS: ResourceDescriptor[Action] = ResourceDescriptor(
@@ -36,40 +36,52 @@ def build_create_action(
     return spec, parse
 
 
+def build_search_actions(
+    rfc_number: str,
+    *,
+    fields: Iterable[str] | str | None = None,
+    max_rows: int | None = None,
+    offset: int | None = None,
+) -> tuple[RequestSpec, Callable[[Any], SearchResult[Action]]]:
+    """One page of a ticket's actions, envelope included.
+
+    Filters the TOP-LEVEL ``/actions`` resource by request number; the nested
+    ``requests/{rfc}/actions`` path is rejected as "Unauthorized Method". The
+    filter is re-applied on every page. A blank or unsafe ``rfc_number`` raises:
+    ``,`` is a live combinator, so a raw value could list another ticket's
+    actions.
+
+    ``fields`` grants any scalar requested, but never the memo bodies
+    (``DESCRIPTION`` and ``COMMENT`` stay HREF objects), and ``fields="*"``
+    reduces to ``ACTION_ID`` alone.
+
+    The envelope carries ``@next``, which is what makes ``offset`` paging
+    possible. That contract is unverified on this endpoint -- see
+    ``EasyvistaClient.iter_actions``.
+    """
+    search = ev_equals_filter("REQUEST.RFC_NUMBER", rfc_number)
+    if search is None:
+        raise ValueError("rfc_number is required to list a ticket's actions")
+    return build_search(
+        ACTIONS, search=search, fields=fields, max_rows=max_rows, offset=offset
+    )
+
+
 def build_list_actions(
     rfc_number: str,
     *,
     fields: Iterable[str] | str | None = None,
     max_rows: int | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], list[Action]]]:
-    # Actions are listed via the TOP-LEVEL /actions resource filtered by the
-    # request number, not a nested requests/{rfc}/actions path (which the API
-    # rejects as "Unauthorized Method"). Verified against a live instance.
-    # An unsafe rfc_number raises rather than degrading: ',' is a live combinator,
-    # so a raw value could append conditions and list another ticket's actions. A
-    # blank one must raise too — ev_equals_filter returns None for blank input, and
-    # search=None would list every action just as surely.
-    #
-    # ``fields`` is honoured by this endpoint and grants every scalar requested
-    # (verified live 2026-08-17), which is what lets a caller read a PAGE of
-    # actions' timestamps and authors in ONE request instead of an item fetch
-    # per action.
-    # Three limits, all silent: the memo bodies (``DESCRIPTION``, ``COMMENT``)
-    # come back as HREF objects under any projection — the text is never inlined
-    # —, ``fields=*`` is NOT a wildcard (it silently reduces to ``ACTION_ID``),
-    # and this call returns ONE PAGE. It does not paginate: a ticket with more
-    # actions than ``max_rows`` is truncated with no error, and the envelope's
-    # ``total_record_count`` is discarded by the parser below, so the caller
-    # cannot even detect it. ``max_rows`` is nonetheless passed explicitly so
-    # the cap is the client's configured page size rather than an unstated
-    # server default (25 on the verified instance) — a caller who is told the
-    # cap can raise it. Real pagination is a follow-up: it needs live
-    # verification that this endpoint's ``@next`` behaves like the others'.
-    search = ev_equals_filter("REQUEST.RFC_NUMBER", rfc_number)
-    if search is None:
-        raise ValueError("rfc_number is required to list a ticket's actions")
-    spec, parse_search = build_search(
-        ACTIONS, search=search, fields=fields, max_rows=max_rows
+    """One page of a ticket's actions, as a bare list.
+
+    :func:`build_search_actions` with the envelope dropped. Returns a single
+    page: a ticket with more actions than ``max_rows`` is truncated silently,
+    and the dropped envelope leaves the caller no way to detect it.
+    ``EasyvistaClient.iter_actions`` pages instead.
+    """
+    spec, parse_search = build_search_actions(
+        rfc_number, fields=fields, max_rows=max_rows
     )
 
     def parse(data: Any) -> list[Action]:

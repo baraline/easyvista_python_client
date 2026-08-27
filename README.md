@@ -36,6 +36,7 @@ from easyvista_python_client import (
     ev_equals_filter,
 )
 
+# `account` is the instance id in the API root (https://host/api/v1/12345), not a username.
 config = EasyvistaConfig(server="https://my.easyvista.com", account="12345", token="...")
 with EasyvistaClient(config) as client:
     # catalog_code, the *_id values and the close status_guid are instance-specific.

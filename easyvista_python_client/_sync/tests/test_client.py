@@ -622,6 +622,100 @@ def test_iter_departments_paginates(config):
     assert ids == [1, 2]
 
 
+def _paged_actions_responder(request):
+    offset = int(request.url.params.get("offset", "0"))
+    if offset == 0:
+        return httpx.Response(
+            200,
+            json={
+                "records": [{"ACTION_ID": 1}, {"ACTION_ID": 2}],
+                "record_count": 2,
+                "total_record_count": 3,
+                "@next": f"{ROOT}/actions?offset=2&max_rows=2",
+            },
+        )
+    return httpx.Response(
+        200,
+        json={
+            "records": [{"ACTION_ID": 3}],
+            "record_count": 1,
+            "total_record_count": 3,
+        },
+    )
+
+
+@respx.mock
+def test_iter_actions_crosses_the_page_list_actions_stops_at(config):
+    """``list_actions`` truncates a busy ticket's log silently; this does not."""
+    respx.get(f"{ROOT}/actions").mock(side_effect=_paged_actions_responder)
+    with EasyvistaClient(config) as client:
+        ids = [a.action_id for a in client.iter_actions("I1", page_size=2)]
+    assert ids == [1, 2, 3]
+
+
+@respx.mock
+def test_iter_actions_keeps_the_ticket_filter_on_every_page(config):
+    """A page-2 request that lost the filter would sweep every ticket's log."""
+    route = respx.get(f"{ROOT}/actions").mock(side_effect=_paged_actions_responder)
+    with EasyvistaClient(config) as client:
+        [a for a in client.iter_actions("I1", page_size=2)]
+    assert len(route.calls) == 2
+    for call in route.calls:
+        assert call.request.url.params["search"] == 'REQUEST.RFC_NUMBER:"I1"'
+
+
+@respx.mock
+def test_iter_actions_respects_max_records(config):
+    route = respx.get(f"{ROOT}/actions").mock(side_effect=_paged_actions_responder)
+    with EasyvistaClient(config) as client:
+        ids = [
+            a.action_id
+            for a in client.iter_actions("I1", page_size=2, max_records=1)
+        ]
+    assert ids == [1]
+    # Stops inside the first page once the cap is hit (no second request).
+    assert len(route.calls) == 1
+
+
+@respx.mock
+def test_iter_actions_stops_when_the_server_reports_no_next_page(config):
+    """No ``@next`` ends the sweep even on a page that filled ``page_size``."""
+    route = respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [{"ACTION_ID": 1}, {"ACTION_ID": 2}],
+                "record_count": 2,
+                "total_record_count": 2,
+            },
+        )
+    )
+    with EasyvistaClient(config) as client:
+        ids = [a.action_id for a in client.iter_actions("I1", page_size=2)]
+    assert ids == [1, 2]
+    assert len(route.calls) == 1
+
+
+@respx.mock
+def test_iter_actions_forwards_a_fields_projection(config):
+    route = respx.get(f"{ROOT}/actions").mock(side_effect=_paged_actions_responder)
+    with EasyvistaClient(config) as client:
+        [
+            a
+            for a in client.iter_actions(
+                "I1", fields=["ACTION_ID", "ACTION_LABEL_FR"], page_size=2
+            )
+        ]
+    assert route.calls[0].request.url.params["fields"] == "ACTION_ID,ACTION_LABEL_FR"
+
+
+def test_iter_actions_refuses_a_blank_rfc(config):
+    """An unfiltered sweep of every ticket's actions is never the intent."""
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError):
+            [a for a in client.iter_actions("")]
+
+
 # --- statistics --------------------------------------------------------------
 
 

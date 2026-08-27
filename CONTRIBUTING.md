@@ -68,9 +68,29 @@ python -m sphinx -W --keep-going -b html docs docs/_build/html
 inside the package, because it calls a **real EasyVista instance that you
 supply**. It never runs in CI — CI runs `pytest -m "not integration"`.
 
-Credentials come from `EASYVISTA_TEST_*` environment variables, falling back to
-files under `secrets/` (both gitignored). With none configured the suite skips
-cleanly, so `pytest` on a fresh checkout is offline and green.
+Credentials resolve from an environment variable first, then a lowercase file
+under `secrets/` (both gitignored):
+
+| Environment variable      | Fallback file                    | What it is |
+| ------------------------- | -------------------------------- | ---------- |
+| `EASYVISTA_TEST_URL`      | `secrets/easyvista_test_url`     | The instance URL. Normally the full API root, `https://host/api/v1/{account}`. |
+| `EASYVISTA_TEST_TOKEN`    | `secrets/easyvista_test_token`   | The Bearer token. **The only credential that authenticates anything.** |
+| `EASYVISTA_TEST_ACCOUNT`  | `secrets/easyvista_test_account` | The account id — see below. **Not a login.** |
+
+`EASYVISTA_TEST_ACCOUNT` is the EasyVista *instance identifier* that forms the
+`{account}` path segment of `https://host/api/{version}/{account}` — a number
+such as `50004` — and it feeds `EasyvistaConfig.account`. Nothing authenticates
+with it. It is read **only** when the URL is a bare host: a full API root already
+carries the account, in which case the value is never consulted at all.
+
+> This variable was spelled `EASYVISTA_TEST_USER` (and `secrets/easyvista_test_user`)
+> before 2026-08-25, which read as a username and never was one. The old name is
+> now **refused with an error naming its replacement** rather than silently
+> accepted, so a leftover copy cannot quietly reintroduce the confusion. If you
+> have one, rename it.
+
+With none configured the suite skips cleanly, so `pytest` on a fresh checkout is
+offline and green.
 
 > **These tests are not read-only.** They create tickets and close them in
 > teardown. Once your credentials are present they run as part of a plain

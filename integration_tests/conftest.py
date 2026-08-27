@@ -21,22 +21,42 @@ in teardown. Point them at a preprod/test instance, never production.
 Credentials resolve from an uppercase env var first, then a lowercase file under
 ``secrets/``:
 
-    url    <- EASYVISTA_TEST_URL    | secrets/easyvista_test_url
-    user   <- EASYVISTA_TEST_USER (or _ACCOUNT) | secrets/easyvista_test_user
-    token  <- EASYVISTA_TEST_TOKEN  | secrets/easyvista_test_token
+    url     <- EASYVISTA_TEST_URL     | secrets/easyvista_test_url
+    account <- EASYVISTA_TEST_ACCOUNT | secrets/easyvista_test_account
+    token   <- EASYVISTA_TEST_TOKEN   | secrets/easyvista_test_token
 
-Two further per-instance ids resolve the same way (env var, else the matching
-lowercase ``secrets/`` file), gating only the tests that need them
-(``live_action_config``, see below):
+``account`` is **not a login**. It is the EasyVista instance identifier that
+forms the ``{account}`` path segment of ``https://host/api/{version}/{account}``
+-- a number such as ``50004`` -- and it feeds ``EasyvistaConfig.account``.
+Nothing authenticates with it. Until 2026-08-25 it was spelled
+``EASYVISTA_TEST_USER`` / ``secrets/easyvista_test_user``, which read as a
+username and never was one; that name is now **refused** rather than quietly
+accepted, so a stale copy cannot resurrect the confusion (see
+``_reject_legacy_account_name``).
 
+Eight further per-instance values resolve the same way (env var, else the
+matching lowercase ``secrets/`` file), each gating only the tests that need it.
+The first six make up ``live_write_config``, which every ticket-creating test
+depends on (``sample_catalog_code`` also takes ``catalog_code`` on its own); the
+last two gate ``live_action_config`` alone, so an instance with no action type
+configured still runs the write tests:
+
+    catalog_code   <- EASYVISTA_TEST_CATALOG_CODE
+    origin         <- EASYVISTA_TEST_ORIGIN
+    department_id  <- EASYVISTA_TEST_DEPARTMENT_ID
+    urgency_id     <- EASYVISTA_TEST_URGENCY_ID
+    impact_id      <- EASYVISTA_TEST_IMPACT_ID
+    status_guid    <- EASYVISTA_TEST_STATUS_GUID
     action_type_id <- EASYVISTA_TEST_ACTION_TYPE_ID
     group_id       <- EASYVISTA_TEST_GROUP_ID
 
 Auth is **Bearer** (the ``token`` value) — confirmed against the live preprod
-instance. The ``url`` value is the **full API root** (it already ends in
+instance, and it is the *only* credential that authenticates anything. The
+``url`` value is normally the **full API root** (it already ends in
 ``/api/v1/{account}``), so we split it back into ``server`` + ``account`` so
-``EasyvistaConfig.api_root`` reconstructs it exactly. If the URL is instead a
-bare host (no ``/api/`` segment), the ``user`` value is used as the account.
+``EasyvistaConfig.api_root`` reconstructs it exactly — and in that case the
+``account`` credential is never read at all. It is consulted only when ``url``
+is a bare host with no ``/api/`` segment.
 
 The secret values are loaded by this test process at runtime and never printed.
 Nor is live instance content: ``_force_short_traceback`` strips the frame-
@@ -177,6 +197,34 @@ LIVE_MAX_RETRIES = 2
 _RECONCILE_DELAY = 15.0
 
 
+# Retired 2026-08-25. The value is the API-root ``{account}`` path segment, not a
+# login, and the old spelling said otherwise. Accepting it as a silent fallback
+# would re-admit the exact confusion the rename removed, so it is refused with a
+# message naming its replacement. Only names are printed, never values (P2).
+_LEGACY_ACCOUNT_ENV = "EASYVISTA_TEST_USER"
+_LEGACY_ACCOUNT_FILE = "easyvista_test_user"
+
+
+def _reject_legacy_account_name() -> None:
+    """Fail loudly when the pre-rename account credential is still configured."""
+    stale: list[str] = []
+    value = os.environ.get(_LEGACY_ACCOUNT_ENV)
+    if value and value.strip():
+        stale.append("the " + _LEGACY_ACCOUNT_ENV + " environment variable")
+    if (_SECRETS_DIR / _LEGACY_ACCOUNT_FILE).is_file():
+        stale.append("secrets/" + _LEGACY_ACCOUNT_FILE)
+    if stale:
+        verb = "is" if len(stale) == 1 else "are"
+        pytest.fail(
+            " and ".join(stale) + " " + verb + " still set. That name was retired on "
+            "2026-08-25 and is no longer read: the value is the EasyVista "
+            "account -- the instance id in https://host/api/{version}/{account} "
+            "-- and never a login. Rename it to EASYVISTA_TEST_ACCOUNT / "
+            "secrets/easyvista_test_account.",
+            pytrace=False,
+        )
+
+
 def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
     for name in env_names:
         value = os.environ.get(name)
@@ -193,15 +241,16 @@ def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
 @pytest.fixture(scope="session")
 def live_config() -> EasyvistaConfig:
     url = _resolve(("EASYVISTA_TEST_URL",), "easyvista_test_url")
-    user = _resolve(
-        ("EASYVISTA_TEST_USER", "EASYVISTA_TEST_ACCOUNT"), "easyvista_test_user"
-    )
     token = _resolve(("EASYVISTA_TEST_TOKEN",), "easyvista_test_token")
     if not url or not token:
         pytest.skip(
             "live credentials unavailable (need url + token; set EASYVISTA_TEST_* "
             "env vars or add secrets/easyvista_test_* files)"
         )
+    # Ordered after the skip so an unconfigured checkout stays offline and green:
+    # with no url/token there is no live run for a stale name to mislead.
+    _reject_legacy_account_name()
+    account = _resolve(("EASYVISTA_TEST_ACCOUNT",), "easyvista_test_account")
 
     root = url.rstrip("/")
     if "/api/" in root:
@@ -225,12 +274,16 @@ def live_config() -> EasyvistaConfig:
             timeout=LIVE_TIMEOUT,
             max_retries=LIVE_MAX_RETRIES,
         )
-    # url is a bare host; the account comes from the user value.
-    if not user:
-        pytest.skip("URL has no /api/ segment, so a user/account value is required")
+    # url is a bare host, so the account cannot be parsed out of it.
+    if not account:
+        pytest.skip(
+            "URL has no /api/ segment, so EASYVISTA_TEST_ACCOUNT (or "
+            "secrets/easyvista_test_account) is required -- the instance id in "
+            "https://host/api/{version}/{account}, not a login"
+        )
     return EasyvistaConfig(
         server=root,
-        account=user,
+        account=account,
         token=token,
         timeout=LIVE_TIMEOUT,
         max_retries=LIVE_MAX_RETRIES,

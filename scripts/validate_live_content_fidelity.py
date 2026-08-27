@@ -43,9 +43,15 @@ Nothing is closed automatically. When you are done inspecting, close the ticket:
 
 Credentials resolve like ``integration_tests/conftest.py`` but **test-only**::
 
-    url    <- EASYVISTA_TEST_URL   | secrets/easyvista_test_url
-    user   <- EASYVISTA_TEST_USER  | secrets/easyvista_test_user   (account fallback)
-    token  <- EASYVISTA_TEST_TOKEN | secrets/easyvista_test_token
+    url     <- EASYVISTA_TEST_URL     | secrets/easyvista_test_url
+    account <- EASYVISTA_TEST_ACCOUNT | secrets/easyvista_test_account
+    token   <- EASYVISTA_TEST_TOKEN   | secrets/easyvista_test_token
+
+``account`` is **not a login**: it is the instance id forming the ``{account}``
+path segment of ``https://host/api/{version}/{account}`` (e.g. ``50004``). Auth
+is the ``token`` alone. It is read only when ``url`` is a bare host -- a full API
+root already carries the account. Spelled ``EASYVISTA_TEST_USER`` before
+2026-08-25; that name is now refused, not silently accepted.
 
 A repo-root ``.env`` is loaded first if ``python-dotenv`` is installed. Secret
 values are never printed.
@@ -214,6 +220,32 @@ def _resolve_int(env_names: tuple[str, ...], filename: str) -> int | None:
     return int(value) if value is not None else None
 
 
+# Retired 2026-08-25: the value is the API-root ``{account}`` path segment, not a
+# login. Reading the old spelling as a fallback would re-admit the confusion the
+# rename removed, so it is refused. Only names are printed, never values.
+_LEGACY_ACCOUNT_ENV = "EASYVISTA_TEST_USER"
+_LEGACY_ACCOUNT_FILE = "easyvista_test_user"
+
+
+def _reject_legacy_account_name() -> None:
+    """Abort when the pre-rename account credential is still configured."""
+    stale: list[str] = []
+    value = os.environ.get(_LEGACY_ACCOUNT_ENV)
+    if value and value.strip():
+        stale.append("the " + _LEGACY_ACCOUNT_ENV + " environment variable")
+    if (SECRETS_DIR / _LEGACY_ACCOUNT_FILE).is_file():
+        stale.append("secrets/" + _LEGACY_ACCOUNT_FILE)
+    if stale:
+        verb = "is" if len(stale) == 1 else "are"
+        raise SystemExit(
+            " and ".join(stale) + " " + verb + " still set. That name was retired on "
+            "2026-08-25 and is no longer read: the value is the EasyVista "
+            "account -- the instance id in https://host/api/{version}/{account} "
+            "-- and never a login. Rename it to EASYVISTA_TEST_ACCOUNT / "
+            "secrets/easyvista_test_account."
+        )
+
+
 def _host(url: str) -> str:
     # urlsplit().hostname strips any userinfo/port and lowercases; fall back to
     # the first path segment for a bare host with no netloc.
@@ -230,12 +262,14 @@ def resolve_test_config() -> EasyvistaConfig | None:
     from easyvista_python_client import EasyvistaConfig
 
     url = _resolve(("EASYVISTA_TEST_URL",), "easyvista_test_url")
-    user = _resolve(
-        ("EASYVISTA_TEST_USER", "EASYVISTA_TEST_ACCOUNT"), "easyvista_test_user"
-    )
+    account = _resolve(("EASYVISTA_TEST_ACCOUNT",), "easyvista_test_account")
     token = _resolve(("EASYVISTA_TEST_TOKEN",), "easyvista_test_token")
     if not url or not token:
         return None
+    # Ordered after the no-credentials exit, matching integration_tests/conftest.py:
+    # a checkout with nothing configured stays gracefully skippable whether or not
+    # a stray legacy file is lying around.
+    _reject_legacy_account_name()
 
     root = url.rstrip("/")
 
@@ -258,9 +292,11 @@ def resolve_test_config() -> EasyvistaConfig | None:
         return EasyvistaConfig(
             server=server, account=account, token=token, api_version=version
         )
-    if not user:
+    # A bare host: the account cannot be parsed out of the URL, so it must be
+    # supplied separately.
+    if not account:
         return None
-    return EasyvistaConfig(server=root, account=user, token=token)
+    return EasyvistaConfig(server=root, account=account, token=token)
 
 
 # --------------------------------------------------------------------------- #
@@ -824,6 +860,9 @@ def main() -> int:
     if config is None:
         print("No TEST credentials. Set EASYVISTA_TEST_URL + EASYVISTA_TEST_TOKEN")
         print("or add secrets/easyvista_test_url and secrets/easyvista_test_token.")
+        print("EASYVISTA_TEST_ACCOUNT (or secrets/easyvista_test_account) is")
+        print("needed only when the URL has no /api/ segment: it is the instance")
+        print("id in https://host/api/{version}/{account}, not a login.")
         return 2
 
     # These are per-instance and must not be hardcoded (see

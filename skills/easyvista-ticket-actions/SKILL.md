@@ -1,6 +1,6 @@
 ---
 name: easyvista-ticket-actions
-description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_action, list_actions, get_action and update_action with PostAction, Action and ActionUpdate, including how to recover a created action's id, how to project timestamps and author onto list_actions with fields=, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket followups, work notes, progress entries or any per-ticket action history."
+description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_action, list_actions, iter_actions, get_action and update_action with PostAction, Action and ActionUpdate, including why there is no private-comment flag and what to do instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket followups, work notes, internal or private comments, progress entries or any per-ticket action history."
 license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
@@ -14,9 +14,10 @@ metadata:
 > `easyvista-client-setup`.
 
 Actions are EasyVista's per-ticket work log — the closest equivalent to a
-followup. Four methods: `create_action(rfc, action)`, `list_actions(rfc)`,
-`get_action(action_id)` and `update_action(action_id, update)`. The list and
-item shapes differ substantially, which is where most mistakes come from.
+followup. Five methods: `create_action(rfc, action)`, `list_actions(rfc)`,
+`iter_actions(rfc)`, `get_action(action_id)` and `update_action(action_id,
+update)`. The list and item shapes differ substantially, which is where most
+mistakes come from.
 
 ## Two shapes of the same record
 
@@ -31,6 +32,10 @@ item shapes differ substantially, which is where most mistakes come from.
   unreachable this way — `DESCRIPTION`/`COMMENT` are Memo sub-resources and
   come back as HREF objects under any projection — and `fields="*"` is
   **not** a wildcard, it silently reduces to `ACTION_ID` alone.
+- `iter_actions(rfc)` is `list_actions` with paging: same records, same
+  `fields=` projection, but it follows `@next` until the server runs out
+  instead of stopping at one page. Use it whenever a ticket's **complete** log
+  matters; see the pagination gotcha below.
 - `get_action(action_id)` returns a **fuller item record** whose `DESCRIPTION`
   and `COMMENT` are memo href objects — that is, `action.description` is a
   `dict` with an `HREF`, not a string, until something resolves it.
@@ -39,6 +44,59 @@ item shapes differ substantially, which is where most mistakes come from.
 - The simplest way to get resolved bodies is `client.get_ticket_context(rfc)`,
   which fetches each action item-level and resolves its memo for you — see
   `easyvista-reporting-and-context`.
+
+## "Private" comments: there is no such feature
+
+**Do not tell a user this package can post a private comment.** An action
+carries no visibility flag — the complete item-level record was captured
+field by field and holds no public/private boolean — so there is no
+argument for it on `PostAction` and nothing for the client to expose.
+
+`action_type_id` is the only per-action discriminator that exists. If a
+deployment separates internal notes from customer-facing ones, it does so with
+distinct action types — but that is a property of **that deployment**, not
+of EasyVista's API, and the API cannot reveal which type is which:
+
+- `GET action-types` answers **403** on a standard profile, so the type table
+  cannot be enumerated.
+- Nothing on an action record states what its type *means*.
+- **There is no naming convention to pattern-match.** Brackets in
+  `ACTION_LABEL_*` mark an *untranslated* label: on a single-language instance
+  the unpopulated language columns echo the default-language text wrapped in
+  `[...]`. `localized_label` already skips them. They carry no visibility
+  meaning — do not read `[...]` as "restricted".
+
+The honest answer to "how do I post an internal note?" is: **ask the EasyVista
+administrator which action type id to use**, pin it in configuration, and pass
+it.
+
+```python
+from easyvista_python_client import EasyvistaClient, PostAction
+
+INTERNAL_NOTE_TYPE_ID = 20  # from YOUR administrator -- not discoverable
+
+with EasyvistaClient.from_env() as client:
+    client.create_action(
+        "YOUR_RFC_NUMBER",
+        PostAction(
+            action_type_id=INTERNAL_NOTE_TYPE_ID,
+            description="Internal: credentials rotated.",
+        ),
+    )
+```
+
+To reconcile what the administrator says against the data, list the types a
+ticket already uses. Most will be workflow-generated steps, not human notes —
+those carry an empty `DONE_BY_ID`.
+
+```python
+from easyvista_python_client import EasyvistaClient
+
+with EasyvistaClient.from_env() as client:
+    for action in client.iter_actions("YOUR_RFC_NUMBER"):
+        action_type = action.reference("ACTION_TYPE")
+        print(action_type.id, action_type.display, action.done_by_id)
+```
 
 ## Editing an action
 
@@ -69,6 +127,8 @@ with EasyvistaClient.from_env() as client:
 ## Procedure
 
 1. List existing actions to learn the instance's action types and groups.
+   Which type ids (if any) mean "internal" is NOT discoverable from the API --
+   ask the administrator (see above).
 2. Build a `PostAction`: identify the type with `action_type_id` (or
    `action_type_name`) and the assigned group with `group_id` (or
    `group_name`); put the note in `description`.
@@ -197,8 +257,15 @@ with EasyvistaClient.from_env() as client:
   actions (most workflow-generated), so a busy ticket crosses a default cap
   easily. The same cap truncates `get_ticket_context`'s `actions` and
   `TicketContext.to_markdown()`'s rendered log — for a comment sync, that means
-  silently missing comments on exactly the busiest tickets. Raise
-  `EasyvistaConfig.default_max_rows` when a whole log matters.
+  silently missing comments on exactly the busiest tickets. **Use
+  `iter_actions(rfc)`** when a whole log matters, or raise
+  `EasyvistaConfig.default_max_rows` to widen the single page.
+- **`iter_actions`' pagination is not live-verified.** It assumes the
+  `offset`/`@next` contract every other search on this API follows, but unlike
+  `iter_tickets` that has not been measured on the `actions` endpoint. If the
+  endpoint ignores `offset`, page two repeats page one and the sweep never
+  terminates. Bound it with `max_records` the first time you point it at a
+  ticket whose action count you do not already know.
 - **`update_action`'s return value is an unverified echo.** The PUT's response
   body has never been captured, and the parser falls back to the raw body when
   there are no records — so if the API answers empty or HREF-only, you get an

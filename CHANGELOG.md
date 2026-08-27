@@ -21,6 +21,32 @@ a deprecation policy will follow the 1.0 release.
 
 ### Added
 
+- `EasyvistaClient.iter_actions` / `AsyncEasyvistaClient.iter_actions` page a
+  ticket's **whole** action log. `list_actions` returns one page and truncates a
+  longer log with no error — and because it discards the envelope's total,
+  nothing in the result reveals the truncation. That is not a corner case: a
+  freshly created ticket already carries about a dozen workflow-generated
+  actions before anyone has commented, so a ticket with real conversation on it
+  crosses a default cap easily, and the comments lost are the oldest ones.
+  `iter_actions` follows `@next` until the server runs out, takes the same
+  `fields=` projection, and re-applies the ticket filter on every page.
+  **Caveat:** unlike `iter_tickets`, the `offset`/`@next` contract has not been
+  measured on the `actions` endpoint specifically. If an instance ignores
+  `offset`, page two repeats page one and the sweep will not terminate — bound
+  it with `max_records` the first time you use it on a ticket whose action count
+  you do not know. `scripts/validate_docs_examples.py` now checks this against a
+  live instance when credentials resolve.
+- `Action.action_label_fr` (`ACTION_LABEL_FR`). Already returned on the default
+  list projection, it was reachable only through `model_extra` — undeclared, and
+  so named by no docstring, even though `context.py` already relied on it as the
+  Markdown heading fallback. Note the item-level record carries eleven language
+  columns; on a single-language instance the unpopulated ones echo the
+  default-language text wrapped in `[...]`. Prefer `localized_label` there.
+- `resources.actions.build_search_actions` — one page of a ticket's actions with
+  the envelope kept, so `@next` is visible to a pager. `build_list_actions` is
+  now a thin wrapper over it that drops the envelope; the unsafe/blank
+  `rfc_number` guard moved into the shared builder so neither entry point can
+  bypass it.
 - `EasyvistaClient.set_status` / `AsyncEasyvistaClient.set_status` set a ticket's
   status, addressed by `STATUS_GUID`. This sends the documented
   `{"closed": {"status_GUID": ...}}` body — the same request `close_ticket`
@@ -33,6 +59,22 @@ a deprecation policy will follow the 1.0 release.
 
 ### Fixed
 
+- **Documented that this API has no private-comment feature.** The package
+  looked as though it were missing one. It is not: an action carries no
+  visibility flag at all, so there is nothing to expose. `action_type_id` is the
+  only per-action discriminator, and whether a deployment uses distinct types to
+  separate internal from customer-facing notes is a property of that deployment
+  which the API cannot reveal — `GET action-types` is 403 on a standard profile.
+  `PostAction`, `create_action`, the user guide and the `easyvista-ticket-actions`
+  skill now say so, and point the caller at their EasyVista administrator rather
+  than at a discovery routine that cannot work.
+  **Correction:** an earlier draft of this documentation claimed the human-comment
+  action types carry a `[Public]` / `[Private]`-style suffix in `ACTION_LABEL_*`.
+  That was a misreading of the *untranslated-label placeholder*: on a
+  single-language instance the unpopulated language columns echo the
+  default-language text wrapped in `[...]`, which is why
+  `references.localized_label` already discards them. The brackets encode no
+  visibility. No release carried the wrong claim.
 - `PostRequest`'s docstring claimed a ticket "needs at minimum `catalog_code`
   plus `title`". That was wrong in a way that cost real debugging time. **Send
   the whole documented create body** — `catalog_code`, `origin`, `title`,
@@ -62,6 +104,23 @@ a deprecation policy will follow the 1.0 release.
   in a `finally`. Two tests added beside it: one pinning that the documented body
   lands every id, one pinning that `set_status` reaches a **non-terminal**
   status.
+
+### Changed
+
+- **Live-test credential renamed** (contributor-facing; the published package is
+  unaffected). `EASYVISTA_TEST_USER` / `secrets/easyvista_test_user` are now
+  `EASYVISTA_TEST_ACCOUNT` / `secrets/easyvista_test_account`. The value never
+  was a login: it is the EasyVista **account**, the instance identifier that
+  forms the `{account}` path segment of `https://host/api/{version}/{account}`
+  (a number such as `50004`), and it feeds `EasyvistaConfig.account`.
+  Authentication is the Bearer token alone. The old name is **not** accepted as a
+  fallback — `integration_tests/`, `scripts/validate_docs_examples.py` and
+  `scripts/validate_live_content_fidelity.py` now abort with a message naming the
+  replacement if it is still configured, because silently honouring it would
+  preserve exactly the misreading the rename removes. Rename your local file;
+  `secrets/` is gitignored as a whole directory, so the new name stays ignored.
+  Note the value is consulted **only** when the URL is a bare host — a full API
+  root already carries the account, and most setups never read it at all.
 
 ## [0.2.0] - 2026-08-18
 

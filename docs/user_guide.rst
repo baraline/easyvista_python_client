@@ -24,11 +24,20 @@ underlying HTTP connection on exit.
 
    config = EasyvistaConfig(
        server="https://my.easyvista.com",
-       account="12345",
+       account="12345",  # the instance id in the API root -- NOT a username
        token="...",  # static Bearer access token
    )
    with EasyvistaClient(config) as client:
        ticket = client.get_ticket("I240101_0001")
+
+.. important::
+
+   ``account`` is **not a user account**. It is the EasyVista *instance*
+   identifier -- a number -- that forms the final path segment of the API root,
+   ``https://host/api/{version}/{account}``. Nothing authenticates with it; that
+   is the job of ``token``, or ``login`` + ``password``. If your instance URL
+   already reads ``https://my.easyvista.com/api/v1/12345``, then ``12345`` is
+   your ``account``.
 
 Authentication
 ~~~~~~~~~~~~~~~
@@ -42,7 +51,7 @@ the token wins.
    # Bearer token
    EasyvistaConfig(server="https://my.easyvista.com", account="12345", token="...")
 
-   # HTTP Basic
+   # HTTP Basic -- note that ``login`` and ``account`` are unrelated values
    EasyvistaConfig(server="https://my.easyvista.com", account="12345",
                    login="rest.user", password="...")
 
@@ -202,6 +211,78 @@ Actions are EasyVista's followup/comment analog. Add one with a
    plus :meth:`~easyvista_python_client.EasyvistaClient.resolve_memo` (or let
    :meth:`~easyvista_python_client.EasyvistaClient.get_ticket_context` resolve it
    for you onto ``Action.description``).
+
+Reading a whole action log
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:meth:`~easyvista_python_client.EasyvistaClient.list_actions` returns **one
+page**. A ticket carrying more actions than ``default_max_rows`` is truncated
+with no error, and the call discards the envelope's total, so nothing in the
+result reveals it. That cap is easier to hit than it looks: a freshly created
+ticket already carries about a dozen workflow-generated actions before anyone
+has commented. Use
+:meth:`~easyvista_python_client.EasyvistaClient.iter_actions` when the complete
+log matters — a comment sync, an export, an audit — and keep ``list_actions``
+for the cheap "show me the recent ones" read.
+
+.. code-block:: python
+
+   for action in client.iter_actions(ticket.rfc_number):
+       print(action.action_id, action.action_label_fr)
+
+.. warning::
+
+   Unlike :meth:`~easyvista_python_client.EasyvistaClient.iter_tickets`, the
+   offset pagination behind ``iter_actions`` has **not** been measured against a
+   live instance — it assumes the ``offset``/``@next`` contract every other
+   search on this API follows. If your instance's ``actions`` endpoint ignores
+   ``offset``, page two repeats page one and the sweep will not end on its own.
+   Bound it with ``max_records`` the first time you run it against a ticket
+   whose action count you do not already know.
+
+Internal vs. customer-facing comments
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**This API has no private-comment feature, and neither does this package.** An
+action carries no visibility flag — the complete item-level record was captured
+field by field and holds no public/private boolean — so there is no argument to
+pass and nothing for the client to expose.
+
+``action_type_id`` is the only per-action discriminator that exists. If your
+deployment separates internal notes from customer-facing ones, it will do so
+with distinct action types — but that is a property of your deployment, not of
+EasyVista's API, and the API cannot tell you which is which:
+
+* ``GET action-types`` answers **403** on a standard profile, so the type table
+  cannot be enumerated.
+* Nothing on an action record states what its type *means*.
+* There is no naming convention to pattern-match. In particular, brackets in
+  ``ACTION_LABEL_*`` mark an **untranslated** label — on a single-language
+  instance the unpopulated language columns echo the default-language text
+  wrapped in ``[...]`` — and carry no visibility meaning. See
+  :func:`~easyvista_python_client.references.localized_label`, which skips them.
+
+So: **ask your EasyVista administrator which action type ids your instance
+uses**, pin them in your own configuration, and pass the one you want:
+
+.. code-block:: python
+
+   client.create_action(
+       ticket.rfc_number,
+       PostAction(action_type_id=internal_note_type_id, description="Internal note"),
+   )
+
+To see which types a ticket already uses — useful when reconciling what the
+administrator tells you against the data:
+
+.. code-block:: python
+
+   for action in client.iter_actions(ticket.rfc_number):
+       action_type = action.reference("ACTION_TYPE")
+       print(action_type.id, action_type.display)
+
+Note that most of what comes back will be workflow-generated steps rather than
+human notes; those carry an empty ``DONE_BY_ID``.
 
 Assets
 ------
