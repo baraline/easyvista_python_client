@@ -11,7 +11,7 @@ from easyvista_python_client.models.common import (
     OptionalInt,
     _empty_str_to_none,
 )
-from easyvista_python_client.models.request import Request
+from easyvista_python_client.models.request import PostRequest, Request
 
 
 def test_classify_fields_declared_alias_is_official_custom_is_custom():
@@ -156,3 +156,31 @@ def test_a_naive_datetime_input_comes_back_aware():
     accepted input, not only for strings."""
     got = _Probe.model_validate({"when": datetime(2026, 1, 1, 9, 0, 0)}).when
     assert got == datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_extra_payload_serializes_verbatim_without_prefix() -> None:
+    """extra_payload keys reach the wire exactly as written."""
+    payload = PostRequest(catalog_code="X", extra_payload={"URGENCY_ID": "4"})
+    body = payload.to_api()
+    assert body["URGENCY_ID"] == "4"
+    assert "e_URGENCY_ID" not in body
+
+
+def test_extra_payload_overrides_a_declared_field() -> None:
+    """A caller reaching past the model wins; losing silently would be worse."""
+    payload = PostRequest(catalog_code="X", title="declared",
+                          extra_payload={"title": "override"})
+    assert payload.to_api()["title"] == "override"
+
+
+def test_extra_payload_overrides_custom_fields() -> None:
+    payload = PostRequest(
+        catalog_code="X",
+        custom_fields={"thing": "from_custom"},
+        extra_payload={"e_thing": "from_extra"},
+    )
+    assert payload.to_api()["e_thing"] == "from_extra"
+
+
+def test_extra_payload_defaults_empty_and_adds_nothing() -> None:
+    assert "extra_payload" not in PostRequest(catalog_code="X").to_api()

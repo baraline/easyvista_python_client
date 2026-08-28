@@ -113,22 +113,36 @@ class EasyvistaWriteModel(BaseModel):
     """Base for write payloads (create/update).
 
     Rejects unknown fields (``extra="forbid"``) to catch caller typos, and
-    serializes ``custom_fields`` with an ``e_`` prefix (unless already prefixed).
+    serializes ``custom_fields`` with an ``e_`` prefix (unless already
+    prefixed). ``extra_payload`` is an un-prefixed passthrough for anything the
+    model does not declare -- see :meth:`to_api`.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     custom_fields: dict[str, Any] = Field(default_factory=dict)
+    extra_payload: dict[str, Any] = Field(default_factory=dict)
 
     def to_api(self) -> dict[str, Any]:
-        """Return the API body: known fields (``None`` dropped) plus ``e_``-prefixed
-        custom fields.
+        """Return the API body: known fields (``None`` dropped), ``e_``-prefixed
+        custom fields, then ``extra_payload`` verbatim.
 
         Booleans may be sent as native JSON ``true``/``false`` (EasyVista also
         accepts ``0``/``1`` and the strings ``"true"``/``"false"``).
+
+        ``extra_payload`` is merged **last and wins**, over a declared field and
+        over ``custom_fields`` alike. It is the supported route for a field this
+        model declines to declare -- every such exclusion rests on behaviour
+        measured against a single instance, and a deployment where that field
+        behaves differently needs a way through that is not a fork. Because it
+        bypasses the model it also bypasses the model's validation: whatever is
+        put here reaches the wire as written.
         """
-        data = self.model_dump(exclude_none=True, exclude={"custom_fields"})
+        data = self.model_dump(
+            exclude_none=True, exclude={"custom_fields", "extra_payload"}
+        )
         for key, value in self.custom_fields.items():
             api_key = key if key.startswith("e_") else f"e_{key}"
             data[api_key] = value
+        data.update(self.extra_payload)
         return data
