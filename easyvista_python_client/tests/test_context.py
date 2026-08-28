@@ -186,3 +186,81 @@ def test_ticket_context_carries_arbitrary_memos() -> None:
         memos={"description": "d", "comment": "c", "solution": "s"},
     )
     assert ctx.memos["solution"] == "s"
+
+
+def test_a_lone_non_default_memo_is_rendered_as_the_body() -> None:
+    """The headline case for ``memo_fields``: a body memo that is neither
+    default must still reach the export.
+
+    ``get_ticket_context(rfc, memo_fields=("solution",))`` leaves both
+    ``description`` and ``comment`` unset by construction. Rendering only
+    those two produced a document with no body section and no warning, so the
+    one feature the parameter exists for silently lost its content.
+    """
+    md = TicketContext(
+        ticket=_ticket(),
+        description=None,
+        comment=None,
+        actions=[],
+        documents=[],
+        memos={"solution": "<p>replaced the fuser</p>"},
+    ).to_markdown()
+    assert "## Description" in md
+    assert "replaced the fuser" in md
+    assert "## Solution" not in md
+
+
+def test_several_non_default_memos_each_keep_their_own_heading() -> None:
+    """Two populated memos are a real distinction, as with the two defaults.
+
+    The heading comes from the field name the caller asked for, so the export
+    still says which memo carried which block.
+    """
+    md = TicketContext(
+        ticket=_ticket(),
+        description=None,
+        comment=None,
+        actions=[],
+        documents=[],
+        memos={"solution": "replaced the fuser", "workaround": "print to PDF"},
+    ).to_markdown()
+    assert "## Solution" in md
+    assert "## Workaround" in md
+    assert md.index("## Solution") < md.index("## Workaround")
+    assert "replaced the fuser" in md
+    assert "print to PDF" in md
+
+
+def test_an_empty_non_default_memo_adds_no_section() -> None:
+    """A memo that resolved to nothing must not invent a heading."""
+    md = TicketContext(
+        ticket=_ticket(),
+        description=None,
+        comment=None,
+        actions=[],
+        documents=[],
+        memos={"solution": None, "workaround": "  "},
+    ).to_markdown()
+    assert "## Description" not in md
+    assert "## Solution" not in md
+    assert "## Workaround" not in md
+
+
+def test_a_populated_default_memo_still_wins_over_memos() -> None:
+    """The default path is untouched: no duplicate body when both are present.
+
+    ``get_ticket_context`` puts the defaults in ``memos`` as well as on the
+    two attributes, so a renderer that appended ``memos`` unconditionally
+    would emit the body twice.
+    """
+    md = TicketContext(
+        ticket=_ticket(),
+        description=None,
+        comment="the printer is offline",
+        actions=[],
+        documents=[],
+        memos={"description": None, "comment": "the printer is offline"},
+    ).to_markdown()
+    assert md.count("## Description") == 1
+    assert "## Comment" not in md
+    assert md.count("the printer is offline") == 1

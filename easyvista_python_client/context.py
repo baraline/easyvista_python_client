@@ -16,6 +16,17 @@ def _cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ").strip()
 
 
+def _memo_heading(name: str) -> str:
+    """Title a memo block from the field name the caller asked for.
+
+    Only the first letter of each word is touched, so an already-capitalized
+    name (``COMMENT``) keeps its shape instead of being flattened to
+    ``Comment`` the way :meth:`str.title` would.
+    """
+    words = name.replace("_", " ").replace("-", " ").split()
+    return " ".join(word[:1].upper() + word[1:] for word in words) or name
+
+
 @dataclass
 class TicketContext:
     """A ticket plus its resolved narrative content.
@@ -39,7 +50,17 @@ class TicketContext:
     memos: dict[str, str | None] = field(default_factory=dict)
 
     def to_markdown(self) -> str:
-        """Render an href-free Markdown document for this ticket."""
+        """Render an href-free Markdown document for this ticket.
+
+        Headings name the *role* a block plays, not the field it came from:
+        when only one memo has text it is the body and is titled
+        ``## Description`` whichever field carried it; when both defaults have
+        text the distinction is real and each keeps its own heading. A memo
+        requested through ``memo_fields`` is rendered on the same rule -- a
+        single non-empty one becomes the body, several each get a heading
+        derived from the field name asked for -- so a deployment whose body
+        memo is neither ``description`` nor ``comment`` still exports one.
+        """
         data = self.ticket.model_dump(by_alias=True)
         rfc = self.ticket.rfc_number or "(unknown)"
         title = _text(data.get("TITLE"))
@@ -65,13 +86,19 @@ class TicketContext:
         # Headings name the ROLE a block plays in this ticket, decided from the
         # data in hand -- not the EasyVista field it came from.
         #
-        # Which memo carries a ticket's body is a per-deployment fact. On the
-        # verified instance DESCRIPTION is unused and the body arrives in
-        # COMMENT (0/15 sampled tickets had a non-empty DESCRIPTION, 15/15 had a
-        # COMMENT), and `RequestUpdate.description` writes COMMENT too -- so
-        # this library's own tickets export that way on any instance. Titling
-        # that block "Comment" mislabels the single most important part of the
-        # document for an LLM, or for a RAG chunker splitting on "## ".
+        # Which memo carries a ticket's body is a per-deployment fact, and it
+        # is not reliably detectable at runtime. Tier 4 -- measured on one
+        # instance, 2026-08-18, and it may not generalise: a pooled 77-row
+        # sample across four different orderings found COMMENT populated on 57
+        # rows, DESCRIPTION on 27, both on 24 and neither on 17, with the
+        # proportions flipping depending on the slice sampled. (An earlier
+        # 15-ticket sample that found DESCRIPTION empty everywhere was not
+        # representative; `models/request.py` treats the 77-row figure as the
+        # authoritative one.) What is fixed is this library's own writes:
+        # `RequestUpdate.description` writes COMMENT, so tickets this library
+        # has written export that way. Titling that block "Comment" mislabels
+        # the single most important part of the document for an LLM, or for a
+        # RAG chunker splitting on "## ".
         #
         # But the opposite hard-coding is just as wrong: an instance that
         # populates DESCRIPTION properly uses COMMENT for a genuine follow-up
@@ -81,6 +108,13 @@ class TicketContext:
         # "Description"; when both do, the distinction is real and each keeps
         # its own heading. An instance where DESCRIPTION works renders exactly
         # as it did before.
+        #
+        # And when NEITHER default memo has text, the same rule runs over
+        # `memos`. `get_ticket_context(rfc, memo_fields=("solution",))` is the
+        # whole point of that parameter -- a deployment whose body memo is
+        # neither default -- and rendering only the two defaults would drop
+        # that body from the export with no heading and no warning. Fetch is
+        # parameterised, so render is too.
         description = html_to_text(self.description)
         comment = html_to_text(self.comment)
         if description and comment:
@@ -88,6 +122,19 @@ class TicketContext:
             lines.extend(["## Comment", "", comment, ""])
         elif description or comment:
             lines.extend(["## Description", "", description or comment, ""])
+        else:
+            resolved = [
+                (memo_name, memo_text)
+                for memo_name, raw in self.memos.items()
+                if (memo_text := html_to_text(raw))
+            ]
+            if len(resolved) == 1:
+                lines.extend(["## Description", "", resolved[0][1], ""])
+            else:
+                for memo_name, memo_text in resolved:
+                    lines.extend(
+                        [f"## {_memo_heading(memo_name)}", "", memo_text, ""]
+                    )
 
         if self.actions:
             lines.extend(["## Actions", ""])
