@@ -193,9 +193,11 @@ a deprecation policy will follow the 1.0 release.
   through as written, so nothing previously accepted is refused now. (Between
   the widening and this entry `impact_id="28"` did ship as `"28"`; both changes
   fall in this same unreleased section, so no release carried it.)
-- **`extra_payload` overrides a declared field across letter case.** EasyVista's
-  field names are case-insensitive, so the exact-key merge broke the escape
-  hatch's own promise: `PostRequest(urgency_id=8,
+- **`extra_payload` overrides a declared field across letter case.** The vendor
+  documents the ticket *create* body's field names as case-insensitive (tier 1,
+  `docs/vendor-api-reference.md`); the other write bodies are assumed to match
+  it, which is the safe assumption in either direction here. Against that, the
+  exact-key merge broke the escape hatch's own promise: `PostRequest(urgency_id=8,
   extra_payload={"URGENCY_ID": "4"})` put **both** spellings on the wire with
   conflicting values and left the winner to the server. An `extra_payload` key
   now replaces any declared or `custom_fields`-produced key it matches when
