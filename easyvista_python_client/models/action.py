@@ -137,16 +137,54 @@ class PostAction(EasyvistaWriteModel):
     verified instance. That inference was wrong: ``COMMENT`` was empty because
     nothing had ever written to it, not because the column is unused.
 
-    **There is still no visibility flag.** The item-level action record was
-    re-captured on 2026-08-28 -- 88 columns -- and none of them is a
-    public/private boolean, so the API enforces no such distinction and neither
-    channel is inherently "private". Whether a deployment's self-service portal
-    surfaces one channel and not the other is that portal's configuration; ask
-    the instance's administrator rather than inferring it here. ``action_type_id``
-    remains the only per-action discriminator the API exposes, and which type ids
-    a deployment treats as internal is likewise not discoverable -- ``GET
-    action-types`` is 403 on a standard profile. Brackets in ``ACTION_LABEL_*``
-    mark an untranslated label, not a restricted one.
+    **A comment is an action that has been ENDED.** This is the single most
+    important thing to know before posting one, and it is why a newly created
+    action looks wrong in the UI. An action is a unit of work: created open
+    (a task still to do), then *ended* (work reported). Only an ended action
+    renders in the ticket's history with its text visible -- an open one shows
+    as a pending action row with no body. Verified live 2026-08-28: a type-95
+    action created through this model stayed invisible as a message until it
+    was ended, at which point its ``description`` appeared in the history.
+
+    Ending sets ``START_DATE_UT``, ``END_DATE_UT``, ``ELAPSED_TIME`` and
+    ``STATUS_ID_ON_TERMINATE``, fills ``DONE_BY_ID`` with the person who ended
+    it, and **clears** ``GROUP_ID`` -- the record moves from "assigned to a
+    group" to "done by a person". None of those fields can be set through
+    ``POST requests/{rfc}/actions``: sending them returns HTTP 200 and drops
+    them silently.
+
+    The vendor documents ending as ``PUT actions/{rfc_number}`` with the body
+    wrapped in ``end_action`` (``doneby_mail``, ``start_date``, ``end_date``,
+    ``elapsed_time``; omit ``action_id`` to end every open action at once), and
+    dates in the instance's own ``DATE_FORMAT`` -- ``dd/mm/yyyy`` on the
+    verified instance, **not** ISO 8601. See
+    https://docs.easyvista.com/docs/rest-api-finish-an-action-attached-to-an-incident-request.md
+    **This package does not implement it, and it could not be made to work on
+    the verified instance**: every documented form returned
+    ``590 Action not found``, including for a user who could end the same
+    action through the UI, which points at an instance- or profile-level
+    restriction rather than a payload error. Treat ending as an open problem
+    to raise with the deployment's administrator.
+
+    **Visibility is by action TYPE, and the labels say which is which.** There
+    is no per-action visibility flag -- the item-level record was captured on
+    2026-08-28 (88 columns) and holds no public/private boolean. The
+    distinction lives in the action type. On the verified instance:
+    type 94 is ``Commentaire [Public]`` / ``Customer Comment``, type 95 is
+    ``Note Interne [Prive]`` / ``Internal Note``. Type ids are per-deployment
+    and are not portable, but they are **discoverable**: ``GET action-types``
+    is 403 on a standard profile, yet every action record carries its own
+    ``ACTION_TYPE_ID`` alongside translated ``ACTION_LABEL_*`` columns, so one
+    ``GET actions`` recovers the types in use.
+
+    Two bracket conventions appear in ``ACTION_LABEL_*`` and they mean
+    different things. A whole label wrapped in brackets that echoes another
+    language (``EN='[Analyse et resolution]'``) is an *untranslated
+    placeholder* and carries no meaning -- ``references.localized_label``
+    already skips those. A bracketed *suffix* on distinct text, with genuine
+    translations in the sibling columns (``FR='Commentaire [Public]'`` beside
+    ``EN='Customer Comment'``), is a real visibility marker. An earlier
+    revision of this package conflated the two and deleted the true finding.
     """
 
     action_type_id: int | None = None

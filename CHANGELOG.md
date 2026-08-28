@@ -93,22 +93,38 @@ a deprecation policy will follow the 1.0 release.
 
 ### Fixed
 
-- **Documented that this API has no private-comment feature.** The package
-  looked as though it were missing one. It is not: an action carries no
-  visibility flag at all, so there is nothing to expose. `action_type_id` is the
-  only per-action discriminator, and whether a deployment uses distinct types to
-  separate internal from customer-facing notes is a property of that deployment
-  which the API cannot reveal — `GET action-types` is 403 on a standard profile.
-  `PostAction`, `create_action`, the user guide and the `easyvista-ticket-actions`
-  skill now say so, and point the caller at their EasyVista administrator rather
-  than at a discovery routine that cannot work.
-  **Correction:** an earlier draft of this documentation claimed the human-comment
-  action types carry a `[Public]` / `[Private]`-style suffix in `ACTION_LABEL_*`.
-  That was a misreading of the *untranslated-label placeholder*: on a
-  single-language instance the unpopulated language columns echo the
-  default-language text wrapped in `[...]`, which is why
-  `references.localized_label` already discards them. The brackets encode no
-  visibility. No release carried the wrong claim.
+- **Documented how a comment actually works, retracting two wrong claims.** This
+  entry previously said "this API has no private-comment feature" and that the
+  API "cannot reveal" which action types are internal. Both were wrong, and the
+  second was a *correction that deleted a true finding*. Measured live
+  2026-08-28 on one instance:
+  - **A comment is an action that has been ENDED.** An action is a unit of work:
+    created open (a task to do), then ended (work reported). Only an ended action
+    appears in the ticket history with its text visible; an open one renders as a
+    pending row with no body, which reads as though the text vanished. Ending
+    sets `START_DATE_UT`, `END_DATE_UT`, `ELAPSED_TIME` and
+    `STATUS_ID_ON_TERMINATE`, fills `DONE_BY_ID` and **clears** `GROUP_ID`. None
+    of those can be set on create — they return HTTP 200 and are dropped.
+  - **Ending is vendor-documented but unreachable here.**
+    `PUT actions/{rfc_number}`, body wrapped in `end_action`, dates in the
+    instance's `DATE_FORMAT` (`dd/mm/yyyy`, not ISO 8601). Every documented form
+    returned `590 Action not found` on the verified instance — including for a
+    user who could end the same action through the UI — so this looks like an
+    instance/profile restriction. Not implemented; tracked as an open problem.
+  - **Visibility is by action type, and the labels do say which.** Type 94 is
+    `Commentaire [Public]` / `Customer Comment`; type 95 is
+    `Note Interne [Privé]` / `Internal Note`. Ids are per-deployment, but they
+    are **discoverable**: `GET action-types` is 403, yet every action record
+    carries `ACTION_TYPE_ID` beside translated `ACTION_LABEL_*` columns, so one
+    `GET actions` recovers the types in use.
+  - **The bracket "correction" was itself wrong.** Two conventions exist and mean
+    opposite things. A whole label bracketed and echoing another language
+    (`EN='[Analyse et résolution]'`) is an untranslated placeholder, which is why
+    `references.localized_label` discards it. A bracketed *suffix* on distinct
+    text with genuine sibling translations (`FR='Commentaire [Public]'` beside
+    `EN='Customer Comment'`) is a real visibility marker. The earlier correction
+    generalised the first pattern over the second and removed an accurate claim.
+  No release carried any of the wrong versions.
 - `PostRequest`'s docstring claimed a ticket "needs at minimum `catalog_code`
   plus `title`". That was wrong in a way that cost real debugging time. **Send
   the whole documented create body** — `catalog_code`, `origin`, `title`,

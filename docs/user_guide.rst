@@ -306,14 +306,40 @@ the text sent.
        comment="Internal working note.",
    )
 
+.. important::
+
+   **A comment is an action that has been ended, and creating one is only half
+   the job.** An action is a unit of work: created *open* (a task still to do),
+   then *ended* (work reported). Only an ended action appears in the ticket's
+   history with its text visible — an open one shows as a pending action row
+   with **no body**, which looks exactly as though the text was lost. It was
+   not; the action was simply never ended. Verified live on 2026-08-28.
+
+   Ending sets ``START_DATE_UT``, ``END_DATE_UT``, ``ELAPSED_TIME`` and
+   ``STATUS_ID_ON_TERMINATE``, fills ``DONE_BY_ID``, and **clears**
+   ``GROUP_ID``. None of those can be set on create — sending them returns
+   HTTP 200 and drops them in silence.
+
+   The vendor documents ending as ``PUT actions/{rfc_number}`` with the body
+   wrapped in ``end_action``, dates in your instance's ``DATE_FORMAT``
+   (``dd/mm/yyyy`` on the verified instance, **not** ISO 8601). **This package
+   does not implement it**, and on the verified instance every documented form
+   returned ``590 Action not found`` — including for a user who could end the
+   same action through the UI. That points at an instance or profile
+   restriction rather than a payload problem; raise it with your EasyVista
+   administrator.
+
 .. warning::
 
-   **Neither channel is inherently private.** The item-level action record
+   **Neither text channel is inherently private.** The item-level action record
    carries 88 columns and none of them is a public/private boolean, so the API
    enforces no visibility distinction and there is no flag to set or read.
-   Whether your self-service portal surfaces one channel and not the other is
-   **your portal's configuration** — confirm it with your EasyVista
-   administrator before treating ``comment`` as hidden from the requester.
+   Visibility is a property of the action **type**: on the verified instance
+   type 94 is ``Commentaire [Public]`` / ``Customer Comment`` and type 95 is
+   ``Note Interne [Privé]`` / ``Internal Note``. Those ids are per-deployment
+   and not portable — but they are discoverable, because every action record
+   carries its ``ACTION_TYPE_ID`` beside translated ``ACTION_LABEL_*`` columns
+   even though ``GET action-types`` answers 403.
 
 ``action_type_id`` is the only per-action discriminator the API exposes. If your
 deployment separates internal notes from customer-facing ones, it will do so

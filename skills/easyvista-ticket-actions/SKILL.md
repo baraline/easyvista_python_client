@@ -62,22 +62,55 @@ PostAction(
 )
 ```
 
-**But neither channel is inherently private, and the API enforces nothing.**
-The item-level action record carries 88 columns and not one is a
-public/private boolean, so there is no flag to set and none to read.
-Whether a deployment's self-service portal surfaces one channel and not the
-other is **that portal's configuration** — confirm it with the instance's
-administrator before promising a user that `comment` is hidden. Do not tell a
-user this package can post a guaranteed-private comment; it cannot, because
-the API has no such concept.
+## A comment is an action that has been ENDED
 
-`action_type_id` is the only per-action discriminator the API exposes. If a
-deployment separates internal notes from customer-facing ones, it does so with
-distinct action types — but that is a property of **that deployment**, not
-of EasyVista's API, and the API cannot reveal which type is which:
+**Read this before telling anyone how to post a comment.** An action is a unit
+of work: created **open** (a task still to do), then **ended** (work reported).
+Only an ended action appears in the ticket history with its text visible. An
+open one shows as a pending action row with **no body** — which is exactly what
+a caller sees if they create an action and stop there, and it looks like the
+text was lost. It was not; the action was simply never ended.
 
-- `GET action-types` answers **403** on a standard profile, so the type table
-  cannot be enumerated.
+Verified live 2026-08-28: a type-95 action created through this package stayed
+invisible as a message until it was ended, at which point its `description`
+appeared in the history.
+
+Ending sets `START_DATE_UT`, `END_DATE_UT`, `ELAPSED_TIME` and
+`STATUS_ID_ON_TERMINATE`, fills `DONE_BY_ID`, and **clears** `GROUP_ID`. None
+of those can be set on create — sending them returns HTTP 200 and drops them
+silently.
+
+The vendor documents ending as `PUT actions/{rfc_number}`, body wrapped in
+`end_action` (`doneby_mail`, `start_date`, `end_date`, `elapsed_time`; omit
+`action_id` to end every open action), dates in the instance's `DATE_FORMAT`
+(`dd/mm/yyyy` on the verified instance, **not** ISO 8601) —
+[docs](https://docs.easyvista.com/docs/rest-api-finish-an-action-attached-to-an-incident-request.md).
+**This package does not implement it and it could not be made to work on the
+verified instance**: every documented form returned `590 Action not found`,
+including for a user who could end the same action in the UI. That points at an
+instance/profile restriction, not a payload error. Raise it with the
+deployment's administrator rather than retrying variants.
+
+## Visibility is by action TYPE, and the labels say which
+
+There is no per-action visibility flag — 88 item-level columns, no
+public/private boolean. The distinction lives in the **type**. On the verified
+instance: **94** = `Commentaire [Public]` / `Customer Comment`, **95** =
+`Note Interne [Privé]` / `Internal Note`.
+
+Type ids are per-deployment and not portable, but they **are discoverable**.
+`GET action-types` answers 403 on a standard profile — yet every action record
+carries its own `ACTION_TYPE_ID` beside translated `ACTION_LABEL_*` columns, so
+a single `GET actions` recovers the types in use.
+
+Two bracket conventions appear in `ACTION_LABEL_*` and they mean opposite
+things. A whole label wrapped in brackets echoing another language
+(`EN='[Analyse et résolution]'`) is an **untranslated placeholder** with no
+meaning — `localized_label` already skips those. A bracketed **suffix** on
+distinct text, with real translations in the sibling columns
+(`FR='Commentaire [Public]'` beside `EN='Customer Comment'`), is a genuine
+visibility marker. An earlier revision of this package conflated the two and
+deleted the true finding.
 - Nothing on an action record states what its type *means*.
 - **There is no naming convention to pattern-match.** Brackets in
   `ACTION_LABEL_*` mark an *untranslated* label: on a single-language instance
