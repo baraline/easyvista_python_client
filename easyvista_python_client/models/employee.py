@@ -4,8 +4,9 @@
 (``GET employees/{id}``). ``E_MAIL`` is a **declared official** field, so the generic
 field model never misclassifies it as a custom ``e_*`` column. ``extra="allow"``
 preserves the ``COMMENT_EMPLOYEE`` Memo link and any other columns. Aliases are
-grounded in the live inventory (``docs/easyvista-field-inventory.md``). Writes are
-**provisional** pending an authorised profile (spec open item O-DIR-2).
+grounded in the live inventory (tier 4 -- a field inventory generated from one
+instance, 2026-07-07). Writes are **provisional** pending an authorised
+profile (spec open item O-DIR-2).
 """
 
 from __future__ import annotations

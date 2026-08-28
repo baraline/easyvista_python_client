@@ -328,11 +328,12 @@ def test_request_update_refuses_status_id():
 def test_post_request_carries_the_whole_documented_create_body():
     """Every field of the documented create body survives ``to_api``.
 
-    The documented body (``docs/API_Info.md``) is catalog_code + origin + title +
-    description + department_id + urgency_id + impact_id, and sending a SUBSET is
-    what produces the 590 whose message is a bare SQL parser error. So the shape
-    is pinned here: a field silently dropped from this model would reintroduce
-    exactly that failure, on some catalogs only.
+    The vendor-documented body (``docs/vendor-api-reference.md``) is
+    catalog_code + origin + title + description + department_id + urgency_id +
+    impact_id, and sending a SUBSET is what produces the 590 whose message is a
+    bare SQL parser error. So the shape is pinned here: a field silently
+    dropped from this model would reintroduce exactly that failure, on some
+    catalogs only.
     """
     body = PostRequest(
         catalog_code="SYNTH_INC_001",

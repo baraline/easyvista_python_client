@@ -83,7 +83,7 @@ def build_close_ticket(
     what it does.
 
     ``delete_actions=1`` drops the ticket's actions. Shapes follow the documented
-    close body (``docs/API_Info.md``), verified live.
+    close body (tier 1 -- ``docs/vendor-api-reference.md``), verified live.
     """
     closed: dict[str, Any] = {}
     if status_guid is not None:

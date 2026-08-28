@@ -5,8 +5,8 @@
 by ``name``), the ``COMMENT_DEPARTMENT`` Memo link (surfaced by
 ``classify_fields().links`` and read via ``client.get_department_comment``), and any
 instance-specific columns. Field aliases are grounded in the live inventory
-(``docs/easyvista-field-inventory.md``). Writes are **provisional** pending an
-authorised profile (spec open item O-DIR-2).
+(tier 4 -- a field inventory generated from one instance, 2026-07-07). Writes
+are **provisional** pending an authorised profile (spec open item O-DIR-2).
 """
 
 from __future__ import annotations

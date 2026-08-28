@@ -898,7 +898,7 @@ def run_live_writes(
         else:
             r.skip("get_ticket/update/action/document", "no ticket was created")
 
-        # create_asset  [Assets] -- catalog_id not in API_Info.md; profile may 403.
+        # create_asset  [Assets] -- catalog_id not vendor-documented; profile may 403.
         def create_asset() -> None:
             a = client.create_asset(
                 PostAsset(catalog_id=asset_catalog_id, asset_tag="DOCSVAL001")

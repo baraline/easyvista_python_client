@@ -119,7 +119,8 @@ class Request(EasyvistaModel):
 class PostRequest(EasyvistaWriteModel):
     """Payload for creating a ticket.
 
-    Field set matches the documented create body (``docs/API_Info.md``). **Send
+    Field set follows the vendor-documented create body (tier 1 --
+    ``docs/vendor-api-reference.md``). **Send
     the whole documented set** -- ``catalog_code``, ``origin``, ``title``,
     ``description``, ``department_id``, ``urgency_id``, ``impact_id`` -- rather
     than a subset. An earlier version of this docstring claimed a ticket needs
@@ -180,11 +181,12 @@ class PostRequest(EasyvistaWriteModel):
 class RequestUpdate(EasyvistaWriteModel):
     """Payload for updating a ticket via PUT.
 
-    ``docs/API_Info.md`` documents only the create, comment and close bodies, so
-    the update body is not vendor-documented. Every field here is one verified
-    accepted against a live instance **by re-reading the ticket afterwards**, not
-    by trusting HTTP 200 — that distinction matters on this API, where a write
-    can return 200 and change nothing.
+    The vendor documents only the create, comment and close bodies
+    (``docs/vendor-api-reference.md``), so the update body is not
+    vendor-documented. Every field here is one verified accepted against a
+    live instance **by re-reading the ticket afterwards**, not by trusting
+    HTTP 200 — that distinction matters on this API, where a write can return
+    200 and change nothing.
 
     ``description`` writes the ticket's **COMMENT** Memo, not ``DESCRIPTION`` --
     verified live by reading the text back, and pinned by
