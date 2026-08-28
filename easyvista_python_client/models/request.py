@@ -119,26 +119,27 @@ class Request(EasyvistaModel):
 class PostRequest(EasyvistaWriteModel):
     """Payload for creating a ticket.
 
-    Field set follows the vendor-documented create body (tier 1 --
-    ``docs/vendor-api-reference.md``). **Send
-    the whole documented set** -- ``catalog_code``, ``origin``, ``title``,
-    ``description``, ``department_id``, ``urgency_id``, ``impact_id`` -- rather
-    than a subset. An earlier version of this docstring claimed a ticket needs
-    "at minimum ``catalog_code`` plus ``title``"; that is wrong, and the way it
-    is wrong is expensive:
+    **Vendor-required is one field: ``catalog_guid`` or ``catalog_code``** (tier
+    1). Everything else the vendor lists is optional.
 
-    * the full documented body creates successfully on every catalog tried;
-    * the same body minus the four ids creates on some catalogs and is rejected
-      on others -- measured on two catalogs of one instance with the *identical*
-      remaining bytes, accepted by one and rejected by the other;
-    * the rejection is HTTP 590 / code 2013 whose message is a **SQL parser
-      error** (``=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...``)
-      naming no field at all. It is easy to misread as a server-side defect. It
-      is not: it is what an under-specified create body looks like here.
+    That is not the whole story, and the gap between it and practice is
+    expensive. Measured on one instance (tier 4, 2026-08-18): the full
+    seven-field body -- catalog, origin, title, description, department_id,
+    urgency_id, impact_id -- creates successfully on every catalog tried, while
+    the same body minus the four ids creates on some catalogs and is rejected on
+    others. Two catalogs of one instance, identical remaining bytes, one
+    accepted and one refused.
 
-    Which fields a given catalog can do without is configured per catalog on the
-    EasyVista side, so the client cannot know it statically -- which is exactly
-    why sending the documented set is the only reliable shape.
+    The rejection is HTTP 590 / code 2013 carrying a **SQL parser error**
+    (``=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...``) that
+    names no field at all. It reads like a server defect. It is not: it is what
+    an under-specified create body looks like here.
+
+    Which fields a catalog can do without is configured per catalog on the
+    EasyVista side, so no client can know it statically. Sending the fuller body
+    is therefore the safer default in practice -- but it is a hedge against a
+    per-catalog configuration, not an API requirement, and an instance that
+    needs less is not misbehaving.
 
     Ids may be sent as JSON numbers or as strings; both are accepted (measured
     side by side). The documented examples quote them; these fields are typed
@@ -277,18 +278,34 @@ class RequestUpdate(EasyvistaWriteModel):
       route reaches **every** status, not just terminal ones -- all six statuses
       tried landed on exactly the one requested. It is addressed by
       ``STATUS_GUID``, not by ``STATUS_ID``.
-    * ``severity_id`` — ``SEVERITY_ID`` is rejected with HTTP 590 (code 2013).
-    * ``urgency_id`` — ``URGENCY_ID`` raised HTTP 590 *and the value still
-      changed*, so the API's behaviour is not one this model can express
-      honestly. Set it with a raw request and re-read if you must. Note this is
-      an **update**-path finding only: on the CREATE path ``urgency_id`` is part
-      of the documented body and lands cleanly (see :class:`PostRequest`).
+    * ``severity_id`` -- rejected with HTTP 590 (code 2013). Tier 4: measured on
+      one instance.
+    * ``urgency_id`` -- ``URGENCY_ID`` raised HTTP 590 *and the value still
+      changed*, so the API's behaviour there is not one this model can express
+      honestly. Tier 4, and with counter-evidence: the instance's own OpenAPI
+      declares ``Urgency_ID`` on ``PUT /requests/{rfc_number}`` as a **string**,
+      while the probe that measured the 590 sent an **int**. The exclusion may
+      therefore be a type mismatch of our own making rather than an API limit --
+      unresolved, tracked as O-URG in ``docs/vendor-api-reference.md``. Note the
+      counter-evidence is tier 3 (a spec *schema*, which on this API is
+      example-derived and not normative), so it is a reason to test, not a
+      reason to assume.
+
+      Either way this is an **update**-path finding only: on the CREATE path
+      ``urgency_id`` is vendor-documented and lands cleanly (see
+      :class:`PostRequest`).
+
+    To send any of these anyway on a deployment where they work, use
+    ``extra_payload`` -- and re-read the ticket afterwards, because a 200 from
+    this endpoint is not a receipt.
     * a priority field — EasyVista derives priority from urgency x impact rather
       than exposing a writable column.
 
-    ``external_reference`` is capped at 50 characters: 50 is accepted and 51 is
-    rejected server-side (bisected live). The cap is enforced here so the round
-    trip is saved; over-length is rejected rather than truncated either way.
+    ``external_reference`` is capped at 50 characters: 50 accepted, 51 rejected
+    server-side (tier 4 -- bisected live on one instance). The cap is enforced
+    here so the round trip is saved; over-length is rejected rather than
+    truncated either way. A deployment with a wider column can bypass the cap
+    with ``extra_payload``.
     """
 
     title: str | None = None
