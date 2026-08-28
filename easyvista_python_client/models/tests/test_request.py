@@ -31,12 +31,27 @@ def test_post_request_to_api_uses_known_fields():
     assert body == {"catalog_code": "CODE1", "title": "T", "description": "hi"}
 
 
-def test_post_request_rejects_catalog_guid():
-    """catalog_guid is not a verified create field and cannot be verified on the
-    probe profile (GET /catalog-requests is 403). extra="forbid" now rejects it
-    rather than silently sending a field the server may ignore."""
-    with pytest.raises(ValidationError):
-        PostRequest(catalog_code="CODE1", catalog_guid="GUID1")
+def test_catalog_guid_is_accepted_and_serialized() -> None:
+    body = PostRequest(catalog_guid="{ABC-123}").to_api()
+    assert body["catalog_guid"] == "{ABC-123}"
+
+
+def test_catalog_code_alone_still_works() -> None:
+    assert PostRequest(catalog_code="EAZ_INC_000").to_api()["catalog_code"] == "EAZ_INC_000"
+
+
+def test_both_catalog_identifiers_may_be_sent() -> None:
+    body = PostRequest(catalog_guid="{ABC-123}", catalog_code="EAZ_INC_000").to_api()
+    assert body["catalog_guid"] == "{ABC-123}"
+    assert body["catalog_code"] == "EAZ_INC_000"
+
+
+def test_neither_catalog_identifier_is_refused_locally() -> None:
+    """The server answers this with a 590 naming no field; fail here instead."""
+    with pytest.raises(ValidationError) as excinfo:
+        PostRequest(title="no subject")
+    assert "catalog_guid" in str(excinfo.value)
+    assert "catalog_code" in str(excinfo.value)
 
 
 def test_post_request_to_api_includes_documented_create_fields():

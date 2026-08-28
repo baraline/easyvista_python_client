@@ -154,10 +154,14 @@ class PostRequest(EasyvistaWriteModel):
     ``custom_fields`` values are serialized with an ``e_``
     prefix unless they already start with ``e_`` (see :class:`EasyvistaWriteModel`).
 
-    ``catalog_code`` is the only verified way to name a catalog here. An earlier
-    ``catalog_guid`` field was removed: it is absent from the documented create
-    body, and it cannot be verified on a profile where ``GET /catalog-requests``
-    returns 403 (no way to obtain a real catalog GUID).
+    ``catalog_guid`` and ``catalog_code`` both name the ticket's subject, and one
+    of them is required -- tier 1, and the vendor documents the **guid** as the
+    preferred form. An earlier version of this model dropped ``catalog_guid``
+    entirely on the grounds that it was "absent from the documented create
+    body"; the document consulted was a customer handover note rather than the
+    vendor specification, and the vendor documents it plainly. Note that
+    ``GET /catalog-requests`` is 403 on a restricted profile, so an instance may
+    give you no way to *read* a catalog GUID even though the create accepts one.
 
     ``description`` supplied at create time was **not** readable back through
     either Memo on the verified instance -- neither ``DESCRIPTION`` nor
@@ -165,6 +169,7 @@ class PostRequest(EasyvistaWriteModel):
     ``update_ticket(rfc, RequestUpdate(description=...))``.
     """
 
+    catalog_guid: str | None = None
     catalog_code: str | None = None
     title: str | None = None
     description: str | None = None
@@ -176,6 +181,23 @@ class PostRequest(EasyvistaWriteModel):
     recipient_id: int | None = None
     recipient_mail: str | None = None
     external_reference: str | None = None
+
+    @model_validator(mode="after")
+    def _require_a_catalog_identifier(self) -> PostRequest:
+        """Refuse a create body with no subject.
+
+        Tier 1: the vendor documents ``catalog_guid`` OR ``catalog_code`` as the
+        only required part of a create body. Sent without either, the server
+        answers HTTP 590 with a SQL parser error naming no field at all, which
+        is easy to misread as a server defect -- so this is refused here, where
+        the message can say what is missing.
+        """
+        if not self.catalog_guid and not self.catalog_code:
+            raise ValueError(
+                "a create body needs a subject: pass catalog_guid (preferred) "
+                "or catalog_code"
+            )
+        return self
 
 
 class RequestUpdate(EasyvistaWriteModel):
