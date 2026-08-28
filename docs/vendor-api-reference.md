@@ -98,10 +98,11 @@ Envelope: `HREF`, `record_count`, `total_record_count`, `records`, `@next`.
 
 Read from `GET {api_root}/swagger`, 2026-08-27.
 
-* `PUT|PATCH /requests/{rfc_number}/close` — a dedicated close route taking a
-  **flat** body (`STATUS_GUID`, `END_DATE`, `CATALOG_GUID`, `DELETE_ACTIONS`,
-  `COMMENT`), rather than the `{"closed": {...}}` envelope this package sends
-  to `PUT /requests/{rfc_number}`. The package's route is measured working;
+* `PUT|PATCH /requests/{rfc_number}/close` — a dedicated close route exists
+  (tier 2) taking a **flat** body (tier 3, illustrative only:
+  `STATUS_GUID`, `END_DATE`, `CATALOG_GUID`, `DELETE_ACTIONS`, `COMMENT`),
+  rather than the `{"closed": {...}}` envelope this package sends to
+  `PUT /requests/{rfc_number}`. The package's route is measured working;
   switching is a behaviour change needing its own live check (open item
   O-CLOSE).
 * `PUT|PATCH /requests/{rfc_number}/suspend`, `/restart`.
