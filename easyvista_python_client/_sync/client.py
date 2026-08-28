@@ -789,7 +789,11 @@ class EasyvistaClient:
         return parse_memo(self._transport.send(RequestSpec("GET", path)), field)
 
     def get_ticket_context(
-        self, rfc_number: str, *, resolve_action_bodies: bool = True
+        self,
+        rfc_number: str,
+        *,
+        resolve_action_bodies: bool = True,
+        memo_fields: Sequence[str] = ("description", "comment"),
     ) -> TicketContext:
         """Fetch a ticket plus its resolved narrative content as a bundle.
 
@@ -797,6 +801,14 @@ class EasyvistaClient:
         lists actions/documents. Missing sub-resources (404) or
         profile-restricted lists (403) degrade to ``None`` / ``[]`` rather than
         failing the whole call.
+
+        ``memo_fields`` names which Memo sub-resources to resolve, defaulting to
+        the two EasyVista populates by default. The API models the memo name as
+        a path segment (``GET /requests/{rfc}/{memo}``), so an instance
+        configured with a different body memo is reached by naming it here. Every
+        resolved memo lands in :attr:`TicketContext.memos`; ``description`` and
+        ``comment`` additionally keep their own attributes, and are ``None`` when
+        not requested.
 
         ``resolve_action_bodies`` (default on) additionally fetches each action
         item-level and resolves its note text, because ``list_actions`` does not
@@ -850,22 +862,26 @@ class EasyvistaClient:
             except EasyvistaAuthError:
                 return []
 
-        description, comment, actions, documents = settle(
-            self._safe_memo(f"requests/{rfc_number}/description"),
-            self._safe_memo(f"requests/{rfc_number}/comment"),
+        memo_results = settle(
+            *(self._safe_memo(f"requests/{rfc_number}/{name}") for name in memo_fields),
             _actions(),
             _documents(),
         )
+        memos = dict(
+            zip(memo_fields, memo_results[: len(memo_fields)], strict=True)
+        )
+        actions, documents = memo_results[len(memo_fields) :]
 
         if resolve_action_bodies:
             actions = self._resolve_action_bodies(actions)
 
         return TicketContext(
             ticket=ticket,
-            description=description,
-            comment=comment,
+            description=memos.get("description"),
+            comment=memos.get("comment"),
             actions=actions,
             documents=documents,
+            memos=memos,
         )
 
     def _resolve_action_bodies(self, actions: list[Action]) -> list[Action]:

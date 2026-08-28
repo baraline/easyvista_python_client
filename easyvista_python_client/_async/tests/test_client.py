@@ -1321,6 +1321,64 @@ async def test_ticket_context_lists_documents_before_resolving_action_bodies(con
     assert documents < actions_item
 
 
+@respx.mock
+async def test_get_ticket_context_resolves_the_two_default_memos(config):
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "body"})
+    )
+    respx.get(f"{ROOT}/requests/I1/comment").mock(
+        return_value=httpx.Response(200, json={"COMMENT": "note"})
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": []})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"documents": []})
+    )
+
+    async with AsyncEasyvistaClient(config) as client:
+        ctx = await client.get_ticket_context("I1", resolve_action_bodies=False)
+
+    assert ctx.memos == {"description": "body", "comment": "note"}
+    assert ctx.description == "body"
+    assert ctx.comment == "note"
+
+
+@respx.mock
+async def test_get_ticket_context_honours_custom_memo_fields(config):
+    """An instance whose body memo is neither default is reached by naming it."""
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    solution = respx.get(f"{ROOT}/requests/I1/solution").mock(
+        return_value=httpx.Response(200, json={"SOLUTION": "fixed it"})
+    )
+    description = respx.get(f"{ROOT}/requests/I1/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "unused"})
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": []})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"documents": []})
+    )
+
+    async with AsyncEasyvistaClient(config) as client:
+        ctx = await client.get_ticket_context(
+            "I1", resolve_action_bodies=False, memo_fields=("solution",)
+        )
+
+    assert ctx.memos == {"solution": "fixed it"}
+    assert ctx.description is None
+    assert ctx.comment is None
+    assert solution.called
+    # The default memos are not fetched when they were not asked for.
+    assert not description.called
+
+
 # --- department context ------------------------------------------------------
 
 

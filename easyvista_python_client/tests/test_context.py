@@ -163,3 +163,26 @@ def test_to_markdown_skips_nameless_document():
     assert "- \n" not in md
     assert not md.rstrip().endswith("- ")
     assert "/api/" not in md
+
+
+def test_ticket_context_memos_defaults_to_empty() -> None:
+    ctx = TicketContext(
+        ticket=Request(RFC_NUMBER="I1"),
+        description=None,
+        comment=None,
+        actions=[],
+        documents=[],
+    )
+    assert ctx.memos == {}
+
+
+def test_ticket_context_carries_arbitrary_memos() -> None:
+    ctx = TicketContext(
+        ticket=Request(RFC_NUMBER="I1"),
+        description="d",
+        comment="c",
+        actions=[],
+        documents=[],
+        memos={"description": "d", "comment": "c", "solution": "s"},
+    )
+    assert ctx.memos["solution"] == "s"

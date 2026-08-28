@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ._fields import _label, _text
 from ._html import html_to_text
@@ -22,6 +22,11 @@ class TicketContext:
 
     Holds the *raw* resolved text (``description``/``comment`` may still be HTML);
     :meth:`to_markdown` does the plain-text reduction and formatting.
+
+    ``description`` and ``comment`` are the two memos EasyVista populates by
+    default. ``memos`` carries every memo that was actually resolved, keyed by
+    the field name requested -- the API models the memo name as a path segment
+    (``GET /requests/{rfc}/{memo}``), so a deployment may carry others.
     """
 
     ticket: Request
@@ -29,6 +34,7 @@ class TicketContext:
     comment: str | None
     actions: list[Action]
     documents: list[Document]
+    memos: dict[str, str | None] = field(default_factory=dict)
 
     def to_markdown(self) -> str:
         """Render an href-free Markdown document for this ticket."""
