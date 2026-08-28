@@ -37,7 +37,8 @@ def test_catalog_guid_is_accepted_and_serialized() -> None:
 
 
 def test_catalog_code_alone_still_works() -> None:
-    assert PostRequest(catalog_code="EAZ_INC_000").to_api()["catalog_code"] == "EAZ_INC_000"
+    body = PostRequest(catalog_code="EAZ_INC_000").to_api()
+    assert body["catalog_code"] == "EAZ_INC_000"
 
 
 def test_both_catalog_identifiers_may_be_sent() -> None:
@@ -385,3 +386,37 @@ def test_origin_still_accepts_an_int() -> None:
 def test_impact_id_accepts_either_type() -> None:
     assert PostRequest(catalog_code="X", impact_id="17").to_api()["impact_id"] == "17"
     assert PostRequest(catalog_code="X", impact_id=17).to_api()["impact_id"] == 17
+
+
+_VENDOR_CREATE_FIELDS = (
+    "location_id",
+    "location_code",
+    "department_code",
+    "recipient_name",
+    "recipient_identification",
+    "requestor_identification",
+    "requestor_mail",
+    "requestor_name",
+    "parentrequest",
+    "phone",
+    "submit_date",
+)
+
+
+@pytest.mark.parametrize("name", _VENDOR_CREATE_FIELDS)
+def test_vendor_documented_create_field_is_declared(name: str) -> None:
+    """Each is tier 1 -- documented by the vendor, not verified live here."""
+    body = PostRequest(catalog_code="X", **{name: "value"}).to_api()
+    assert body[name] == "value"
+
+
+def test_workflow_start_is_a_boolean() -> None:
+    body = PostRequest(catalog_code="X", workflow_start=True).to_api()
+    assert body["workflow_start"] is True
+
+
+def test_workflow_start_false_is_sent_not_dropped() -> None:
+    """exclude_none drops None, not False -- a caller disabling the workflow
+    must not have that silently discarded."""
+    body = PostRequest(catalog_code="X", workflow_start=False).to_api()
+    assert body["workflow_start"] is False

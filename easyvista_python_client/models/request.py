@@ -156,6 +156,21 @@ class PostRequest(EasyvistaWriteModel):
     duplicates, and the caller never learns the id. Reconcile by
     ``external_reference`` rather than trusting the error.
 
+    The recipient, requestor, department and location families each offer
+    several ways to name the same thing, and the vendor documents a priority
+    order within each (id, then identification, then mail, then name). Tier 1
+    for all of them: they are vendor-documented and are **not** verified live by
+    this package's test suite, so a deployment may reject one the vendor lists.
+
+    ``submit_date`` is a string whose accepted format follows the employee's
+    location settings, so no ``datetime`` is accepted here -- this package has
+    never established a write format for an EasyVista date (both a string and an
+    int probe returned HTTP 590), which is why no write model carries one.
+
+    ``workflow_start`` is a boolean and is sent even when ``False``: it is the
+    documented way to create a ticket *without* starting its workflow, and
+    dropping a deliberate ``False`` would silently do the opposite.
+
     ``custom_fields`` values are serialized with an ``e_``
     prefix unless they already start with ``e_`` (see :class:`EasyvistaWriteModel`).
 
@@ -180,11 +195,23 @@ class PostRequest(EasyvistaWriteModel):
     description: str | None = None
     origin: int | str | None = None
     department_id: int | None = None
+    department_code: str | None = None
+    location_id: int | str | None = None
+    location_code: str | None = None
     urgency_id: int | None = None
     impact_id: int | str | None = None
     severity_id: int | None = None
     recipient_id: int | None = None
     recipient_mail: str | None = None
+    recipient_name: str | None = None
+    recipient_identification: str | None = None
+    requestor_identification: str | None = None
+    requestor_mail: str | None = None
+    requestor_name: str | None = None
+    parentrequest: str | None = None
+    phone: str | None = None
+    submit_date: str | None = None
+    workflow_start: bool | None = None
     external_reference: str | None = None
 
     @model_validator(mode="after")
