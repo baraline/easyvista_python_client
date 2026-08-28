@@ -59,6 +59,14 @@ as the preferred subject identifier. Every other field is optional.
 | `submit_date` | string | Respects the employee location's format |
 | `e_*` | various | Custom fields, 2018.1.183.0+ |
 
+**Not in the table above, and not vendor-documented at all: `workflow_start`**
+(tier 3, illustrative only). It appears only in the instance's own OpenAPI
+schema for this route (`components.schemas`, read 2026-08-27): boolean,
+"Optional. If true, starts the workflow for the created incident." Per the
+tier table above, that schema is example-derived and not a normative
+contract, so treat this field as unverified until tested against the
+deployment you use it on.
+
 ## Create an action — `POST /requests/{rfc_number}/actions` (tier 1)
 
 Source: <https://docs.easyvista.com/xwiki/bin/view/Documentation/Integration/WebService%20REST/REST%20API%20-%20Create%20an%20action%20for%20an%20incident-request/>

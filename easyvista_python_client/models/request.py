@@ -141,36 +141,52 @@ class PostRequest(EasyvistaWriteModel):
     per-catalog configuration, not an API requirement, and an instance that
     needs less is not misbehaving.
 
-    Ids may be sent as JSON numbers or as strings; both are accepted (measured
-    side by side). The documented examples quote them; these fields are typed
-    ``int`` here and serialize as numbers, which the API takes.
+    Ids may be sent as JSON numbers or as strings; both are accepted (tier 4:
+    measured on one instance, 2026-08-25). The documented examples quote them.
+    ``department_id``, ``urgency_id``, ``severity_id`` and ``recipient_id`` are
+    the fields that are genuinely int-only here -- typed ``int`` and serialized
+    as numbers, which the API takes.
 
-    ``origin`` and ``impact_id`` accept an ``int`` or a ``str`` and serialize
-    whichever was passed. The two tiers disagree about their type and both are
-    honoured rather than one being picked: the vendor documents them as strings
-    (tier 1), while ints were measured accepted on one instance (tier 4).
+    ``origin``, ``impact_id`` and ``location_id`` are typed ``int | str``
+    instead, and each is widened for a different reason -- whichever type a
+    caller passes serializes unchanged, with no coercion between them:
+
+    * ``origin`` -- the vendor documents it as a **string** (tier 1); an int
+      was separately measured accepted on one instance (tier 4: measured on
+      one instance; date not recorded).
+    * ``impact_id`` -- the vendor documents it as an **integer** (tier 1); the
+      ``str`` branch exists only so a caller who quotes it is not surprised by
+      a rejection, not because a string was independently measured landing
+      here (tier 4: measured on one instance; date not recorded).
+    * ``location_id`` -- the vendor documents it as a **string** (tier 1), the
+      same as ``origin``, but no measurement independently confirms this
+      instance also accepts an int here; the wider type is a precaution, not
+      a tier-4 finding.
 
     **A rejected create may still have created the ticket.** Measured: 12
     attempts returned 3 ``RFC_NUMBER``s and afterwards all 12 tickets existed --
-    9 of 9 failures had written a row, with the ids they were missing left null.
-    So a 590 here means *possibly created*, never *not created*: retrying
-    duplicates, and the caller never learns the id. Reconcile by
-    ``external_reference`` rather than trusting the error.
+    9 of 9 failures had written a row, with the ids they were missing left null
+    (tier 4: measured on one instance, 2026-08-25). So a 590 here means
+    *possibly created*, never *not created*: retrying duplicates, and the
+    caller never learns the id. Reconcile by ``external_reference`` rather than
+    trusting the error.
 
-    The recipient, requestor, department and location families each offer
-    several ways to name the same thing, and the vendor documents a priority
-    order within each (id, then identification, then mail, then name). Tier 1
-    for all of them: they are vendor-documented and are **not** verified live by
-    this package's test suite, so a deployment may reject one the vendor lists.
+    The recipient and requestor families each offer several ways to name the
+    same thing, and the vendor documents a priority order within each --
+    ``recipient`` id, then identification, then mail, then name; ``requestor``
+    has no id variant here, so identification, then mail, then name. The
+    department and location families are narrower: the vendor gives each only
+    an id-or-code choice (``department_id``/``department_code``,
+    ``location_id``/``location_code``), with no identification, mail or name
+    variant. Tier 1 for all of these fields: they are vendor-documented and are
+    **not** verified live by this package's test suite, so a deployment may
+    reject one the vendor lists.
 
     ``submit_date`` is a string whose accepted format follows the employee's
     location settings, so no ``datetime`` is accepted here -- this package has
-    never established a write format for an EasyVista date (both a string and an
-    int probe returned HTTP 590), which is why no write model carries one.
-
-    ``workflow_start`` is a boolean and is sent even when ``False``: it is the
-    documented way to create a ticket *without* starting its workflow, and
-    dropping a deliberate ``False`` would silently do the opposite.
+    never established a write format for an EasyVista date (both a string and
+    an int probe returned HTTP 590; tier 4: measured on one instance,
+    2026-07-16), which is why no write model carries one.
 
     ``custom_fields`` values are serialized with an ``e_``
     prefix unless they already start with ``e_`` (see :class:`EasyvistaWriteModel`).
@@ -185,9 +201,21 @@ class PostRequest(EasyvistaWriteModel):
     give you no way to *read* a catalog GUID even though the create accepts one.
 
     ``description`` supplied at create time was **not** readable back through
-    either Memo on the verified instance -- neither ``DESCRIPTION`` nor
-    ``COMMENT``. To set body text you can read again, follow the create with
+    either Memo on the verified instance (tier 4: measured on one instance,
+    2026-07-28) -- neither ``DESCRIPTION`` nor ``COMMENT``. To set body text
+    you can read again, follow the create with
     ``update_ticket(rfc, RequestUpdate(description=...))``.
+
+    ``workflow_start`` is a boolean and is sent even when ``False``, so a
+    caller disabling the workflow is not silently overridden -- that part is
+    real and unchanged. Its provenance is not like the fields above, though:
+    it does **not** appear anywhere in the vendor's own create-body
+    documentation. It is declared only in the instance's own OpenAPI schema
+    for ``POST /requests`` -- "Optional. If true, starts the workflow for the
+    created incident." -- which makes it **tier 3, illustrative only**: that
+    schema is example-derived, not a normative contract (see
+    ``docs/vendor-api-reference.md``). Treat it as unverified until tested
+    against the deployment you use it on.
     """
 
     catalog_guid: str | None = None
@@ -240,8 +268,9 @@ class RequestUpdate(EasyvistaWriteModel):
     (``docs/vendor-api-reference.md``), so the update body is not
     vendor-documented. Every field here is one verified accepted against a
     live instance **by re-reading the ticket afterwards**, not by trusting
-    HTTP 200 — that distinction matters on this API, where a write can return
-    200 and change nothing.
+    HTTP 200 (tier 4: measured on one instance across several sessions; date
+    not recorded) — that distinction matters on this API, where a write can
+    return 200 and change nothing.
 
     ``description`` writes the ticket's **COMMENT** Memo, not ``DESCRIPTION`` --
     verified live by reading the text back, and pinned by
@@ -279,14 +308,15 @@ class RequestUpdate(EasyvistaWriteModel):
       tried landed on exactly the one requested. It is addressed by
       ``STATUS_GUID``, not by ``STATUS_ID``.
     * ``severity_id`` -- rejected with HTTP 590 (code 2013). Tier 4: measured on
-      one instance.
+      one instance, 2026-08-17.
     * ``urgency_id`` -- ``URGENCY_ID`` raised HTTP 590 *and the value still
       changed*, so the API's behaviour there is not one this model can express
-      honestly. Tier 4, and with counter-evidence: the instance's own OpenAPI
-      declares ``Urgency_ID`` on ``PUT /requests/{rfc_number}`` as a **string**,
-      while the probe that measured the 590 sent an **int**. The exclusion may
-      therefore be a type mismatch of our own making rather than an API limit --
-      unresolved, tracked as O-URG in ``docs/vendor-api-reference.md``. Note the
+      honestly. Tier 4, measured 2026-08-17, and with counter-evidence: the
+      instance's own OpenAPI declares ``Urgency_ID`` on
+      ``PUT /requests/{rfc_number}`` as a **string**, while the probe that
+      measured the 590 sent an **int**. The exclusion may therefore be a type
+      mismatch of our own making rather than an API limit -- unresolved,
+      tracked as O-URG in ``docs/vendor-api-reference.md``. Note the
       counter-evidence is tier 3 (a spec *schema*, which on this API is
       example-derived and not normative), so it is a reason to test, not a
       reason to assume.
@@ -294,18 +324,20 @@ class RequestUpdate(EasyvistaWriteModel):
       Either way this is an **update**-path finding only: on the CREATE path
       ``urgency_id`` is vendor-documented and lands cleanly (see
       :class:`PostRequest`).
-
-    To send any of these anyway on a deployment where they work, use
-    ``extra_payload`` -- and re-read the ticket afterwards, because a 200 from
-    this endpoint is not a receipt.
     * a priority field — EasyVista derives priority from urgency x impact rather
       than exposing a writable column.
 
+    To send ``status_id``, ``severity_id`` or ``urgency_id`` anyway on a
+    deployment where they work, use ``extra_payload`` -- and re-read the
+    ticket afterwards, because a 200 from this endpoint is not a receipt.
+    ``extra_payload`` does **not** help with priority: there is no writable
+    column for it to reach.
+
     ``external_reference`` is capped at 50 characters: 50 accepted, 51 rejected
-    server-side (tier 4 -- bisected live on one instance). The cap is enforced
-    here so the round trip is saved; over-length is rejected rather than
-    truncated either way. A deployment with a wider column can bypass the cap
-    with ``extra_payload``.
+    server-side (tier 4 -- bisected live on one instance, 2026-08-17). The cap
+    is enforced here so the round trip is saved; over-length is rejected rather
+    than truncated either way. A deployment with a wider column can bypass the
+    cap with ``extra_payload``.
     """
 
     title: str | None = None
