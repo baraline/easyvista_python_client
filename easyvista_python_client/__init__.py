@@ -26,7 +26,7 @@ from .filters import (
     ev_starts_with_filter,
     is_safe_ev_value,
 )
-from .models.action import Action, ActionUpdate, PostAction
+from .models.action import Action, ActionUpdate, PostAction, PostTask
 from .models.asset import Asset, PostAsset
 from .models.department import Department, DepartmentUpdate, PostDepartment
 from .models.document import Document
@@ -65,6 +65,7 @@ __all__ = [
     "PostDepartment",
     "PostEmployee",
     "PostRequest",
+    "PostTask",
     "Reference",
     "Request",
     "RequestUpdate",

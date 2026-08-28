@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from pydantic import ValidationError
 
-from easyvista_python_client.models.action import Action, PostAction
+from easyvista_python_client.models.action import Action, PostAction, PostTask
 
 _CEST = timezone(timedelta(hours=2))
 
@@ -78,11 +79,13 @@ def test_action_label_is_declared_not_left_in_model_extra():
     assert action.action_label_fr == "Analyse de Resolution"
 
 
-def test_a_bracketed_action_label_is_an_untranslated_placeholder_not_a_marker():
-    """Brackets mean "no translation", not "restricted".
+def test_a_whole_bracketed_label_echoing_another_language_is_a_placeholder():
+    """Brackets around the WHOLE label, echoing another column, mean "untranslated".
 
     A single-language instance echoes the default-language text wrapped in
     ``[...]`` on every other language column; ``localized_label`` discards them.
+    See the sibling test below for the bracket convention that DOES carry
+    meaning -- conflating the two once cost this package a true finding.
     """
     from easyvista_python_client.references import localized_label
 
@@ -93,6 +96,35 @@ def test_a_bracketed_action_label_is_an_untranslated_placeholder_not_a_marker():
     }
     assert Action.model_validate(item).action_label_fr == "Analyse de Resolution"
     assert localized_label(item, "ACTION_LABEL") == "Analyse de Resolution"
+
+
+def test_a_bracketed_suffix_beside_real_translations_is_a_visibility_marker():
+    """``Commentaire [Public]`` is a real marker, not a placeholder.
+
+    Measured live 2026-08-28: type 94's sibling columns carry genuine
+    translations (``Customer Comment``, ``Kommentar des Kunden``), so the
+    French label's ``[Public]`` suffix is content -- the opposite of the
+    placeholder above, where the whole label is bracketed and duplicates
+    another language.
+
+    ``_usable_label`` already draws this line correctly: it rejects only a
+    label that is *entirely* bracketed, so a bracketed SUFFIX survives. The
+    code was right; the prose that called every bracket a placeholder was not.
+    """
+    from easyvista_python_client.references import localized_label
+
+    item = {
+        "ACTION_ID": "1",
+        "ACTION_LABEL_FR": "Commentaire [Public]",
+        "ACTION_LABEL_EN": "Customer Comment",
+    }
+    assert Action.model_validate(item).action_label_fr == "Commentaire [Public]"
+    # _EN is preferred when populated, so the English translation wins here.
+    assert localized_label(item, "ACTION_LABEL") == "Customer Comment"
+    # The point: with only the French column, the marker is KEPT, not discarded
+    # the way a fully-bracketed placeholder would be.
+    fr_only = {"ACTION_ID": "1", "ACTION_LABEL_FR": "Note Interne [Prive]"}
+    assert localized_label(fr_only, "ACTION_LABEL") == "Note Interne [Prive]"
 
 
 def test_done_by_reference_resolves_through_the_shared_resolver():
@@ -215,3 +247,47 @@ def test_post_action_carries_both_text_channels():
 def test_post_action_omits_an_unset_comment():
     """The new field must not widen the body every caller already sends."""
     assert "comment" not in PostAction(action_type_id=94, description="hi").to_api()
+
+
+def test_post_task_serializes_flat_for_the_tasks_endpoint():
+    """The task body is FLAT at the root; the action body is wrapped.
+
+    Verified live 2026-08-28 -- POST requests/{rfc}/tasks with this shape
+    returned 201 and a record already carrying END_DATE_UT.
+    """
+    assert PostTask(
+        action_type_id=95, group_id=3, description="internal note"
+    ).to_api() == {
+        "action_type_id": 95,
+        "group_id": 3,
+        "description": "internal note",
+    }
+
+
+def test_post_task_refuses_a_body_with_no_action_type():
+    """The type is mandatory AND carries the public/internal distinction."""
+    with pytest.raises(ValidationError, match="needs an action type"):
+        PostTask(group_id=3, description="orphan")
+
+
+def test_post_task_refuses_a_body_with_no_group():
+    """Omitting the group draws a 590 naming a field the caller never sent."""
+    with pytest.raises(ValidationError, match="needs an assigned group"):
+        PostTask(action_type_id=94, description="orphan")
+
+
+def test_post_task_accepts_any_of_the_three_group_spellings():
+    """group_id / group_name / group_mail are documented alternatives.
+
+    The instance OpenAPI's example shows only group_mail, which is what led an
+    earlier pass to believe a 403 on GET /groups made this endpoint unusable.
+    """
+    for kwargs in ({"group_id": 3}, {"group_name": "N1"}, {"group_mail": "a@b.fr"}):
+        assert PostTask(action_type_id=94, **kwargs).to_api()["action_type_id"] == 94
+
+
+def test_post_task_omits_unset_optional_fields():
+    """An unset elapsed_time is computed by EasyVista, not sent as null."""
+    body = PostTask(action_type_id=94, group_id=3).to_api()
+    for absent in ("elapsed_time", "time_cost", "end_date_ut", "comment"):
+        assert absent not in body

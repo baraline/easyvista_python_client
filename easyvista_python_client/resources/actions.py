@@ -13,7 +13,7 @@ from typing import Any
 
 from .._transport import RequestSpec
 from ..filters import ev_equals_filter
-from ..models.action import Action, ActionUpdate, PostAction
+from ..models.action import Action, ActionUpdate, PostAction, PostTask
 from ..pagination import SearchResult, extract_records
 from .descriptor import ResourceDescriptor, build_get, build_search, build_update
 
@@ -28,6 +28,26 @@ def build_create_action(
     # Create is nested under the request, one action per call, with a bare body
     # (NOT wrapped in an ``actions`` array) — verified against a live instance.
     spec = RequestSpec("POST", f"requests/{rfc_number}/actions", json=payload.to_api())
+
+    def parse(data: Any) -> Action:
+        records = extract_records(data)
+        return Action.model_validate(records[0] if records else data)
+
+    return spec, parse
+
+
+def build_create_task(
+    rfc_number: str, payload: PostTask
+) -> tuple[RequestSpec, Callable[[Any], Action]]:
+    """Build ``POST requests/{rfc}/tasks`` -- an action created already ENDED.
+
+    Two differences from :func:`build_create_action`, both measured live
+    2026-08-28. The body is **flat** at the root where the action create wraps
+    its fields, and the record arrives with ``END_DATE_UT`` and
+    ``STATUS_ID_ON_TERMINATE`` already set, so it renders in the ticket history
+    with its text instead of as an open row with none.
+    """
+    spec = RequestSpec("POST", f"requests/{rfc_number}/tasks", json=payload.to_api())
 
     def parse(data: Any) -> Action:
         records = extract_records(data)

@@ -214,3 +214,84 @@ class ActionUpdate(EasyvistaWriteModel):
 
     description: str | None = None
     comment: str | None = None
+
+
+class PostTask(EasyvistaWriteModel):
+    """Payload for creating a **task** on a ticket -- an action that arrives ended.
+
+    **This is the model to use for a comment.** A task and an action are the
+    same underlying record; they differ in the state they are born in:
+
+    ==================  ================================  ========================
+    ..                  ``POST requests/{rfc}/actions``   ``POST requests/{rfc}/tasks``
+    ==================  ================================  ========================
+    body shape          wrapped in ``action``             flat at the root
+    resulting state     **open** -- work still to do      **ended** -- work reported
+    in the UI           a pending row, body NOT shown     a history entry WITH its text
+    needs ending after  yes                               no
+    ==================  ================================  ========================
+
+    So an action models work someone still has to do, and only becomes a
+    readable history entry once it is ended. A task is created already ended,
+    which is why one call is enough to post a comment. Verified live
+    2026-08-28: two tasks (types 94 and 95) came back with ``END_DATE_UT`` and
+    ``STATUS_ID_ON_TERMINATE`` already set, attributed to the API account.
+    Vendor documentation:
+    https://docs.easyvista.com/docs/rest-api-create-a-task-for-an-incident-request.md
+
+    Prefer this over :class:`PostAction` unless you genuinely mean "someone
+    must still do this" -- ending an action afterwards needs
+    ``PUT actions/{rfc_number}``, which returned ``590 Action not found`` for
+    every documented form on the verified instance.
+
+    **Public vs internal is the action type**, not a flag on the body. On the
+    verified instance type 94 is ``Commentaire [Public]`` / ``Customer
+    Comment`` and type 95 is ``Note Interne [Prive]`` / ``Internal Note``.
+    Those ids are per-deployment; recover yours from the labels on existing
+    actions (see :class:`PostAction`). Unlike an action of type 95, a task
+    needs no ``parent_action_id``.
+
+    Mandatory (tier 1): ``action_type_id`` **or** ``action_type_name``, and one
+    of ``group_id`` / ``group_name`` / ``group_mail``. A body missing either is
+    refused locally rather than drawing an HTTP 590 that names no field.
+    """
+
+    action_type_id: int | str | None = None
+    action_type_name: str | None = None
+    group_id: int | str | None = None
+    group_name: str | None = None
+    group_mail: str | None = None
+    description: str | None = None
+    comment: str | None = None
+    # The vendor example spells this ``Elapsed_Time``; JSON object names are
+    # case-insensitive on this API (tier 1), so the snake_case spelling ships
+    # and no alias is needed -- which also keeps ``to_api()``'s plain
+    # ``model_dump()`` correct. Left unset, EasyVista computes it.
+    elapsed_time: int | str | None = None
+    time_cost: int | str | None = None
+    contractual_cost: int | str | None = None
+    creation_date_ut: str | None = None
+    start_date_ut: str | None = None
+    end_date_ut: str | None = None
+
+    @model_validator(mode="after")
+    def _require_a_type_and_a_group(self) -> PostTask:
+        """Refuse a body the API would reject with an unattributable 590."""
+        if self.action_type_id is None and self.action_type_name is None:
+            raise ValueError(
+                "a task needs an action type: pass action_type_id (preferred) or "
+                "action_type_name. The type also carries the public/internal "
+                "distinction -- read the ids off ACTION_LABEL_* on existing actions."
+            )
+        no_group = (
+            self.group_id is None
+            and self.group_name is None
+            and self.group_mail is None
+        )
+        if no_group:
+            raise ValueError(
+                "a task needs an assigned group: pass group_id, group_name or "
+                "group_mail. Omitting it draws HTTP 590 'Le groupe (Group_...) "
+                "est invalide' (measured 2026-08-28)."
+            )
+        return self

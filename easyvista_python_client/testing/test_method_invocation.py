@@ -34,6 +34,7 @@ from easyvista_python_client import (
     PostDepartment,
     PostEmployee,
     PostRequest,
+    PostTask,
     RequestUpdate,
 )
 
@@ -74,6 +75,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
     "count_tickets": ((), {}),
     "create_action": (("I1", PostAction()), {}),
+    "create_task": (("I1", PostTask(action_type_id=94, group_id=3)), {}),
     "create_asset": ((PostAsset(catalog_id=1),), {}),
     "create_department": ((PostDepartment(),), {}),
     "create_employee": ((PostEmployee(),), {}),

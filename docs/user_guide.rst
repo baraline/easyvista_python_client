@@ -306,28 +306,71 @@ the text sent.
        comment="Internal working note.",
    )
 
-.. important::
+Tasks vs. actions: use a task for a comment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   **A comment is an action that has been ended, and creating one is only half
-   the job.** An action is a unit of work: created *open* (a task still to do),
-   then *ended* (work reported). Only an ended action appears in the ticket's
-   history with its text visible — an open one shows as a pending action row
-   with **no body**, which looks exactly as though the text was lost. It was
-   not; the action was simply never ended. Verified live on 2026-08-28.
+A task and an action are the **same underlying record**. They differ only in
+the state they are born in, and that difference decides whether a reader ever
+sees the text:
 
-   Ending sets ``START_DATE_UT``, ``END_DATE_UT``, ``ELAPSED_TIME`` and
-   ``STATUS_ID_ON_TERMINATE``, fills ``DONE_BY_ID``, and **clears**
-   ``GROUP_ID``. None of those can be set on create — sending them returns
-   HTTP 200 and drops them in silence.
+.. list-table::
+   :header-rows: 1
+   :widths: 26 37 37
 
-   The vendor documents ending as ``PUT actions/{rfc_number}`` with the body
-   wrapped in ``end_action``, dates in your instance's ``DATE_FORMAT``
-   (``dd/mm/yyyy`` on the verified instance, **not** ISO 8601). **This package
-   does not implement it**, and on the verified instance every documented form
-   returned ``590 Action not found`` — including for a user who could end the
-   same action through the UI. That points at an instance or profile
-   restriction rather than a payload problem; raise it with your EasyVista
-   administrator.
+   * - ..
+     - :meth:`~easyvista_python_client.EasyvistaClient.create_action`
+     - :meth:`~easyvista_python_client.EasyvistaClient.create_task`
+   * - endpoint
+     - ``POST requests/{rfc}/actions``
+     - ``POST requests/{rfc}/tasks``
+   * - body shape
+     - wrapped
+     - flat at the root
+   * - born
+     - **open** — work still to do
+     - **ended** — work reported
+   * - in the UI
+     - a pending row, text **not** shown
+     - a history entry **with** its text
+   * - needs ending after
+     - yes
+     - no
+   * - ``parent_action_id``
+     - required for an internal-note type
+     - not needed
+   * - use it for
+     - work someone must still do
+     - **comments**
+
+.. code-block:: python
+
+   from easyvista_python_client import PostTask
+
+   client.create_task(
+       ticket.rfc_number,
+       PostTask(
+           action_type_id=95,           # instance-specific: the internal type
+           group_id=3,                  # instance-specific
+           description="Internal working note.",
+       ),
+   )
+
+Verified live on 2026-08-28: tasks came back with ``END_DATE_UT`` and
+``STATUS_ID_ON_TERMINATE`` already set, and their text appeared in the ticket
+history.
+
+.. warning::
+
+   **Creating an action and stopping there loses nothing but shows nothing.**
+   The text is stored; the row simply renders without it until the action is
+   ended. Ending is vendor-documented as ``PUT actions/{rfc_number}`` with the
+   body wrapped in ``end_action`` and dates in your instance's ``DATE_FORMAT``
+   (``dd/mm/yyyy`` on the verified instance, **not** ISO 8601) — but this
+   package does **not** implement it, because every documented form returned
+   ``590 Action not found`` on the verified instance, including for a user who
+   could end the same action through the UI. If you need to end actions
+   programmatically, raise that with your EasyVista administrator; for
+   comments, use a task and the question does not arise.
 
 .. warning::
 

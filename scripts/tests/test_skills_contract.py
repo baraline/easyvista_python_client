@@ -194,6 +194,7 @@ _WRITE_MODELS = {
     "PostRequest": ev.PostRequest,
     "RequestUpdate": ev.RequestUpdate,
     "PostAction": ev.PostAction,
+    "PostTask": ev.PostTask,
     "ActionUpdate": ev.ActionUpdate,
     "PostAsset": ev.PostAsset,
     "PostDepartment": ev.PostDepartment,

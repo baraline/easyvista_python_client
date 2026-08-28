@@ -62,34 +62,51 @@ PostAction(
 )
 ```
 
-## A comment is an action that has been ENDED
+## To post a comment, create a TASK — not an action
 
-**Read this before telling anyone how to post a comment.** An action is a unit
-of work: created **open** (a task still to do), then **ended** (work reported).
-Only an ended action appears in the ticket history with its text visible. An
-open one shows as a pending action row with **no body** — which is exactly what
-a caller sees if they create an action and stop there, and it looks like the
-text was lost. It was not; the action was simply never ended.
+**This is the single most important thing in this skill.** A task and an action
+are the same underlying record; they differ in the state they are born in, and
+that decides whether anyone ever sees the text.
 
-Verified live 2026-08-28: a type-95 action created through this package stayed
-invisible as a message until it was ended, at which point its `description`
-appeared in the history.
+| | `create_action` | `create_task` |
+|---|---|---|
+| endpoint | `POST requests/{rfc}/actions` | `POST requests/{rfc}/tasks` |
+| body | wrapped | **flat** at the root |
+| born | **open** — work still to do | **ended** — work reported |
+| in the UI | pending row, text **not** shown | history entry **with** its text |
+| needs ending | yes | no |
+| `parent_action_id` | required for an internal-note type | not needed |
+| use for | work someone must still do | **comments** |
 
-Ending sets `START_DATE_UT`, `END_DATE_UT`, `ELAPSED_TIME` and
-`STATUS_ID_ON_TERMINATE`, fills `DONE_BY_ID`, and **clears** `GROUP_ID`. None
-of those can be set on create — sending them returns HTTP 200 and drops them
-silently.
+```python
+from easyvista_python_client import PostTask
 
-The vendor documents ending as `PUT actions/{rfc_number}`, body wrapped in
-`end_action` (`doneby_mail`, `start_date`, `end_date`, `elapsed_time`; omit
-`action_id` to end every open action), dates in the instance's `DATE_FORMAT`
-(`dd/mm/yyyy` on the verified instance, **not** ISO 8601) —
+client.create_task(
+    "YOUR_RFC_NUMBER",
+    PostTask(
+        action_type_id=YOUR_INTERNAL_TYPE_ID,
+        group_id=YOUR_GROUP_ID,
+        description="Internal working note.",
+    ),
+)
+```
+
+Verified live 2026-08-28: tasks came back with `END_DATE_UT` and
+`STATUS_ID_ON_TERMINATE` already set, and their text appeared in the history.
+`action_type_id` and one of `group_id` / `group_name` / `group_mail` are
+mandatory; `PostTask` refuses a body missing either rather than letting the
+server answer with a 590 that names no field.
+
+**If a caller creates an action and stops**, nothing is lost — the text is
+stored — but the row renders without it until the action is ended. Ending is
+vendor-documented as `PUT actions/{rfc_number}` with an `end_action` wrapper
+and dates in the instance's `DATE_FORMAT` (`dd/mm/yyyy`, **not** ISO 8601) —
 [docs](https://docs.easyvista.com/docs/rest-api-finish-an-action-attached-to-an-incident-request.md).
-**This package does not implement it and it could not be made to work on the
-verified instance**: every documented form returned `590 Action not found`,
-including for a user who could end the same action in the UI. That points at an
-instance/profile restriction, not a payload error. Raise it with the
-deployment's administrator rather than retrying variants.
+**This package does not implement it**: every documented form returned
+`590 Action not found` on the verified instance, including for a user who could
+end the same action in the UI. That is an instance/profile restriction to raise
+with an administrator — and for comments it never arises, because a task is
+born ended.
 
 ## Visibility is by action TYPE, and the labels say which
 

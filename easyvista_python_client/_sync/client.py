@@ -30,7 +30,12 @@ from easyvista_python_client.directory import (
 from easyvista_python_client.exceptions import EasyvistaAuthError, EasyvistaNotFound
 from easyvista_python_client.field_model import parse_memo
 from easyvista_python_client.filters import ev_equals_filter, is_safe_ev_value
-from easyvista_python_client.models.action import Action, ActionUpdate, PostAction
+from easyvista_python_client.models.action import (
+    Action,
+    ActionUpdate,
+    PostAction,
+    PostTask,
+)
 from easyvista_python_client.models.asset import Asset, PostAsset
 from easyvista_python_client.models.department import (
     Department,
@@ -292,15 +297,46 @@ class EasyvistaClient:
         diff :meth:`list_actions` across the call — see
         ``integration_tests/test_live_ticket_history.py`` for the pattern.
 
-        An action carries no visibility flag, so an internal note is simply a
-        different ``action_type_id`` — see
-        :class:`~easyvista_python_client.PostAction`.
+        **For a comment, use :meth:`create_task` instead.** An action is created
+        **open** — work still to do — and an open action shows in the UI as a
+        pending row with its text NOT displayed, which reads as though the note
+        was lost. Only an *ended* action becomes a readable history entry, and
+        ending one needs ``PUT actions/{rfc_number}``, which returned
+        ``590 Action not found`` for every documented form on the verified
+        instance. :meth:`create_task` posts the same record already ended, in
+        one call. Reach for ``create_action`` only when you genuinely mean
+        "someone must still do this".
+
+        Public versus internal is the ``action_type_id``, not a flag on the
+        body — see :class:`~easyvista_python_client.PostAction`.
 
         Creation is gated by the workflow's current stage: an otherwise valid
         payload can be refused 590/2013 on a ticket that accepted the same body
         earlier.
         """
         spec, parse = actions_res.build_create_action(rfc_number, action)
+        return parse(self._transport.send(spec))
+
+    def create_task(self, rfc_number: str, task: PostTask) -> Action:
+        """Create a task on a ticket — an action that arrives already ENDED.
+
+        **This is how you post a comment.** A task and an action are the same
+        underlying record, created in different states: an action starts open
+        (a pending row whose text the UI does not display), a task starts
+        ended, so it lands in the ticket's history with its text visible. One
+        call, no termination step. Verified live 2026-08-28: tasks came back
+        with ``END_DATE_UT`` and ``STATUS_ID_ON_TERMINATE`` already set.
+
+        Public versus internal is carried by ``action_type_id`` — the type's
+        own ``ACTION_LABEL_*`` columns say which it is. Unlike an internal-note
+        *action*, a task needs no ``parent_action_id``.
+
+        Like :meth:`create_action`, the returned :class:`Action` carries **no
+        usable ``action_id``** — the create response is an HREF naming the
+        parent request. Diff :meth:`list_actions` across the call to address
+        what you just created.
+        """
+        spec, parse = actions_res.build_create_task(rfc_number, task)
         return parse(self._transport.send(spec))
 
     def list_actions(
