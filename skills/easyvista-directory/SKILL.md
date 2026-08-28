@@ -92,7 +92,7 @@ from easyvista_python_client import EasyvistaClient
 with EasyvistaClient.from_env() as client:
     note = client.get_department_comment(42)
     if note is None:
-        print("no note, or the profile cannot read it")
+        print("no note")  # a 403/404 raises instead of returning None -- see Gotchas
     else:
         print(repr(note))  # "" means the memo exists and is empty
 ```

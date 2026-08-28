@@ -2,19 +2,29 @@
 """Validate the documentation examples against the real library (and, optionally,
 a live EasyVista test instance).
 
-The examples in ``docs/user_guide.rst`` / ``docs/installation.rst`` are the
-contract this script checks. It runs three tiers:
+This script does **not** read the documents. It checks a *hand-maintained
+transcription* of what ``docs/user_guide.rst`` / ``docs/installation.rst``
+claim -- no ``.rst`` file is ever opened, and nothing mechanically ties a check
+here to the passage it stands for. A doc example nobody transcribed cannot fail
+here, so a green run is evidence about the transcribed subset only, not about
+the documents. Keep that in mind before trusting it: prose examples in
+particular (inline literals in a bullet, rather than a ``code-block``) have
+gone stale under a green run. It runs three tiers:
 
 1. **offline** (always): every symbol, model field, method signature, attribute
-   and serialization claim the docs make is exercised through the *public*
-   package surface (``import easyvista_python_client``). No network. This is the
-   part that catches a doc that names a field/kwarg/attribute the code does not
-   have.
+   and serialization claim *transcribed below* is exercised through the
+   *public* package surface (``import easyvista_python_client``). No network.
+   This is the part that catches a transcribed claim naming a
+   field/kwarg/attribute the code does not have.
 
 2. **live read-only** (if credentials resolve): the read examples
    (``search_tickets``, ``get_ticket``, ``search_assets``, ``iter_tickets``,
    ``list_actions``, ``list_documents``) plus the *rejected* create that the docs
-   use to demonstrate ``EasyvistaValidationError`` (no record is created).
+   use to demonstrate ``EasyvistaValidationError``. That last one is **not**
+   read-only: a 590 rejection was measured to leave a row behind anyway (one
+   instance, 2026-08-25 -- 12 attempts, 3 RFC numbers returned, all 12
+   tickets present afterwards), so this tier can leak one ticket per run. See
+   ``rejected_create`` below.
 
 3. **live writes** (only with ``--writes`` AND credentials): the create / update
    / close / action / document / asset examples, which create real records on
@@ -720,11 +730,22 @@ def run_live_readonly(
             )
 
         def rejected_create() -> None:
-            # The error-handling example: missing mandatory title is rejected
-            # server-side (HTTP 590) -- no ticket is created, so this is safe.
-            # catalog_code must be *valid* on this instance so the missing title
-            # is the payload's only defect -- an unknown catalog would also 590,
-            # and the assertion below couldn't tell the two failures apart.
+            # The error-handling example: an under-specified body (a valid
+            # catalog, but none of the ids the catalog needs) is rejected
+            # server-side with HTTP 590. `title` is NOT the mandatory field --
+            # the full documented body with no title creates fine -- so do not
+            # describe this as a missing-title test.
+            #
+            # NOT read-only. A 590 rejection was measured to write the row
+            # anyway (one instance, 2026-08-25: 12 attempts, 3 RFC_NUMBERs
+            # returned, all 12 tickets present afterwards), so each run of this
+            # check can leave an orphan on the target instance. It is left in
+            # place because the docs demonstrate exactly this call, but it is
+            # the one live-read-only check that writes.
+            #
+            # catalog_code must be *valid* on this instance so the missing ids
+            # are the payload's only defect -- an unknown catalog would also
+            # 590, and the assertion below couldn't tell the two failures apart.
             try:
                 client.create_ticket(PostRequest(catalog_code=catalog_code))
             except EasyvistaValidationError as exc:
@@ -734,13 +755,13 @@ def run_live_readonly(
 
         if catalog_code:
             r.check(
-                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "create_ticket(under-specified) -> EasyvistaValidationError(590)"
                 "  [Error handling]",
                 rejected_create,
             )
         else:
             r.skip(
-                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "create_ticket(under-specified) -> EasyvistaValidationError(590)"
                 "  [Error handling]",
                 "no EASYVISTA_TEST_CATALOG_CODE"
                 " (or secrets/easyvista_test_catalog_code)",

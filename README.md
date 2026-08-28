@@ -72,6 +72,12 @@ with EasyvistaClient(config) as client:
 > `catalog_code`. Anything beyond that is catalog-specific and enforced server-side, so a
 > field a given catalog insists on raises `EasyvistaValidationError` (HTTP 590, code 2013)
 > — it is not retried, and the message names no field.
+>
+> **Do not retry that 590 blindly.** Measured on one instance (2026-08-25), a rejected
+> create may still have created the ticket: 12 attempts returned 3 `RFC_NUMBER`s and
+> afterwards all 12 tickets existed. A 590 means *possibly created*, never *not created*.
+> Set `external_reference` on every create and reconcile by that marker — it survives the
+> failed insert and is searchable.
 
 ## Assets and documents
 
@@ -106,10 +112,18 @@ with EasyvistaClient(EasyvistaConfig.from_env()) as client:
 ## Usage (async)
 
 ```python
+import asyncio
+
 from easyvista_python_client import AsyncEasyvistaClient, EasyvistaConfig
 
-async with AsyncEasyvistaClient(EasyvistaConfig.from_env()) as client:
-    ticket = await client.get_ticket("I240101_0001")
+
+async def main():
+    async with AsyncEasyvistaClient(EasyvistaConfig.from_env()) as client:
+        ticket = await client.get_ticket("I240101_0001")
+        print(ticket.rfc_number)
+
+
+asyncio.run(main())
 ```
 
 ## Configuration via environment

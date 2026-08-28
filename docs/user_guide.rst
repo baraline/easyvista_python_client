@@ -7,9 +7,10 @@ equivalents, which mirror every method name.
 
 .. note::
 
-   Values such as the server host, ``account``, ``catalog_code``, the close ``status_guid``, and
-   ``group_id`` are **instance-specific**. The values below are illustrative; replace them with the
-   ones from your EasyVista instance.
+   Values such as the server host, ``account``, ``catalog_code``, the close ``status_guid``,
+   ``group_id``, ``action_type_id``, ``origin``, ``department_id``, ``urgency_id`` and
+   ``impact_id`` are **instance-specific**. The values below are illustrative; replace them with
+   the ones from your EasyVista instance.
 
 Creating a client
 ------------------
@@ -140,12 +141,22 @@ every catalog tried on one instance, which makes it a safe default rather than a
            description="The 3rd-floor printer is offline",
            origin=7,
            department_id=9,               # instance-specific; see "Departments and employees"
-           urgency_id=8,                  # 4 = total outage, 7 = penalizing, 8 = invisible
-           impact_id=28,                  # 17 = critical-prod, 21 = non-critical, 28 = test
+           urgency_id=8,                  # instance-specific placeholder -- see the note below
+           impact_id=28,                  # instance-specific placeholder -- see the note below
            recipient_mail="user@example.com",
        )
    )
    print(ticket.rfc_number)
+
+.. note::
+
+   ``origin``, ``department_id``, ``urgency_id`` and ``impact_id`` are ids, and what each id
+   *means* is per-instance configuration: nothing above is a portable legend, and an id copied
+   from this page is not guaranteed to name anything on your deployment. Read yours off a ticket
+   that already carries the value you want — ``ticket.reference("URGENCY")`` and
+   ``ticket.reference("IMPACT")`` yield the id, plus the human label when the instance projects
+   one and ``None`` when it does not (``.display`` falls back to the id) — or ask your EasyVista
+   administrator.
 
 Create several tickets in one call with :meth:`~easyvista_python_client.EasyvistaClient.create_tickets`:
 
@@ -302,9 +313,11 @@ uses**, pin them in your own configuration, and pass the one you want:
 
 .. code-block:: python
 
+   INTERNAL_NOTE_TYPE_ID = 20  # ask your EasyVista administrator -- not discoverable
+
    client.create_action(
        ticket.rfc_number,
-       PostAction(action_type_id=internal_note_type_id, description="Internal note"),
+       PostAction(action_type_id=INTERNAL_NOTE_TYPE_ID, description="Internal note"),
    )
 
 To see which types a ticket already uses — useful when reconciling what the
@@ -381,13 +394,17 @@ The name is ``stream_`` rather than ``iter_`` because every ``iter_*`` method on
 client iterates *records*; this one iterates the bytes of a single document.
 
 The async client streams with ``async for`` — like the ``iter_*`` methods and unlike
-every other method on it, ``stream_document`` is not awaited:
+every other method on it, ``stream_document`` is not awaited. ``aclient`` below is an
+:class:`~easyvista_python_client.AsyncEasyvistaClient`; the two surfaces are not
+interchangeable behind one name, because the synchronous ``stream_document`` returns a
+plain iterator:
 
 .. code-block:: python
 
-   with Path("downloaded.pdf").open("wb") as sink:
-       async for chunk in client.stream_document(attachments[0]):
-           sink.write(chunk)
+   async def save(aclient, document):
+       with Path("downloaded.pdf").open("wb") as sink:
+           async for chunk in aclient.stream_document(document):
+               sink.write(chunk)
 
 .. note::
 
@@ -604,16 +621,19 @@ follow the API's offset pagination until ``@next`` is exhausted or ``max_records
    for asset in client.iter_assets(search=tag_filter, page_size=100):
        print(asset.asset_tag)
 
-The async client paginates with ``async for``:
+The async client paginates with ``async for``. ``aclient`` is an
+:class:`~easyvista_python_client.AsyncEasyvistaClient`: the synchronous ``iter_tickets``
+returns a plain iterator, so the two cannot share one name.
 
 .. code-block:: python
 
    from easyvista_python_client import ev_equals_filter
 
-   async for ticket in client.iter_tickets(
-       search=ev_equals_filter("STATUS_ID", 3), page_size=100
-   ):
-       print(ticket.rfc_number)
+   async def sweep(aclient):
+       async for ticket in aclient.iter_tickets(
+           search=ev_equals_filter("STATUS_ID", 3), page_size=100
+       ):
+           print(ticket.rfc_number)
 
 .. _change-window-filtering:
 
@@ -736,12 +756,16 @@ Timestamps
 
 ``Request``'s timestamp fields (``submit_date_ut``, ``creation_date_ut``,
 ``max_resolution_date_ut``, ``expected_date_ut``, ``end_date_ut``,
-``last_update``) and ``Employee.last_update`` are timezone-aware
+``last_update``), ``Employee.last_update``, and ``Action.created_at`` /
+``Action.updated_at`` are timezone-aware
 :class:`datetime.datetime`, parsed from EasyVista's ISO-8601-with-offset wire
 format (``2026-08-17T15:40:41.610+02:00``, millisecond precision — verified
 live 2026-08-17). An unset date is ``None``. The ``_UT`` suffix is a naming
 convention, **not** a promise of UTC normalization: these columns carry the
-same local offset as ``LAST_UPDATE``.
+same local offset as ``LAST_UPDATE``. ``Action`` is easy to miss here: it names
+the identical ``CREATION_DATE_UT`` / ``LAST_UPDATE`` wire columns
+``created_at`` / ``updated_at``, so an action export is retyped exactly like a
+ticket export and hits the JSON note below the same way.
 
 Only the *read* path is parsed. The accepted *write* format is still
 unverified, so no write model accepts a ``datetime`` — set a date-typed field
@@ -759,17 +783,19 @@ is still the raw wire string, so within one record dump
 
 .. note::
 
-   **A record dump is no longer directly JSON-serialisable.** ``model_dump()``
-   and ``classify_fields()`` yield ``datetime`` objects for the columns above, so
-   both ``json.dumps(ticket.model_dump(by_alias=True))`` and
-   ``json.dumps(ticket.classify_fields().official)`` raise
+   **A record dump is no longer directly JSON-serialisable.** This is true of
+   *any* record carrying one of the columns above — a ``Request``, an
+   ``Employee`` or an ``Action`` alike. ``model_dump()`` and
+   ``classify_fields()`` yield ``datetime`` objects, so both
+   ``json.dumps(record.model_dump(by_alias=True))`` and
+   ``json.dumps(record.classify_fields().official)`` raise
    ``TypeError: Object of type datetime is not JSON serializable``. For a dump,
    pass ``model_dump(mode="json")``. ``classify_fields()`` takes **no arguments**,
    so there is nowhere to put that keyword: render the ``datetime`` values with
    :func:`~easyvista_python_client.format_ev_datetime` before serialising the
    bucket, or classify the JSON-mode dump yourself — the buckets are keyed by
-   wire column name, so ``{k: dumped[k] for k in ticket.classify_fields().official}``
-   over ``dumped = ticket.model_dump(mode="json", by_alias=True)`` gives the same
+   wire column name, so ``{k: dumped[k] for k in record.classify_fields().official}``
+   over ``dumped = record.model_dump(mode="json", by_alias=True)`` gives the same
    split with serialisable values.
 
 Use :func:`~easyvista_python_client.format_ev_datetime` to render a
@@ -828,9 +854,10 @@ ones give human labels (``STATUS``, ``DEPARTMENT``, ``CATALOG_REQUEST``), and id
 Classifying and resolving fields
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:meth:`~easyvista_python_client.EasyvistaModel.classify_fields` partitions a record's fields into
-four buckets: ``official``, ``custom`` (``e_*`` fields not declared by the model), ``available``
-(``AVAILABLE_FIELD_n`` slots), and ``links`` (href-only sub-resource references). Use
+``classify_fields()`` — available on every read model — partitions a record's fields into the
+four buckets of a :class:`~easyvista_python_client.field_model.FieldClassification`: ``official``,
+``custom`` (``e_*`` fields not declared by the model), ``available`` (``AVAILABLE_FIELD_n``
+slots), and ``links`` (href-only sub-resource references). Use
 :meth:`~easyvista_python_client.EasyvistaClient.resolve_memo` to fetch a link field's text.
 
 .. code-block:: python
@@ -902,17 +929,35 @@ plain-text 503, or any other shape this client does not recognize.
        EasyvistaError,
        EasyvistaNotFound,
        EasyvistaValidationError,
+       PostRequest,
    )
 
    try:
-       client.create_ticket(PostRequest(catalog_code="INC_STANDARD"))  # missing mandatory title
+       # Under-specified: a subject but no origin/department_id/urgency_id/impact_id.
+       # `title` is not what makes a create complete -- the fuller body above was
+       # accepted with no title.
+       client.create_ticket(PostRequest(catalog_code="INC_STANDARD"))
    except EasyvistaValidationError as exc:
-       # HTTP 590, EasyVista error_code 2013 — a rejected create. Deterministic, not retried.
+       # HTTP 590, EasyVista error_code 2013 — a rejected create. This client does
+       # not retry it; read the warning below before you retry it yourself.
        print("Validation failed:", exc.ev_message)
    except EasyvistaNotFound:
        print("No such record")
    except EasyvistaError as exc:
        print("EasyVista error:", exc.status_code, exc)
+
+.. warning::
+
+   **A rejected create may still have created the ticket.** Measured on one instance
+   (2026-08-25): 12 under-specified attempts returned 3 ``RFC_NUMBER``\ s, and afterwards all 12
+   tickets existed — 9 of the 9 failures had written a row, with the ids they were missing left
+   null. So an :class:`~easyvista_python_client.EasyvistaValidationError` from ``create_ticket``
+   means *possibly created*, never *not created*: wrapping this ``except`` in a retry duplicates
+   tickets, and the caller never learns the id of the one it just made. Set
+   ``external_reference`` on every create — it survives the failed insert and is searchable — and
+   reconcile by that marker rather than trusting the error. This is a single-instance measurement,
+   not a vendor-documented behaviour; treat it as the floor, not the ceiling, of what a 590 can
+   leave behind.
 
 The hierarchy is: :class:`~easyvista_python_client.EasyvistaAuthError` (401/403),
 :class:`~easyvista_python_client.EasyvistaNotFound` (404),
