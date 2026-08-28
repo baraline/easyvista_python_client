@@ -206,9 +206,10 @@ in it reaches the wire exactly as written.
 Three properties are worth knowing before you reach for it:
 
 * It is merged **last and wins**. A key that matches a declared field, or a key ``custom_fields``
-  produced, replaces it — matched **ignoring case**, because EasyVista's field names are
-  case-insensitive. So ``extra_payload={"URGENCY_ID": 4}`` beside ``urgency_id=8`` sends
-  ``URGENCY_ID`` alone, not both.
+  produced, replaces it — matched **ignoring case**. So
+  ``RequestUpdate(impact_id=8, extra_payload={"IMPACT_ID": 4})`` sends ``IMPACT_ID`` alone, not
+  both. The case-insensitive match is what the vendor documents for the ticket *create* body; the
+  other write bodies are assumed to match it, which is the safe assumption in either direction.
 * It **bypasses this model's validation entirely**. Nothing checks the name, the type or a length
   cap; a typo reaches the server as a typo.
 * Every field these models decline to declare rests on behaviour measured against a single

@@ -64,7 +64,13 @@ deployment needs before you build a payload for it.
    locally. Add `title`, and note that most catalogs also want `origin`,
    `department_id`, `urgency_id` and `impact_id`: that fuller body was accepted
    on every catalog tried on one instance, so it is a hedge against per-catalog
-   configuration rather than an API requirement.
+   configuration rather than an API requirement. `PostRequest` declares the rest
+   of the vendor's create body too — `description`, `external_reference`,
+   `severity_id`, `recipient_id` / `recipient_mail` / `recipient_name` /
+   `recipient_identification`, `requestor_mail` / `requestor_name` /
+   `requestor_identification`, `location_id` / `location_code`,
+   `department_code`, `parentrequest`, `phone` and `submit_date` — so check the
+   model before reaching for an escape hatch.
 3. Put instance-specific columns in `custom_fields`; they serialize with an
    `e_` prefix unless already prefixed. For an **official** column a model does
    not declare, use `extra_payload` instead — un-prefixed, merged last (a key
