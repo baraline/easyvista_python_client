@@ -805,10 +805,17 @@ class EasyvistaClient:
         ``memo_fields`` names which Memo sub-resources to resolve, defaulting to
         the two EasyVista populates by default. The API models the memo name as
         a path segment (``GET /requests/{rfc}/{memo}``), so an instance
-        configured with a different body memo is reached by naming it here. Every
-        resolved memo lands in :attr:`TicketContext.memos`; ``description`` and
-        ``comment`` additionally keep their own attributes, and are ``None`` when
-        not requested.
+        configured with a different body memo is reached by naming it here
+        (tier 2 -- ``docs/vendor-api-reference.md``: declared in the instance's
+        OpenAPI ``paths``). Every resolved memo lands in
+        :attr:`TicketContext.memos`; ``description`` and ``comment``
+        additionally keep their own attributes, and are ``None`` when not
+        requested.
+
+        Pass a tuple or list, not a bare string: ``str`` itself satisfies
+        ``Sequence[str]``, so ``memo_fields="solution"`` type-checks and then
+        iterates individual characters, issuing one nonsense sub-resource
+        request per letter instead of the one you meant.
 
         ``resolve_action_bodies`` (default on) additionally fetches each action
         item-level and resolves its note text, because ``list_actions`` does not
@@ -823,23 +830,25 @@ class EasyvistaClient:
         :meth:`TicketContext.to_markdown`'s rendered log — is silently truncated
         with no error. Raise ``default_max_rows`` if completeness matters.
 
-        On the async surface the independent requests (the two memos plus the
-        actions and documents lists) are issued concurrently, in up to three
-        waves; on the sync surface they run one after another in source order,
-        costing ``4 + 2N`` serial round trips for a ticket with ``N`` actions.
-        Measured against a live instance on a 19-action ticket: 5.31s
-        concurrent, 14.65s serial.
+        On the async surface the independent requests (the requested memos
+        plus the actions and documents lists) are issued concurrently, in up
+        to three waves; on the sync surface they run one after another in
+        source order, costing ``len(memo_fields) + 2 + 2N`` serial round
+        trips for a ticket with ``N`` actions. Measured against a live
+        instance on a 19-action ticket with the default two-memo
+        ``memo_fields``: 5.31s concurrent, 14.65s serial.
 
-        Peak in-flight on the async surface is four sub-resource requests, then
-        up to ``_ACTION_FANOUT`` action-body resolutions; the sync surface
-        issues one request at a time throughout. On a hard failure (5xx, a
-        transport error) siblings already in flight on the async surface run to
-        completion before the error propagates, so a failing call there can
-        issue more requests than the sequential surface does. That is the
-        deliberate trade: settling every sibling is what keeps an orphaned
-        request from outliving the call that issued it, and what makes the
-        exception a caller sees the one the sequential surface would have
-        raised rather than whichever branch happened to fail soonest.
+        Peak in-flight on the async surface is ``len(memo_fields) + 2``
+        sub-resource requests, then up to ``_ACTION_FANOUT`` action-body
+        resolutions; the sync surface issues one request at a time
+        throughout. On a hard failure (5xx, a transport error) siblings
+        already in flight on the async surface run to completion before the
+        error propagates, so a failing call there can issue more requests
+        than the sequential surface does. That is the deliberate trade:
+        settling every sibling is what keeps an orphaned request from
+        outliving the call that issued it, and what makes the exception a
+        caller sees the one the sequential surface would have raised rather
+        than whichever branch happened to fail soonest.
         """
         # Issued first, and deliberately outside the fan-out: this is the one
         # call with no fallback, so a wrong RFC number should cost one request,

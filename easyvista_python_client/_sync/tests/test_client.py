@@ -1379,6 +1379,36 @@ def test_get_ticket_context_honours_custom_memo_fields(config):
     assert not description.called
 
 
+@respx.mock
+def test_get_ticket_context_empty_memo_fields_skips_memo_resolution(config):
+    """The empty-tuple boundary: no memo sub-resource is requested at all.
+
+    Pins the ``settle`` slicing arithmetic -- ``memo_results[: len(memo_fields)]``
+    and ``memo_results[len(memo_fields) :]`` -- at ``len(memo_fields) == 0``, so a
+    future rewrite of that slicing cannot silently break this case.
+    """
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": []})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"documents": []})
+    )
+
+    with EasyvistaClient(config) as client:
+        ctx = client.get_ticket_context(
+            "I1", resolve_action_bodies=False, memo_fields=()
+        )
+
+    assert ctx.memos == {}
+    assert ctx.description is None
+    assert ctx.comment is None
+    assert ctx.actions == []
+    assert ctx.documents == []
+
+
 # --- department context ------------------------------------------------------
 
 

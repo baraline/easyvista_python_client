@@ -26,7 +26,9 @@ class TicketContext:
     ``description`` and ``comment`` are the two memos EasyVista populates by
     default. ``memos`` carries every memo that was actually resolved, keyed by
     the field name requested -- the API models the memo name as a path segment
-    (``GET /requests/{rfc}/{memo}``), so a deployment may carry others.
+    (``GET /requests/{rfc}/{memo}``) (tier 2 -- ``docs/vendor-api-reference.md``:
+    declared in the instance's OpenAPI ``paths``), so a deployment may carry
+    others.
     """
 
     ticket: Request
