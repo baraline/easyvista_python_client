@@ -184,3 +184,40 @@ def test_extra_payload_overrides_custom_fields() -> None:
 
 def test_extra_payload_defaults_empty_and_adds_nothing() -> None:
     assert "extra_payload" not in PostRequest(catalog_code="X").to_api()
+
+
+def test_extra_payload_overrides_a_declared_field_across_case() -> None:
+    """An ALL_CAPS override must REPLACE the declared lower-case field.
+
+    EasyVista's field names are case-insensitive, so an exact-key merge put
+    both spellings on the wire with conflicting values and left the winner to
+    the server. The ALL_CAPS spelling is the likely one, not a corner case:
+    it mirrors the read side's ``ALL_CAPS`` convention, which is where callers
+    copy names from.
+    """
+    body = PostRequest(
+        catalog_code="X", urgency_id=8, extra_payload={"URGENCY_ID": "4"}
+    ).to_api()
+    assert body["URGENCY_ID"] == "4"
+    assert "urgency_id" not in body
+
+
+def test_extra_payload_overrides_custom_fields_across_case() -> None:
+    """The same rule covers a ``custom_fields``-produced key."""
+    body = PostRequest(
+        catalog_code="X",
+        custom_fields={"thing": "from_custom"},
+        extra_payload={"E_THING": "from_extra"},
+    ).to_api()
+    assert body["E_THING"] == "from_extra"
+    assert "e_thing" not in body
+
+
+def test_a_case_insensitive_collision_never_raises() -> None:
+    """The rule is a merge, not a validation: a collision is not an error."""
+    payload = PostRequest(
+        catalog_code="X", title="declared", extra_payload={"TITLE": "override"}
+    )
+    body = payload.to_api()
+    assert body["TITLE"] == "override"
+    assert body["catalog_code"] == "X"

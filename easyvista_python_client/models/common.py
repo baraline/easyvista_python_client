@@ -137,6 +137,20 @@ class EasyvistaWriteModel(BaseModel):
         behaves differently needs a way through that is not a fork. Because it
         bypasses the model it also bypasses the model's validation: whatever is
         put here reaches the wire as written.
+
+        **The merge is case-insensitive.** The vendor documents the ticket
+        create body's field names as case-insensitive (tier 1 --
+        ``docs/vendor-api-reference.md``); the other write bodies are assumed
+        to match it, which is the safe assumption in either direction here. An
+        ``extra_payload`` key that matches a declared field's key or a
+        ``custom_fields``-produced key when case is ignored *replaces* it: the
+        model's entry is dropped, and ``extra_payload``'s own spelling and
+        value are what ship. Without
+        that, ``PostRequest(urgency_id=8, extra_payload={"URGENCY_ID": "4"})``
+        would put **both** on the wire with conflicting values and leave which
+        one the server honours undefined -- and the ``ALL_CAPS`` spelling is
+        the one callers reach for, since it mirrors the read side. This is a
+        merge rule only; a collision is never an error.
         """
         data = self.model_dump(
             exclude_none=True, exclude={"custom_fields", "extra_payload"}
@@ -144,5 +158,12 @@ class EasyvistaWriteModel(BaseModel):
         for key, value in self.custom_fields.items():
             api_key = key if key.startswith("e_") else f"e_{key}"
             data[api_key] = value
-        data.update(self.extra_payload)
+        if self.extra_payload:
+            overridden = {str(key).casefold() for key in self.extra_payload}
+            data = {
+                key: value
+                for key, value in data.items()
+                if key.casefold() not in overridden
+            }
+            data.update(self.extra_payload)
         return data
