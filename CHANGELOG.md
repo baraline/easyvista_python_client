@@ -56,6 +56,40 @@ a deprecation policy will follow the 1.0 release.
   time, non-terminal ones included. Status GUIDs are per-instance configuration
   and are not portable between deployments; read one off any ticket already in
   that status (the nested `STATUS` object carries `STATUS_GUID`).
+- `PostRequest.catalog_guid`. The vendor documents it as the **preferred**
+  subject identifier; it had been removed on the authority of a customer
+  handover note that the package cited as the vendor specification. A create
+  body with neither `catalog_guid` nor `catalog_code` now raises locally
+  instead of drawing an HTTP 590 whose SQL parser error names no field.
+- Eleven vendor-documented create fields that `PostRequest` did not declare:
+  `location_id`, `location_code`, `department_code`, `recipient_name`,
+  `recipient_identification`, `requestor_identification`, `requestor_mail`,
+  `requestor_name`, `parentrequest`, `phone`, `submit_date`. Tier 1 —
+  vendor-documented, not verified live by this package.
+- `PostRequest.workflow_start`, a twelfth field reachable the same way but
+  **not** vendor-documented like the eleven above: its only source is the
+  instance's own OpenAPI schema for `POST /requests` ("Optional. If true,
+  starts the workflow for the created incident."), which makes it tier 3 —
+  illustrative only, example-derived, not a normative contract. Treat it as
+  unverified until tested against the deployment you use it on.
+- `extra_payload` on every write model: an un-prefixed passthrough merged last,
+  overriding declared fields and `custom_fields` alike. Every field these models
+  decline to declare rests on behaviour measured against a single instance;
+  `extra="forbid"` turned each of those measurements into a hard wall for every
+  other deployment, and `custom_fields` could not help because it only emits
+  `e_`-prefixed keys.
+- `get_ticket_context(..., memo_fields=...)` and `TicketContext.memos`. The API
+  models the memo name as a path segment, and the instance's own OpenAPI spec
+  documents it as a selector ("Memo field type, could be comment, description";
+  tier 2 — declared in the instance's OpenAPI `paths`, not vendor-documented),
+  so which memo carries a ticket's body is per-deployment configuration the
+  client was hardcoding. Default behaviour is unchanged. `TicketContext.description`
+  / `.comment` stay dataclass fields rather than becoming properties over
+  `memos`, a deliberate deviation to avoid breaking positional construction of
+  a public dataclass.
+- `docs/vendor-api-reference.md` — the vendor facts this package depends on,
+  each tagged with the evidence behind it, plus the routes present in the
+  instance's OpenAPI that the package does not implement.
 
 ### Fixed
 
@@ -104,6 +138,26 @@ a deprecation policy will follow the 1.0 release.
   in a `finally`. Two tests added beside it: one pinning that the documented body
   lands every id, one pinning that `set_status` reaches a **non-terminal**
   status.
+- `PostRequest.origin` and `PostRequest.impact_id` now accept `int | str`, but
+  they were widened for different reasons, not the same one. `origin` is
+  vendor-documented as a **string** (tier 1); an `int` was separately measured
+  accepted on one instance (tier 4, date not recorded). `impact_id` is
+  vendor-documented as an **integer** (tier 1); its `str` branch exists so a
+  caller who quotes it is not rejected, not because a string was independently
+  measured landing here. Whichever type is passed reaches the wire unchanged.
+- Three shipped docstrings cited a gitignored, instance-private handover note
+  as the documented request body. That file is invisible to every reader of the
+  published repository — a dead link — and was never the vendor documentation
+  it was cited as; `docs/vendor-api-reference.md` now carries the citable
+  facts instead. A new guard (`scripts/tests/test_source_citations.py`) fails
+  the suite if any tracked file cites a gitignored path again — it scans
+  `easyvista_python_client/**/*.py`, `scripts/**/*.py`, `docs/*.rst`,
+  `docs/*.md`, `integration_tests/**/*.py`, and the root `.md` files,
+  including this changelog.
+- `PostRequest`'s "send the whole documented set" doctrine is corrected. The
+  vendor requires only `catalog_guid` or `catalog_code`; the seven-field body
+  is a hedge against per-catalog configuration measured on one instance, which
+  the docstring stated as an API requirement.
 
 ### Changed
 
@@ -381,6 +435,14 @@ a deprecation policy will follow the 1.0 release.
   it could never populate. `PostRequest(catalog_guid=...)` previously validated
   and was sent to the API; it now raises (`extra="forbid"`) instead of being
   silently accepted. Use `catalog_code` to name a catalog on create.
+  **Update, recorded here rather than silently edited into the entry above:**
+  `PostRequest.catalog_guid` was restored in `[Unreleased]` — the vendor
+  documents it as the **preferred** subject identifier, and the removal above
+  rested on a customer handover note the package had cited as the vendor
+  specification, not on the vendor docs themselves. `Request.catalog_guid`
+  remains gone, correctly: `Request` is a read model, `CATALOG_GUID` was never
+  returned on any sampled ticket, and `test_request_has_no_catalog_guid_attribute`
+  now pins its absence.
 
 ### Fixed
 
