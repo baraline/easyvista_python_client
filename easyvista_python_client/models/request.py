@@ -143,25 +143,33 @@ class PostRequest(EasyvistaWriteModel):
 
     Ids may be sent as JSON numbers or as strings; both are accepted (tier 4:
     measured on one instance, 2026-08-25). The documented examples quote them.
-    ``department_id``, ``urgency_id``, ``severity_id`` and ``recipient_id`` are
-    the fields that are genuinely int-only here -- typed ``int`` and serialized
-    as numbers, which the API takes.
 
-    ``origin``, ``impact_id`` and ``location_id`` are typed ``int | str``
-    instead, and each is widened for a different reason -- whichever type a
-    caller passes serializes unchanged, with no coercion between them:
+    What follows is **this model's** accept-and-serialize rule for each id, not
+    a claim about what the API will take -- per the finding just above, it
+    takes either form. The declared types follow the vendor's documented column
+    types (tier 1, ``docs/vendor-api-reference.md``), so a caller holding a
+    value in the documented form never has to convert it:
 
-    * ``origin`` -- the vendor documents it as a **string** (tier 1); an int
-      was separately measured accepted on one instance (tier 4: measured on
-      one instance; date not recorded).
-    * ``impact_id`` -- the vendor documents it as an **integer** (tier 1); the
-      ``str`` branch exists only so a caller who quotes it is not surprised by
-      a rejection, not because a string was independently measured landing
-      here (tier 4: measured on one instance; date not recorded).
-    * ``location_id`` -- the vendor documents it as a **string** (tier 1), the
-      same as ``origin``, but no measurement independently confirms this
-      instance also accepts an int here; the wider type is a precaution, not
-      a tier-4 finding.
+    * ``urgency_id`` and ``severity_id`` are typed ``int``: the vendor
+      documents both as **integer** (tier 1) and nothing measured contradicts
+      that, so a quoted value is coerced to a number on the way out.
+    * ``origin`` is ``int | str``. The vendor documents it as a **string**
+      (tier 1); an int was separately measured accepted on one instance (tier
+      4: measured on one instance; date not recorded). Whichever type is
+      passed serializes unchanged, with no coercion between them.
+    * ``department_id``, ``location_id`` and ``recipient_id`` are ``int | str``
+      for one shared reason: the vendor documents all three as **strings**
+      (tier 1). An int is what the measured seven-field create body above sent
+      for ``department_id`` (tier 4, 2026-08-18); nothing independently
+      confirms a string in any of the three, nor an int in ``location_id`` or
+      ``recipient_id``, so the wider type is a precaution rather than a tier-4
+      finding. Whichever type is passed serializes unchanged.
+    * ``impact_id`` is ``int | str`` and is the one exception to "serializes
+      unchanged". The vendor documents it as an **integer** (tier 1), so a
+      numeric string is coerced into that documented form -- ``"28"`` ships as
+      ``28`` -- via ``union_mode="left_to_right"``. The ``str`` branch stays so
+      that a caller with a non-numeric value is not rejected; such a value
+      passes through as written.
 
     **A rejected create may still have created the ticket.** Measured: 12
     attempts returned 3 ``RFC_NUMBER``s and afterwards all 12 tickets existed --
@@ -223,14 +231,14 @@ class PostRequest(EasyvistaWriteModel):
     title: str | None = None
     description: str | None = None
     origin: int | str | None = None
-    department_id: int | None = None
+    department_id: int | str | None = None
     department_code: str | None = None
     location_id: int | str | None = None
     location_code: str | None = None
     urgency_id: int | None = None
-    impact_id: int | str | None = None
+    impact_id: int | str | None = Field(default=None, union_mode="left_to_right")
     severity_id: int | None = None
-    recipient_id: int | None = None
+    recipient_id: int | str | None = None
     recipient_mail: str | None = None
     recipient_name: str | None = None
     recipient_identification: str | None = None

@@ -341,15 +341,20 @@ def test_request_update_refuses_status_id():
     assert "status_id" in str(excinfo.value)
 
 
-def test_post_request_carries_the_whole_documented_create_body():
-    """Every field of the documented create body survives ``to_api``.
+def test_post_request_carries_the_measured_safe_create_body():
+    """Every field of the measured-safe create body survives ``to_api``.
 
-    The vendor-documented body (``docs/vendor-api-reference.md``) is
-    catalog_code + origin + title + description + department_id + urgency_id +
-    impact_id, and sending a SUBSET is what produces the 590 whose message is a
-    bare SQL parser error. So the shape is pinned here: a field silently
-    dropped from this model would reintroduce exactly that failure, on some
-    catalogs only.
+    Tier 4, measured on one instance on 2026-08-18, and it may not generalise:
+    the seven-field body -- catalog + origin + title + description +
+    department_id + urgency_id + impact_id -- was accepted on every catalog
+    tried, while the same body minus the four ids was refused on some of them
+    with an HTTP 590 whose message is a bare SQL parser error naming no field.
+
+    The vendor requires only ``catalog_guid`` or ``catalog_code``
+    (``docs/vendor-api-reference.md``, tier 1); the fuller body is a hedge
+    against per-catalog configuration, not an API requirement. The shape is
+    pinned here anyway, because a field silently dropped from this model would
+    take that hedge away from every caller relying on it.
     """
     body = PostRequest(
         catalog_code="SYNTH_INC_001",
@@ -383,9 +388,57 @@ def test_origin_still_accepts_an_int() -> None:
     assert body["origin"] == 7
 
 
-def test_impact_id_accepts_either_type() -> None:
-    assert PostRequest(catalog_code="X", impact_id="17").to_api()["impact_id"] == "17"
+def test_origin_keeps_a_numeric_string_as_a_string() -> None:
+    """``origin="7"`` must reach the wire as ``"7"``, not as ``7``.
+
+    The vendor documents ``origin`` as a **string** (tier 1), so the string
+    form is the documented one and there is nothing to normalize towards. This
+    pins the smart-union behaviour: before the field was widened to
+    ``int | str`` the declared ``int`` coerced ``"7"`` to ``7``, so this is the
+    wire form that changed, and it must not drift back.
+    """
+    assert PostRequest(catalog_code="X", origin="7").to_api()["origin"] == "7"
+
+
+def test_impact_id_coerces_a_numeric_string_to_the_documented_int() -> None:
+    """``impact_id="28"`` must reach the wire as ``28``.
+
+    The vendor documents ``impact_id`` as an **integer** (tier 1). The ``str``
+    branch exists so a caller who quotes the value is not rejected -- not so
+    that the quoted form ships. ``union_mode="left_to_right"`` puts ``int``
+    first, which restores the normalization the declared ``int`` used to do.
+    """
+    assert PostRequest(catalog_code="X", impact_id="28").to_api()["impact_id"] == 28
     assert PostRequest(catalog_code="X", impact_id=17).to_api()["impact_id"] == 17
+
+
+def test_impact_id_still_accepts_a_non_numeric_string() -> None:
+    """The ``str`` branch must survive the left-to-right union.
+
+    ``left_to_right`` tries ``int`` first; a value that is not a number must
+    fall through to ``str`` rather than raise. Nothing a caller could send
+    before may be refused now.
+    """
+    body = PostRequest(catalog_code="X", impact_id="Critical").to_api()
+    assert body["impact_id"] == "Critical"
+
+
+def test_department_id_and_recipient_id_accept_the_documented_string() -> None:
+    """Both are vendor-documented as **strings** (tier 1), so both take one.
+
+    They were typed ``int`` until this change, which accepted the documented
+    string form and then coerced it to a number on the way out. It is no
+    longer rewritten: the string reaches the wire as written, and an int
+    still reaches it as an int.
+    """
+    body = PostRequest(
+        catalog_code="X", department_id="9", recipient_id="42"
+    ).to_api()
+    assert body["department_id"] == "9"
+    assert body["recipient_id"] == "42"
+    ints = PostRequest(catalog_code="X", department_id=9, recipient_id=42).to_api()
+    assert ints["department_id"] == 9
+    assert ints["recipient_id"] == 42
 
 
 _VENDOR_CREATE_FIELDS = (
