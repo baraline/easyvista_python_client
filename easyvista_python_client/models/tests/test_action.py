@@ -192,3 +192,26 @@ def test_post_action_serializes_description():
         "group_id": 3,
         "description": "hi",
     }
+
+
+def test_post_action_carries_both_text_channels():
+    """An action has two independent memos and a create can populate both.
+
+    Verified live 2026-08-28: a single create carrying ``description`` and
+    ``comment`` read back with exactly the text sent in each, addressable
+    separately at ``actions/{id}/description`` and ``actions/{id}/comment``.
+    ``comment`` was absent from this model until then, which made the second
+    channel unreachable at create time without ``extra_payload``.
+    """
+    assert PostAction(
+        action_type_id=94, description="public", comment="internal"
+    ).to_api() == {
+        "action_type_id": 94,
+        "description": "public",
+        "comment": "internal",
+    }
+
+
+def test_post_action_omits_an_unset_comment():
+    """The new field must not widen the body every caller already sends."""
+    assert "comment" not in PostAction(action_type_id=94, description="hi").to_api()

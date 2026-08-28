@@ -121,14 +121,32 @@ class PostAction(EasyvistaWriteModel):
 
     Field set follows the documented (and live-verified) create-action body:
     identify the action type via ``action_type_id`` (or ``action_type_name``) and
-    the assigned group via ``group_id`` (or ``group_name``); ``description`` holds
-    the note text. Inherits ``custom_fields``/``to_api()`` from EasyvistaWriteModel.
+    the assigned group via ``group_id`` (or ``group_name``). Inherits
+    ``custom_fields``/``to_api()`` from EasyvistaWriteModel.
 
-    An action carries no visibility flag, so a "private" note is simply a
-    different ``action_type_id``. Which type ids a deployment treats as internal
-    is not discoverable -- ``GET action-types`` is 403 on a standard profile --
-    so ask the instance's administrator. Brackets in ``ACTION_LABEL_*`` mark an
-    untranslated label, not a restricted one.
+    **An action carries two independent text channels**, ``description`` and
+    ``comment``, each addressable afterwards as its own memo sub-resource
+    (``GET actions/{id}/description`` and ``GET actions/{id}/comment``). Both
+    persist when sent together on create -- verified live 2026-08-28 on one
+    instance: a single create carrying both read back with exactly the text
+    sent in each. The instance's own OpenAPI declares both on the create body
+    and its example populates both (tier 2).
+
+    ``comment`` was previously absent from this model, on the reasoning that an
+    action's text lives in ``DESCRIPTION`` while ``COMMENT`` "is empty" on the
+    verified instance. That inference was wrong: ``COMMENT`` was empty because
+    nothing had ever written to it, not because the column is unused.
+
+    **There is still no visibility flag.** The item-level action record was
+    re-captured on 2026-08-28 -- 88 columns -- and none of them is a
+    public/private boolean, so the API enforces no such distinction and neither
+    channel is inherently "private". Whether a deployment's self-service portal
+    surfaces one channel and not the other is that portal's configuration; ask
+    the instance's administrator rather than inferring it here. ``action_type_id``
+    remains the only per-action discriminator the API exposes, and which type ids
+    a deployment treats as internal is likewise not discoverable -- ``GET
+    action-types`` is 403 on a standard profile. Brackets in ``ACTION_LABEL_*``
+    mark an untranslated label, not a restricted one.
     """
 
     action_type_id: int | None = None
@@ -136,6 +154,7 @@ class PostAction(EasyvistaWriteModel):
     group_id: int | None = None
     group_name: str | None = None
     description: str | None = None
+    comment: str | None = None
 
 
 class ActionUpdate(EasyvistaWriteModel):
@@ -147,10 +166,12 @@ class ActionUpdate(EasyvistaWriteModel):
     ``PUT requests/{rfc}/actions/{id}`` returns 403, as does
     ``DELETE actions/{id}`` — an action can be edited but not deleted.
 
-    ``description`` is the note text. On the verified instance an action's text
-    lives in the ``DESCRIPTION`` memo and ``COMMENT`` is empty, mirroring how
-    ``PostAction.description`` round-trips; ``comment`` is offered for a
-    deployment configured the other way round, and is **not** live-verified.
+    ``description`` and ``comment`` are the action's two independent text
+    channels, the same pair :class:`PostAction` writes on create -- both were
+    verified live on 2026-08-28 to persist and read back separately from a
+    single create. Editing either here targets that memo alone; neither is
+    inherently private (see :class:`PostAction` for why the API enforces no
+    visibility distinction).
     """
 
     description: str | None = None

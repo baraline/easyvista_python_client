@@ -45,14 +45,33 @@ mistakes come from.
   which fetches each action item-level and resolves its memo for you — see
   `easyvista-reporting-and-context`.
 
-## "Private" comments: there is no such feature
+## "Private" comments: two channels, but no visibility flag
 
-**Do not tell a user this package can post a private comment.** An action
-carries no visibility flag — the complete item-level record was captured
-field by field and holds no public/private boolean — so there is no
-argument for it on `PostAction` and nothing for the client to expose.
+**An action has two independent text channels**, `description` and `comment`,
+each addressable afterwards as its own memo (`actions/{id}/description`,
+`actions/{id}/comment`). `PostAction` writes both, and both persist from a
+single create — verified live 2026-08-28: each read back with exactly the text
+sent. The instance's own OpenAPI declares both on the create body and its
+example populates both.
 
-`action_type_id` is the only per-action discriminator that exists. If a
+```python
+PostAction(
+    action_type_id=YOUR_TYPE_ID,
+    description="Visible to the requester.",
+    comment="Internal working note.",
+)
+```
+
+**But neither channel is inherently private, and the API enforces nothing.**
+The item-level action record carries 88 columns and not one is a
+public/private boolean, so there is no flag to set and none to read.
+Whether a deployment's self-service portal surfaces one channel and not the
+other is **that portal's configuration** — confirm it with the instance's
+administrator before promising a user that `comment` is hidden. Do not tell a
+user this package can post a guaranteed-private comment; it cannot, because
+the API has no such concept.
+
+`action_type_id` is the only per-action discriminator the API exposes. If a
 deployment separates internal notes from customer-facing ones, it does so with
 distinct action types — but that is a property of **that deployment**, not
 of EasyVista's API, and the API cannot reveal which type is which:

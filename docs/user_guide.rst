@@ -289,12 +289,33 @@ for the cheap "show me the recent ones" read.
 Internal vs. customer-facing comments
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**This API has no private-comment feature, and neither does this package.** An
-action carries no visibility flag — the complete item-level record was captured
-field by field and holds no public/private boolean — so there is no argument to
-pass and nothing for the client to expose.
+An action carries **two independent text channels**, ``description`` and
+``comment``, each addressable afterwards as its own memo
+(``actions/{id}/description``, ``actions/{id}/comment``).
+:class:`~easyvista_python_client.PostAction` writes both, and both persist from
+a single create — verified live on 2026-08-28, each reading back with exactly
+the text sent.
 
-``action_type_id`` is the only per-action discriminator that exists. If your
+.. code-block:: python
+
+   from easyvista_python_client import PostAction
+
+   PostAction(
+       action_type_id=94,                      # instance-specific
+       description="Visible to the requester.",
+       comment="Internal working note.",
+   )
+
+.. warning::
+
+   **Neither channel is inherently private.** The item-level action record
+   carries 88 columns and none of them is a public/private boolean, so the API
+   enforces no visibility distinction and there is no flag to set or read.
+   Whether your self-service portal surfaces one channel and not the other is
+   **your portal's configuration** — confirm it with your EasyVista
+   administrator before treating ``comment`` as hidden from the requester.
+
+``action_type_id`` is the only per-action discriminator the API exposes. If your
 deployment separates internal notes from customer-facing ones, it will do so
 with distinct action types — but that is a property of your deployment, not of
 EasyVista's API, and the API cannot tell you which is which:
