@@ -370,3 +370,18 @@ def test_post_request_carries_the_whole_documented_create_body():
         "impact_id": 21,
         "external_reference": "X",
     }
+
+
+def test_origin_accepts_the_vendor_documented_string() -> None:
+    body = PostRequest(catalog_code="X", origin="Phone").to_api()
+    assert body["origin"] == "Phone"
+
+
+def test_origin_still_accepts_an_int() -> None:
+    body = PostRequest(catalog_code="X", origin=7).to_api()
+    assert body["origin"] == 7
+
+
+def test_impact_id_accepts_either_type() -> None:
+    assert PostRequest(catalog_code="X", impact_id="17").to_api()["impact_id"] == "17"
+    assert PostRequest(catalog_code="X", impact_id=17).to_api()["impact_id"] == 17

@@ -144,6 +144,11 @@ class PostRequest(EasyvistaWriteModel):
     side by side). The documented examples quote them; these fields are typed
     ``int`` here and serialize as numbers, which the API takes.
 
+    ``origin`` and ``impact_id`` accept an ``int`` or a ``str`` and serialize
+    whichever was passed. The two tiers disagree about their type and both are
+    honoured rather than one being picked: the vendor documents them as strings
+    (tier 1), while ints were measured accepted on one instance (tier 4).
+
     **A rejected create may still have created the ticket.** Measured: 12
     attempts returned 3 ``RFC_NUMBER``s and afterwards all 12 tickets existed --
     9 of 9 failures had written a row, with the ids they were missing left null.
@@ -173,10 +178,10 @@ class PostRequest(EasyvistaWriteModel):
     catalog_code: str | None = None
     title: str | None = None
     description: str | None = None
-    origin: int | None = None
+    origin: int | str | None = None
     department_id: int | None = None
     urgency_id: int | None = None
-    impact_id: int | None = None
+    impact_id: int | str | None = None
     severity_id: int | None = None
     recipient_id: int | None = None
     recipient_mail: str | None = None
