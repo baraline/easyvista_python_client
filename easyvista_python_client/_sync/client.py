@@ -276,14 +276,54 @@ class EasyvistaClient:
         rfc_number: str,
         *,
         status_guid: str | None = None,
-        delete_actions: int | None = None,
+        delete_actions: int | bool | None = None,
         comment: str | None = None,
+        end_date: str | None = None,
+        catalog_guid: str | None = None,
     ) -> Request:
+        """Close a ticket, via the vendor's documented close route.
+
+        Sends ``PUT requests/{rfc}`` with a ``closed`` wrapper --
+        https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md.
+        Every argument is optional: with no ``status_guid`` the ticket goes to
+        the instance's default *Closed* meta-status, and with no ``end_date``
+        the server stamps now.
+
+        **Verify the close by re-reading the status, not by the return value.**
+        A status id is per-instance configuration and nothing about it is
+        guessable: on the verified instance ``8`` is *Cloturé* and ``12`` is
+        *En cours* -- adjacent numbers, opposite meanings. Code that infers
+        "closed" from an id it did not read off that instance will eventually
+        skip a ticket it believed was already closed. Read
+        ``get_ticket(rfc).status_id`` (or ``.reference("STATUS")`` for the
+        label) afterwards, and compare against a status you resolved from the
+        instance rather than a constant::
+
+            await client.close_ticket(rfc, status_guid=CLOSED_GUID)
+            after = await client.get_ticket(rfc)
+            assert after.end_date_ut is not None  # the close actually landed
+
+        ``end_date_ut`` is the more portable signal than any status id: it is
+        empty on an open ticket and stamped on a closed one.
+
+        ``status_guid`` reaches **any** status, not only terminal ones -- see
+        :meth:`set_status`, which is this same request under a name that says
+        so. ``catalog_guid`` requalifies the ticket as it closes.
+        ``delete_actions`` drops its actions.
+
+        ``end_date`` takes the instance's own date format, which is not ISO 8601
+        everywhere (``dd/mm/yyyy`` on the verified instance -- read
+        ``DATE_FORMAT`` off any employee record), so it is a string this client
+        passes through rather than a ``datetime`` it would have to format on a
+        guess.
+        """
         spec, parse = requests_res.build_close_ticket(
             rfc_number,
             status_guid=status_guid,
             delete_actions=delete_actions,
             comment=comment,
+            end_date=end_date,
+            catalog_guid=catalog_guid,
         )
         return parse(self._transport.send(spec))
 

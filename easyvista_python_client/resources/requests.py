@@ -65,8 +65,10 @@ def build_close_ticket(
     rfc_number: str,
     *,
     status_guid: str | None = None,
-    delete_actions: int | None = None,
+    delete_actions: int | bool | None = None,
     comment: str | None = None,
+    end_date: str | None = None,
+    catalog_guid: str | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Request]]:
     """Build the ``{"closed": {...}}`` PUT spec — the API's status-set route.
 
@@ -82,8 +84,24 @@ def build_close_ticket(
     you try one. :func:`build_set_status` is the same spec under a name that says
     what it does.
 
-    ``delete_actions=1`` drops the ticket's actions. Shapes follow the documented
-    close body (tier 1 -- ``docs/vendor-api-reference.md``), verified live.
+    ``delete_actions`` drops the ticket's actions; the vendor types it a
+    **boolean** and this builder passes either spelling through unchanged, since
+    EasyVista accepts ``true``/``false``, ``0``/``1`` and the quoted strings.
+
+    **The route is the vendor's own.** ``PUT requests/{rfc_number}`` with a
+    ``closed`` wrapper is what the documentation specifies
+    (https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md), not
+    a workaround for the ``PUT|PATCH requests/{rfc_number}/close`` path that
+    also appears in an instance's OpenAPI. Every field below is tier 1, and
+    every one is **optional**: omitting ``status_guid`` closes to the instance's
+    default *Closed* meta-status, and omitting ``end_date`` stamps now.
+
+    ``catalog_guid`` requalifies the ticket as it closes -- the vendor notes it
+    is needed only for that. ``end_date`` takes the instance's own date format,
+    which is not ISO 8601 on every deployment (``dd/mm/yyyy`` on the verified
+    one; read ``DATE_FORMAT`` off any employee record) -- so it is passed
+    through as a string rather than accepting a ``datetime`` this package would
+    have to format on a guess.
     """
     closed: dict[str, Any] = {}
     if status_guid is not None:
@@ -92,6 +110,10 @@ def build_close_ticket(
         closed["delete_actions"] = delete_actions
     if comment is not None:
         closed["comment"] = comment
+    if end_date is not None:
+        closed["end_date"] = end_date
+    if catalog_guid is not None:
+        closed["catalog_GUID"] = catalog_guid
     spec = RequestSpec("PUT", f"requests/{rfc_number}", json={"closed": closed})
 
     def parse(data: Any) -> Request:

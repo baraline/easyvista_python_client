@@ -129,3 +129,54 @@ def test_build_set_status_matches_build_close_ticket():
     a, _ = r.build_set_status("I1", status_guid="{G}")
     b, _ = r.build_close_ticket("I1", status_guid="{G}")
     assert (a.method, a.path, a.json) == (b.method, b.path, b.json)
+
+
+def test_close_ticket_carries_the_two_previously_undeclared_documented_fields():
+    """``end_date`` and ``catalog_GUID`` are tier 1 and were unreachable.
+
+    The vendor's close body is status_GUID / end_date / catalog_GUID /
+    delete_actions / comment; this package declared only three of the five, so
+    requalifying-on-close and back-dating a closure needed extra_payload -- and
+    neither field is on a write model, so there was no extra_payload to use.
+    """
+    spec, _ = r.build_close_ticket(
+        "I1",
+        status_guid="{G}",
+        end_date="28/08/2026",
+        catalog_guid="{C}",
+        comment="done",
+        delete_actions=True,
+    )
+    assert spec.json == {
+        "closed": {
+            "status_GUID": "{G}",
+            "delete_actions": True,
+            "comment": "done",
+            "end_date": "28/08/2026",
+            "catalog_GUID": "{C}",
+        }
+    }
+
+
+def test_close_ticket_omits_every_unset_field():
+    """All five are optional: an empty envelope closes to the default status."""
+    spec, _ = r.build_close_ticket("I1")
+    assert spec.json == {"closed": {}}
+
+
+def test_close_ticket_uses_the_vendor_route_not_the_close_subpath():
+    """``PUT requests/{rfc}`` with a wrapper IS the documented route.
+
+    An instance's OpenAPI also declares ``PUT|PATCH requests/{rfc}/close``;
+    this pins that the package deliberately sends the documented one, so a
+    later reader does not "fix" it into the subpath.
+    """
+    spec, _ = r.build_close_ticket("I1", status_guid="{G}")
+    assert spec.method == "PUT"
+    assert spec.path == "requests/I1"
+
+
+def test_delete_actions_passes_a_bool_through_unchanged():
+    """The vendor types it boolean; the package used to type it int only."""
+    spec, _ = r.build_close_ticket("I1", delete_actions=False)
+    assert spec.json["closed"]["delete_actions"] is False

@@ -108,11 +108,14 @@ Read from `GET {api_root}/swagger`, 2026-08-27.
 
 * `PUT|PATCH /requests/{rfc_number}/close` — a dedicated close route exists
   (tier 2) taking a **flat** body (tier 3, illustrative only:
-  `STATUS_GUID`, `END_DATE`, `CATALOG_GUID`, `DELETE_ACTIONS`, `COMMENT`),
-  rather than the `{"closed": {...}}` envelope this package sends to
-  `PUT /requests/{rfc_number}`. The package's route is measured working;
-  switching is a behaviour change needing its own live check (open item
-  O-CLOSE).
+  `STATUS_GUID`, `END_DATE`, `CATALOG_GUID`, `DELETE_ACTIONS`, `COMMENT`).
+  **O-CLOSE is CLOSED, in this package's favour.** The vendor documents closing
+  as `PUT /requests/{rfc_number}` with a `{"closed": {...}}` wrapper — the
+  route this package already sends — so the subpath is an alternate, not the
+  canonical one, and there is nothing to switch to. Tier 1:
+  https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md
+  The same page supplied two body fields the package had never declared
+  (`end_date`, `catalog_GUID`), both now exposed on `close_ticket`.
 * `PUT|PATCH /requests/{rfc_number}/suspend`, `/restart`.
 * `GET /requests/{rfc_number}/{comment}` — the final segment is a **memo-field
   selector**, documented in the spec's own parameter description as "Memo
