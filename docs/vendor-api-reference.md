@@ -90,7 +90,7 @@ Source: <https://docs.easyvista.com/xwiki/bin/view/Documentation/Integration/Web
 | `sort` | `field1[+asc\|+desc],field2[+asc\|+desc]` |
 | `fields` | Comma-separated projection |
 | `search` | Field-based filter |
-| `~` / `!~` / `!` | Contains / not-contains / not-equals (Oxygen 1.7+) |
+| `~` / `!~` / `!` | Contains / not-contains / not-equals (Oxygen 1.7+). Counter-evidence, tier 4 — measured live 2026-08-17: `~` behaves as a *pattern* operator and needs an explicit `*`, so `FIELD~"value"` degenerates to an exact match and quietly returns the wrong rows. `ev_contains_filter` supplies the wildcards; see its docstring in `easyvista_python_client/filters.py`. |
 | `is_null` / `is_not_null` | Oxygen 2.1.2+ |
 | `formatDate` | Oxygen 1.7+ |
 

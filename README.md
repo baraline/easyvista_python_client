@@ -68,9 +68,10 @@ with EasyvistaClient(config) as client:
     )
 ```
 
-> Minimum fields for a create are catalog-specific (server-side). `catalog_code` + `title`
-> work for incident catalogs; a missing mandatory field raises `EasyvistaValidationError`
-> (HTTP 590, code 2013) — it is not retried.
+> A create needs a subject: `catalog_guid` (the vendor's preferred identifier) or
+> `catalog_code`. Anything beyond that is catalog-specific and enforced server-side, so a
+> field a given catalog insists on raises `EasyvistaValidationError` (HTTP 590, code 2013)
+> — it is not retried, and the message names no field.
 
 ## Assets and documents
 

@@ -55,9 +55,23 @@ one call, degrading around profile restrictions instead of failing.
   come back pre-resolved to a string body; for the raw list/item record shapes
   and how to find a just-created action's id (diff `list_actions` across the
   call), see `easyvista-ticket-actions`.
+- `get_ticket_context(rfc, memo_fields=("description", "comment"))` names which
+  Memo sub-resources to resolve. The two defaults are the ones EasyVista
+  populates out of the box, but which memo carries a ticket's body is
+  per-deployment configuration, so an instance using another one is reached by
+  naming it here. Every resolved memo lands in `TicketContext.memos`, keyed by
+  the name requested; `description` and `comment` additionally keep their own
+  attributes, and are `None` when not requested. Pass a tuple or list, never a
+  bare string — `str` satisfies `Sequence[str]` and would be iterated one
+  letter at a time, one request per character.
 - `TicketContext.to_markdown()` renders an **href-free** Markdown document: an
   `# Ticket <rfc>` heading, a field table, the body, `## Actions` and
-  `## Attachments`. Nothing in the output leaks an API URL.
+  `## Attachments`. Nothing in the output leaks an API URL. Headings name the
+  role a block plays, not the field it came from: one populated memo is the
+  body under `## Description` whichever field carried it, two defaults keep
+  `## Description` / `## Comment`, and memos asked for through `memo_fields`
+  follow the same rule (several get a heading each, derived from the requested
+  name).
 - `get_department_context(department_id, recent_tickets=10, dimensions=None,
   include_statistics=True, include_assets=True, resolve_manager=True,
   include_note=True)` → `DepartmentContext(department, employees, manager,

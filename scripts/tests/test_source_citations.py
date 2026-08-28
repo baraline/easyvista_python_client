@@ -6,10 +6,15 @@ three shipped docstrings came to cite ``docs/API_Info.md`` -- a gitignored,
 instance-private handover note -- as though it were the vendor specification.
 For every reader who has only the published repository those are dead links.
 
-Keep ``_UNPUBLISHED`` here in sync with the tuple of the same name in
-``scripts/tests/test_skills_contract.py``. The duplication is deliberate: the
-two modules are imported independently by pytest and sharing a constant
-between them would mean relying on ``scripts/tests`` landing on ``sys.path``.
+``_UNPUBLISHED`` here is deliberately **narrower** than the tuple of the same
+name in ``scripts/tests/test_skills_contract.py`` -- see the comment on the
+tuple itself for which entries are missing and why. Keep the two in sync only
+*where they overlap*: a path added to the sibling because it became gitignored
+belongs here too, but the entries this one omits must stay omitted, because
+adding them would fail tracked documentation that names those locations as
+instructions. The duplication is deliberate: the two modules are imported
+independently by pytest and sharing a constant between them would mean relying
+on ``scripts/tests`` landing on ``sys.path``.
 """
 
 from __future__ import annotations

@@ -117,9 +117,14 @@ Working with tickets
 ---------------------
 
 Tickets are EasyVista *requests*. Create one with a
-:class:`~easyvista_python_client.PostRequest`. The minimum fields are catalog-specific and enforced
-server-side; ``catalog_code`` + ``title`` work for incident catalogs. A missing mandatory field
-raises :class:`~easyvista_python_client.EasyvistaValidationError` (see :ref:`error-handling`).
+:class:`~easyvista_python_client.PostRequest`. The subject is the only part the vendor documents as
+required, and it is named either by ``catalog_guid`` — the form the vendor documents as
+**preferred** — or by ``catalog_code``; a body carrying neither is refused locally, before any
+request goes out. Beyond the subject, which fields a catalog insists on is per-catalog
+configuration enforced server-side, and a missing one raises
+:class:`~easyvista_python_client.EasyvistaValidationError` (see :ref:`error-handling`) with a
+message that names no field. The fuller body below is a hedge against that: it was accepted on
+every catalog tried on one instance, which makes it a safe default rather than an API requirement.
 
 .. code-block:: python
 
@@ -127,6 +132,9 @@ raises :class:`~easyvista_python_client.EasyvistaValidationError` (see :ref:`err
 
    ticket = client.create_ticket(
        PostRequest(
+           # Or catalog_guid="{...}", the vendor's preferred subject identifier.
+           # Note GET /catalog-requests is 403 on a restricted profile, so an
+           # instance may give you no way to read a catalog GUID.
            catalog_code="INC_STANDARD",   # instance-specific catalog
            title="Printer down",
            description="The 3rd-floor printer is offline",
@@ -182,6 +190,32 @@ any write model; keys are serialized to their ``e_*`` API names automatically.
 .. code-block:: python
 
    PostRequest(catalog_code="INC_STANDARD", title="...", custom_fields={"e_location": "Paris"})
+
+There are **two** escape hatches, and they are not interchangeable. ``custom_fields`` only ever
+emits ``e_``-prefixed keys, so it cannot reach an *official* column this package declines to
+declare. ``extra_payload`` — also on every write model — is the un-prefixed one: whatever you put
+in it reaches the wire exactly as written.
+
+.. code-block:: python
+
+   from easyvista_python_client import RequestUpdate
+
+   # An official column this model does not declare, sent anyway.
+   RequestUpdate(title="New title", extra_payload={"URGENCY_ID": 4})
+
+Three properties are worth knowing before you reach for it:
+
+* It is merged **last and wins**. A key that matches a declared field, or a key ``custom_fields``
+  produced, replaces it — matched **ignoring case**, because EasyVista's field names are
+  case-insensitive. So ``extra_payload={"URGENCY_ID": 4}`` beside ``urgency_id=8`` sends
+  ``URGENCY_ID`` alone, not both.
+* It **bypasses this model's validation entirely**. Nothing checks the name, the type or a length
+  cap; a typo reaches the server as a typo.
+* Every field these models decline to declare rests on behaviour measured against a single
+  instance. ``extra_payload`` is the supported way past those measurements on a deployment that
+  behaves differently — including for the fields :class:`~easyvista_python_client.RequestUpdate`
+  deliberately omits. Re-read the record afterwards: on this API a write can return HTTP 200,
+  apply one field and drop another in silence.
 
 Actions (comments / followups)
 -------------------------------
@@ -401,6 +435,23 @@ bundle as Markdown containing only content and human labels (no API URLs).
    context.actions       # list[Action]
    context.documents     # list[Document]  (rendered as filenames)
 
+By default the bundle resolves the two Memo fields EasyVista populates out of the box,
+``description`` and ``comment``. Which memo actually carries a ticket's body is per-deployment
+configuration, so ``memo_fields`` lets you name the ones your instance uses; every resolved memo
+lands in ``context.memos``, keyed by the name you asked for, and a memo requested this way is
+rendered by ``to_markdown`` like any other body text.
+
+.. code-block:: python
+
+   context = client.get_ticket_context(ticket.rfc_number, memo_fields=("description", "solution"))
+   context.memos["solution"]   # the resolved text, or None if the instance has no such memo
+
+.. warning::
+
+   Pass a tuple or list, never a bare string. ``str`` satisfies ``Sequence[str]``, so
+   ``memo_fields="solution"`` type-checks and then iterates its letters, issuing one nonsense
+   request per character instead of the one you meant.
+
 .. note::
 
    By default ``get_ticket_context`` also resolves each action's note text
@@ -417,14 +468,18 @@ concurrently — see :ref:`sync-vs-async`.
 
    **Which heading a ticket's body gets.** ``to_markdown`` titles a block by the
    role it plays, not by the EasyVista field it came from. A ticket's body does
-   not always arrive in ``DESCRIPTION``: on many deployments that memo is unused
-   and ``COMMENT`` carries the text, and ``RequestUpdate.description`` writes
-   ``COMMENT`` on any instance. So when only one of the two memos has text, it is
+   not always arrive in ``DESCRIPTION``: which memo carries it is per-deployment
+   configuration and is not reliably detectable at runtime, and
+   ``RequestUpdate.description`` writes ``COMMENT`` on any instance. So when only
+   one of the two memos has text, it is
    the body and is rendered under ``## Description`` whichever field it came
    from; when both have text the distinction is real and each keeps its own
-   ``## Description`` / ``## Comment`` heading. The ``context.description`` and
-   ``context.comment`` attributes are unaffected and still name their source
-   memo.
+   ``## Description`` / ``## Comment`` heading. The same rule covers a memo asked
+   for through ``memo_fields``: when neither default memo has text, a single
+   populated entry in ``context.memos`` becomes the body under ``## Description``,
+   and several each get a heading derived from the name you requested
+   (``## Solution``). The ``context.description`` and ``context.comment``
+   attributes are unaffected and still name their source memo.
 
 Searching and pagination
 -------------------------

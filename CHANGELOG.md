@@ -144,7 +144,9 @@ a deprecation policy will follow the 1.0 release.
   accepted on one instance (tier 4, date not recorded). `impact_id` is
   vendor-documented as an **integer** (tier 1); its `str` branch exists so a
   caller who quotes it is not rejected, not because a string was independently
-  measured landing here. Whichever type is passed reaches the wire unchanged.
+  measured landing here. `origin` sends whichever type is passed, unchanged;
+  `impact_id` normalizes a numeric string back to the vendor's documented int —
+  see **Changed** below, where the wire-form consequences of both are set out.
 - Three shipped docstrings cited a gitignored, instance-private handover note
   as the documented request body. That file is invisible to every reader of the
   published repository — a dead link — and was never the vendor documentation
@@ -158,9 +160,49 @@ a deprecation policy will follow the 1.0 release.
   vendor requires only `catalog_guid` or `catalog_code`; the seven-field body
   is a hedge against per-catalog configuration measured on one instance, which
   the docstring stated as an API requirement.
+- `TicketContext.to_markdown` dropped a non-default memo. Fetch was
+  parameterised by `memo_fields` and rendering was not, so
+  `get_ticket_context(rfc, memo_fields=("solution",))` — the headline case for
+  that parameter, a deployment whose body memo is neither default — produced a
+  Markdown export with no body section and no warning. It now applies the same
+  role-naming rule to `memos`: when neither `description` nor `comment` has
+  text, a single populated memo becomes the body under `## Description`, and
+  several each get a heading derived from the field name requested.
 
 ### Changed
 
+- **The wire form changed for a caller who passes an id as a numeric string.**
+  Widening a `PostRequest` field from `int` to `int | str` is not purely
+  additive, and the entries above previously implied it was: pydantic's smart
+  union keeps the exact type match where the old `int` field coerced. So
+  `PostRequest(origin="7")` used to send `7` and now sends `"7"`, and the same
+  is true of `department_id` and `recipient_id`, widened in this release for
+  the same reason. The vendor documents all three columns as **strings**
+  (tier 1, `docs/vendor-api-reference.md`), so the string form is the
+  documented one and there is nothing to normalize towards. An id was measured
+  accepted in either form on one instance (tier 4, 2026-08-25), so on that
+  deployment this changes the bytes and not the outcome — but a deployment that
+  discriminates on JSON type would see a behaviour change. Pass an `int` to get
+  the old bytes.
+- **`PostRequest.impact_id` is the exception, and it coerces again.** It is
+  declared `Field(union_mode="left_to_right")` with `int` first, so
+  `impact_id="28"` reaches the wire as `28`. The vendor documents this column
+  as an **integer** (tier 1), which is the form worth normalizing towards; the
+  `str` branch exists so a caller who quotes the value is not rejected, not so
+  that the quoted form ships. A non-numeric string is still accepted and passes
+  through as written, so nothing previously accepted is refused now. (Between
+  the widening and this entry `impact_id="28"` did ship as `"28"`; both changes
+  fall in this same unreleased section, so no release carried it.)
+- **`extra_payload` overrides a declared field across letter case.** EasyVista's
+  field names are case-insensitive, so the exact-key merge broke the escape
+  hatch's own promise: `PostRequest(urgency_id=8,
+  extra_payload={"URGENCY_ID": "4"})` put **both** spellings on the wire with
+  conflicting values and left the winner to the server. An `extra_payload` key
+  now replaces any declared or `custom_fields`-produced key it matches when
+  case is ignored, and `extra_payload`'s spelling and value are what ship. The
+  `ALL_CAPS` form is the likely one, not a corner case — it mirrors the read
+  side, which is where callers copy names from. This is a merge rule: a
+  collision is never an error.
 - **Live-test credential renamed** (contributor-facing; the published package is
   unaffected). `EASYVISTA_TEST_USER` / `secrets/easyvista_test_user` are now
   `EASYVISTA_TEST_ACCOUNT` / `secrets/easyvista_test_account`. The value never

@@ -58,18 +58,24 @@ deployment needs before you build a payload for it.
 1. Discover the ids (above). Never hardcode an id copied from another
    instance — catalog codes, status/urgency/impact ids and group ids are all
    instance-specific.
-2. Build a `PostRequest`. `catalog_code` plus `title` is the practical
-   minimum; most catalogs also require `origin`, `department_id`,
-   `urgency_id` and `impact_id`.
+2. Build a `PostRequest`. The subject is the only vendor-required part, given
+   either as `catalog_guid` — the vendor documents the **guid** as the
+   preferred identifier — or as `catalog_code`; a body with neither is refused
+   locally. Add `title`, and note that most catalogs also want `origin`,
+   `department_id`, `urgency_id` and `impact_id`: that fuller body was accepted
+   on every catalog tried on one instance, so it is a hedge against per-catalog
+   configuration rather than an API requirement.
 3. Put instance-specific columns in `custom_fields`; they serialize with an
-   `e_` prefix unless already prefixed.
+   `e_` prefix unless already prefixed. For an **official** column a model does
+   not declare, use `extra_payload` instead — un-prefixed, merged last (a key
+   matching a declared one *ignoring case* replaces it), and not validated.
 4. Call `create_ticket(ticket)`. It returns a `Request` whose `rfc_number` is
    usable immediately — see the first Gotcha for why.
 5. To set body text you can read back afterwards, follow the create with
    `update_ticket(rfc, RequestUpdate(description=...))`. `RequestUpdate` also
-   accepts `title`, `status_id`, `impact_id`, `owner_id` and
-   `external_reference` (capped at 50 characters) after create — see the
-   Gotchas for what it deliberately omits.
+   accepts `title`, `impact_id`, `owner_id` and `external_reference` (capped at
+   50 characters) after create — see the Gotchas for what it deliberately
+   omits, and use `set_status(rfc, status_guid=...)` for a status.
 6. Read one ticket with `get_ticket(rfc)`; search a page with
    `search_tickets(...)`, which returns a `SearchResult` carrying `.records`,
    `.record_count` (this page) and `.total_record_count` (every match on the
