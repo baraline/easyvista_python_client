@@ -9,6 +9,51 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
+### Added
+
+- `client.send(method, path, *, params=, json=, headers=)` on both clients — the
+  supported route to any `api_root`-relative path this package does not wrap.
+  An instance advertises around a hundred paths in its own OpenAPI document and
+  this package wraps roughly ten of them; reference tables (`status`, `urgency`,
+  `groups`, `locations`, `slas`), the external-table route and whole families
+  such as `problems` and `known-errors` were previously unreachable without a
+  fork. It shares the retry policy and the error mapping with every typed
+  method, and returns the decoded JSON unchanged. An absolute URL is never
+  followed: `path` always joins to `api_root`, which is what keeps the
+  credential scoped to the configured instance.
+- `params=` on the fifteen get/search/iter methods, layered under the resource
+  builder's own parameters so a caller can add a query parameter (the vendor
+  lists `formatDate`) without being able to replace the ticket filter on
+  `list_actions` or the offset an `iter_*` sweep is stepping.
+- `EasyvistaConfig.extra_headers` — merged over every header sent to the
+  instance, for an API gateway's key or a tenant selector. An `Authorization`
+  key raises at construction, in any casing, rather than silently shadowing
+  `token`.
+- `EasyvistaConfig.user_agent` and `DEFAULT_USER_AGENT`.
+- `EasyvistaConfig.default_params` — query parameters on every JSON API
+  request, under any the call itself sets. Not applied to downloads.
+- `EasyvistaConfig.additional_download_hosts` — opt specific **https** hosts in
+  as attachment sources, for a deployment serving them from a CDN or vanity
+  hostname. A fetch from one carries no credential and no `extra_headers`: it
+  goes through a second, credential-free HTTP client, because the token is
+  attached to the instance client at client level and cannot be removed per
+  request.
+- `RequestSpec.headers`, for a single request needing a content type other than
+  the client-level `application/json`.
+### Changed
+
+- `EasyvistaConfig.verify_ssl` accepts a CA-bundle path or an `ssl.SSLContext`
+  as well as a bool, matching what `httpx` has always accepted. A corporate
+  private CA no longer reads as though disabling verification were the only
+  option. Runtime behaviour is unchanged; this widens the annotation.
+- Requests now carry `User-Agent: easyvista-python-client/{version}` instead of
+  the underlying HTTP library's default, so the integration can be identified in
+  an instance's access log and whitelisted by a WAF operator. This is the only
+  change to the wire.
+- `EasyvistaConfig.__hash__` covers the scalar identity fields only. The hash
+  the dataclass would generate spans every field and raises `TypeError` once a
+  mapping field is non-empty; `__eq__` still compares every field.
+
 ### Removed
 
 - **BREAKING**: `RequestUpdate.status_id`. There is no flat status update on this

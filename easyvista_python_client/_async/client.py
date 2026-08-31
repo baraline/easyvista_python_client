@@ -10,8 +10,9 @@ claim that holds on only one of them.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from datetime import datetime
+from typing import Any
 
 from easyvista_python_client._async._concurrency import Semaphore, settle
 from easyvista_python_client._async._transport import (
@@ -97,6 +98,63 @@ class AsyncEasyvistaClient:
     async def aclose(self) -> None:
         await self._transport.aclose()
 
+    # --- escape hatch --------------------------------------------------------
+    async def send(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        json: Any = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Any:
+        """Issue an arbitrary request against this instance's API root.
+
+        The escape hatch. This package wraps roughly ten of the paths the
+        instance's own OpenAPI document advertises -- about a hundred of them on
+        the verified 2025.3 instance, read from ``GET {api_root}/swagger`` (tier
+        2: authoritative for that deployment, and another deployment may
+        advertise a different set). This reaches the rest without forking the
+        package: reference tables such as ``status``, ``urgency``, ``groups``,
+        ``locations`` and ``slas``, the external-table route, and whole families
+        like ``problems`` and ``known-errors``.
+
+        ``path`` joins to ``config.api_root`` exactly as every built-in method's
+        path does; a leading ``/`` is stripped, so ``"status"`` and ``"/status"``
+        address the same route. An absolute URL is **not** accepted, which is
+        what keeps the credential scoped to the configured instance by
+        construction. To fetch a URL the API handed back, use
+        :meth:`download_document` or :meth:`stream_document`.
+
+        Everything else is shared with the typed methods: ``config.max_retries``
+        attempts with the same backoff, and the same exception mapping -- 401 and
+        403 to :class:`~easyvista_python_client.EasyvistaAuthError`, 404 to
+        :class:`~easyvista_python_client.EasyvistaNotFound`, 400 and 590 to
+        :class:`~easyvista_python_client.EasyvistaValidationError`, with 590 never
+        retried because it is a rejected request rather than a transient one.
+        ``config.default_params`` is merged under ``params``; ``headers`` is
+        merged over the client-level ones and may not carry ``Authorization``.
+
+        Returns the decoded JSON body, or ``{}`` when the response has none.
+        Nothing is validated into a model and no envelope is unwrapped: the
+        caller owns the shape, which is the point -- there is no model for a
+        route this package does not wrap.
+
+        Two cautions that apply to every route reached this way. A 590 on a
+        create may still have created the row, so retrying can duplicate it. And
+        this API answers a write with HTTP 200 while silently dropping fields it
+        did not accept, so a 200 is not a receipt -- re-read.
+        """
+        return await self._transport.send(
+            RequestSpec(
+                method.upper(),
+                path,
+                json=json,
+                headers=dict(headers) if headers else None,
+            ),
+            params=params,
+        )
+
     # --- tickets -------------------------------------------------------------
     async def create_ticket(self, ticket: PostRequest) -> Request:
         spec, parse = requests_res.build_create_ticket(ticket)
@@ -128,13 +186,14 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         max_rows: int | None = None,
         offset: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> SearchResult[Request]:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = requests_res.build_search_tickets(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.send(spec))
+        return parse(await self._transport.send(spec, params=params))
 
     async def iter_tickets(
         self,
@@ -144,6 +203,7 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[Request]:
         """Yield tickets across pages, following the API's offset pagination.
 
@@ -176,6 +236,7 @@ class AsyncEasyvistaClient:
                 sort=sort,
                 max_rows=page_size,
                 offset=offset,
+                params=params,
             )
             if not result.records:
                 return
@@ -380,7 +441,11 @@ class AsyncEasyvistaClient:
         return parse(await self._transport.send(spec))
 
     async def list_actions(
-        self, rfc_number: str, *, fields: Iterable[str] | str | None = None
+        self,
+        rfc_number: str,
+        *,
+        fields: Iterable[str] | str | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> list[Action]:
         """List a ticket's actions.
 
@@ -417,7 +482,7 @@ class AsyncEasyvistaClient:
         spec, parse = actions_res.build_list_actions(
             rfc_number, fields=fields, max_rows=self.config.default_max_rows
         )
-        return parse(await self._transport.send(spec))
+        return parse(await self._transport.send(spec, params=params))
 
     async def iter_actions(
         self,
@@ -426,6 +491,7 @@ class AsyncEasyvistaClient:
         fields: Iterable[str] | str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[Action]:
         """Yield a ticket's actions across pages, following offset pagination.
 
@@ -451,7 +517,7 @@ class AsyncEasyvistaClient:
             spec, parse = actions_res.build_search_actions(
                 rfc_number, fields=fields, max_rows=page_size, offset=offset
             )
-            result = parse(await self._transport.send(spec))
+            result = parse(await self._transport.send(spec, params=params))
             if not result.records:
                 return
             for record in result.records:
@@ -463,7 +529,9 @@ class AsyncEasyvistaClient:
                 return
             offset += len(result.records)
 
-    async def get_action(self, action_id: str | int) -> Action:
+    async def get_action(
+        self, action_id: str | int, *, params: Mapping[str, Any] | None = None
+    ) -> Action:
         """Fetch one action, including the Memo links ``list_actions`` omits.
 
         The note text lives behind :attr:`Action.description`'s href on this
@@ -524,13 +592,14 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         max_rows: int | None = None,
         offset: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> SearchResult[Asset]:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = assets_res.build_search_assets(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.send(spec))
+        return parse(await self._transport.send(spec, params=params))
 
     async def iter_assets(
         self,
@@ -540,6 +609,7 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[Asset]:
         """Yield assets across pages (see :meth:`iter_tickets`)."""
         if page_size is None:
@@ -553,6 +623,7 @@ class AsyncEasyvistaClient:
                 sort=sort,
                 max_rows=page_size,
                 offset=offset,
+                params=params,
             )
             if not result.records:
                 return
@@ -681,13 +752,14 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         max_rows: int | None = None,
         offset: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> SearchResult[Department]:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = departments_res.build_search_departments(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.send(spec))
+        return parse(await self._transport.send(spec, params=params))
 
     async def iter_departments(
         self,
@@ -697,6 +769,7 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[Department]:
         """Yield departments across pages (see :meth:`iter_tickets`)."""
         if page_size is None:
@@ -710,6 +783,7 @@ class AsyncEasyvistaClient:
                 sort=sort,
                 max_rows=page_size,
                 offset=offset,
+                params=params,
             )
             if not result.records:
                 return
@@ -795,13 +869,14 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         max_rows: int | None = None,
         offset: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> SearchResult[Employee]:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = employees_res.build_search_employees(
             search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
         )
-        return parse(await self._transport.send(spec))
+        return parse(await self._transport.send(spec, params=params))
 
     async def iter_employees(
         self,
@@ -811,6 +886,7 @@ class AsyncEasyvistaClient:
         sort: str | None = None,
         page_size: int | None = None,
         max_records: int | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[Employee]:
         """Yield employees across pages (see :meth:`iter_tickets`)."""
         if page_size is None:
@@ -824,6 +900,7 @@ class AsyncEasyvistaClient:
                 sort=sort,
                 max_rows=page_size,
                 offset=offset,
+                params=params,
             )
             if not result.records:
                 return

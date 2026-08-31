@@ -71,6 +71,9 @@ NO_TRANSPORT = {
 #: Positional and keyword arguments for every method that does reach HTTP.
 ARGS: dict[str, tuple[tuple, dict]] = {
     "add_document": (("I1",), {"filename": "d.txt", "content": b"x"}),
+    # The escape hatch: an arbitrary route, parsed by nobody. PAYLOAD satisfies
+    # it because `send` returns the raw JSON body unchanged.
+    "send": (("GET", "requests"), {}),
     "close_ticket": (("I1",), {}),
     "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
     "count_tickets": ((), {}),

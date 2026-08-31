@@ -15,7 +15,7 @@ import respx
 
 from easyvista_python_client._async._transport import BaseTransport, Transport
 from easyvista_python_client._transport import RequestSpec
-from easyvista_python_client.config import EasyvistaConfig
+from easyvista_python_client.config import DEFAULT_USER_AGENT, EasyvistaConfig
 from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
     EasyvistaConnectionError,
@@ -726,3 +726,222 @@ async def test_stream_bytes_keeps_the_bearer_token_on_a_same_host_redirect():
         chunks = await _collect(transport.stream_bytes("https://ev.test/download/42"))
     assert b"".join(chunks) == b"blob"
     assert signed.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+# --- per-deployment adaptation: headers, params, download hosts ---------------
+
+
+def test_headers_carry_the_package_user_agent_by_default():
+    assert _base().headers()["User-Agent"] == DEFAULT_USER_AGENT
+
+
+def test_user_agent_config_replaces_the_default():
+    assert BaseTransport(_cfg(user_agent="my-app/1.4")).headers()["User-Agent"] == (
+        "my-app/1.4"
+    )
+
+
+def test_extra_headers_override_every_default_but_not_the_credential():
+    # extra_headers is merged LAST, so it wins over Accept, Content-Type and the
+    # User-Agent alike. It cannot reach the credential: EasyvistaConfig refuses
+    # an Authorization key at construction, so by the time headers() runs there
+    # is nothing left to guard against.
+    transport = BaseTransport(
+        _cfg(
+            extra_headers={
+                "Accept": "text/csv",
+                "Content-Type": "text/csv",
+                "User-Agent": "override/9",
+                "Ocp-Apim-Subscription-Key": "gateway-key",
+            }
+        )
+    )
+    headers = transport.headers()
+    assert headers["Accept"] == "text/csv"
+    assert headers["Content-Type"] == "text/csv"
+    assert headers["User-Agent"] == "override/9"
+    assert headers["Ocp-Apim-Subscription-Key"] == "gateway-key"
+    assert headers["Authorization"] == "Bearer tok"
+
+
+def test_merge_params_layers_config_then_call_then_spec():
+    # All three empty returns None, so a request that took no parameters before
+    # still takes none -- that is what keeps today's wire unchanged.
+    assert BaseTransport(_cfg()).merge_params(None, None) is None
+    transport = BaseTransport(_cfg(default_params={"formatDate": "iso", "shared": "c"}))
+    assert transport.merge_params(None, None) == {"formatDate": "iso", "shared": "c"}
+    # The caller beats config, and the spec beats both: the spec is what sets
+    # search/max_rows/offset, so a caller must not be able to replace them.
+    assert transport.merge_params({"shared": "call"}, None)["shared"] == "call"
+    assert transport.merge_params({"shared": "call"}, {"shared": "spec"})["shared"] == (
+        "spec"
+    )
+
+
+def test_download_headers_carry_no_credential_and_no_extra_headers():
+    # The whole point of allowing a foreign download host is that reaching it
+    # must not hand that host this instance's token -- nor a second secret
+    # sitting in extra_headers.
+    bearer = EasyvistaConfig(
+        server="https://ev.test",
+        account="acme",
+        token="tok",
+        extra_headers={"X-Api-Key": "SECRET"},
+    )
+    basic = EasyvistaConfig(
+        server="https://ev.test",
+        account="acme",
+        login="u",
+        password="p",
+        extra_headers={"X-Api-Key": "SECRET"},
+    )
+    for cfg in (bearer, basic):
+        assert BaseTransport(cfg).download_headers() == {
+            "User-Agent": DEFAULT_USER_AGENT
+        }
+
+
+def _allowing(*hosts):
+    return BaseTransport(_cfg(additional_download_hosts=set(hosts)))
+
+
+def test_resolve_url_admits_an_allow_listed_https_host():
+    url = "https://cdn.allowed.test/blob/1"
+    assert _allowing("cdn.allowed.test").resolve_url(url) == url
+
+
+def test_resolve_url_allow_list_is_https_only():
+    # Opting a host in must never be usable to downgrade a fetch to cleartext.
+    with pytest.raises(EasyvistaError):
+        _allowing("cdn.allowed.test").resolve_url("http://cdn.allowed.test/blob/1")
+
+
+def test_resolve_url_still_rejects_a_host_that_is_not_listed():
+    with pytest.raises(EasyvistaError, match="additional_download_hosts"):
+        _allowing("cdn.allowed.test").resolve_url("https://attacker.test/blob/1")
+
+
+def test_resolve_url_allow_list_still_rejects_a_userinfo_prefix():
+    # The raw-netloc comparison carries over to the new branch, so
+    # "attacker.test@cdn.allowed.test" matches no allow-listed host.
+    with pytest.raises(EasyvistaError):
+        _allowing("cdn.allowed.test").resolve_url(
+            "https://attacker.test@cdn.allowed.test/blob/1"
+        )
+
+
+def test_is_offsite_answers_false_for_the_instance_even_when_listed():
+    # A caller who redundantly lists their own instance host must not thereby
+    # strip their own credential from every download.
+    transport = _allowing("ev.test", "cdn.allowed.test")
+    assert transport.is_offsite(f"{ROOT}/documents/1/content") is False
+    assert transport.is_offsite("https://cdn.allowed.test/blob/1") is True
+
+
+@respx.mock
+async def test_get_bytes_sends_no_credential_to_an_allow_listed_host():
+    # THE LOAD-BEARING TEST. The token is attached to the instance client at
+    # CLIENT level -- as a header for Bearer, as an httpx.Auth for Basic -- and
+    # httpx can remove neither per request. A second, credential-free client is
+    # what makes this assertion hold, so both auth mechanisms are checked here:
+    # one does not cover the other.
+    bearer = EasyvistaConfig(
+        server="https://ev.test",
+        account="acme",
+        token="tok",
+        additional_download_hosts={"cdn.allowed.test"},
+    )
+    basic = EasyvistaConfig(
+        server="https://ev.test",
+        account="acme",
+        login="u",
+        password="p",
+        additional_download_hosts={"cdn.allowed.test"},
+    )
+    for cfg in (bearer, basic):
+        route = respx.get("https://cdn.allowed.test/blob/1").mock(
+            return_value=httpx.Response(200, content=b"payload")
+        )
+        async with Transport(cfg) as transport:
+            fetched = await transport.get_bytes("https://cdn.allowed.test/blob/1")
+        assert fetched == b"payload"
+        assert "authorization" not in route.calls.last.request.headers
+
+
+@respx.mock
+async def test_get_bytes_still_authenticates_against_the_instance():
+    # The other half of the pair: opting a foreign host in must not disturb the
+    # instance's own downloads.
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(200, content=b"payload")
+    )
+    async with Transport(_cfg(additional_download_hosts={"cdn.allowed.test"})) as t:
+        assert await t.get_bytes("documents/1/content") == b"payload"
+    assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+@respx.mock
+async def test_stream_bytes_sends_no_credential_to_an_allow_listed_host():
+    # _open_stream selects its client separately and shares no code with
+    # _do_get_bytes past resolve_url, so the guarantee is asserted twice.
+    route = respx.get("https://cdn.allowed.test/blob/1").mock(
+        return_value=httpx.Response(200, content=b"payload")
+    )
+    async with Transport(_cfg(additional_download_hosts={"cdn.allowed.test"})) as t:
+        chunks = await _collect(t.stream_bytes("https://cdn.allowed.test/blob/1"))
+    assert b"".join(chunks) == b"payload"
+    assert "authorization" not in route.calls.last.request.headers
+
+
+@respx.mock
+async def test_stream_bytes_still_authenticates_against_the_instance():
+    route = respx.get(f"{ROOT}/documents/1/content").mock(
+        return_value=httpx.Response(200, content=b"payload")
+    )
+    async with Transport(_cfg(additional_download_hosts={"cdn.allowed.test"})) as t:
+        chunks = await _collect(t.stream_bytes("documents/1/content"))
+    assert b"".join(chunks) == b"payload"
+    assert route.calls.last.request.headers["Authorization"] == "Bearer tok"
+
+
+async def test_the_download_client_exists_only_when_opted_in_and_is_closed():
+    plain = Transport(_cfg())
+    assert plain._download_client is None
+    await plain.aclose()
+
+    opted = Transport(_cfg(additional_download_hosts={"cdn.allowed.test"}))
+    assert opted._download_client is not None
+    await opted.aclose()
+    assert opted._client.is_closed
+    assert opted._download_client.is_closed
+
+
+@respx.mock
+async def test_send_layers_the_three_parameter_sources_on_the_wire():
+    route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    cfg = _cfg(default_params={"max_rows": 1, "formatDate": "config"})
+    async with Transport(cfg) as transport:
+        await transport.send(
+            RequestSpec("GET", "requests", params={"max_rows": 10}),
+            params={"max_rows": 5, "formatDate": "iso"},
+        )
+    url = route.calls.last.request.url
+    assert url.params["max_rows"] == "10"  # the spec wins
+    assert url.params["formatDate"] == "iso"  # the call beats config
+
+
+@respx.mock
+async def test_request_spec_headers_override_the_client_level_ones():
+    route = respx.post(f"{ROOT}/upload").mock(return_value=httpx.Response(200, json={}))
+    async with Transport(_cfg()) as transport:
+        await transport.send(
+            RequestSpec("POST", "upload", headers={"Content-Type": "text/csv"})
+        )
+    assert route.calls.last.request.headers["Content-Type"] == "text/csv"
+
+
+def test_request_spec_refuses_the_credential_in_its_headers():
+    with pytest.raises(ValueError, match="must not set"):
+        RequestSpec("GET", "requests", headers={"authorization": "Bearer other"})

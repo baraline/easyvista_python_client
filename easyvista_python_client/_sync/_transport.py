@@ -16,7 +16,7 @@ and never a claim that holds on only one of them.
 from __future__ import annotations
 
 import json
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
@@ -29,7 +29,7 @@ from tenacity import (
 )
 
 from easyvista_python_client._transport import RequestSpec
-from easyvista_python_client.config import EasyvistaConfig
+from easyvista_python_client.config import DEFAULT_USER_AGENT, EasyvistaConfig
 from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
     EasyvistaConnectionError,
@@ -65,13 +65,19 @@ class BaseTransport:
         """Return an absolute URL for a resource path or an API-supplied URL.
 
         Relative paths join to ``api_root`` exactly as :meth:`build_url` does.
-        An absolute URL is passed through **only when its scheme and host match
-        ``config.server``**, and raises otherwise.
+        An absolute URL is passed through when its scheme and host match
+        ``config.server``, or -- opt-in only -- when it is ``https`` and its host
+        is listed in ``config.additional_download_hosts``. Anything else raises.
 
         That check is load-bearing, not decoration. Every request this transport
         makes carries the instance's Bearer token, so following an absolute URL
         taken out of a response body (an attachment's ``DDL_HREF``, say) would
-        hand that credential to whatever host the body named.
+        hand that credential to whatever host the body named. The allow-list does
+        not reopen that: a URL admitted by it is fetched through a SEPARATE
+        client carrying no credential and no ``config.extra_headers`` -- see
+        :meth:`is_offsite` and :meth:`download_headers`. Nothing but a download
+        ever consults the allow-list; :meth:`Transport.send` refuses an absolute
+        URL outright, so the JSON API is unaffected by it.
 
         What is guaranteed is exactly that and no more: a foreign URL in a
         response **body** is refused. An HTTP **redirect** off the instance is
@@ -91,22 +97,105 @@ class BaseTransport:
         # scheme on DDL_HREF). Compare the RAW netloc, not .hostname: that
         # keeps "https://attacker.test@ev.test/x" rejected, because its netloc
         # is "attacker.test@ev.test", not "ev.test".
-        if (parsed.scheme, parsed.netloc.lower()) != (
+        if (parsed.scheme, parsed.netloc.lower()) == (
             server.scheme,
             server.netloc.lower(),
         ):
-            raise EasyvistaError(
-                f"refusing to fetch {parsed.scheme}://{parsed.netloc} — it is "
-                f"outside the configured instance "
-                f"({server.scheme}://{server.netloc})"
-            )
-        return path_or_url
+            return path_or_url
+        # https only, so opting a host in can never downgrade a fetch to
+        # cleartext. The raw-netloc comparison carries over unchanged, so a
+        # userinfo prefix still fails to match an allow-listed host.
+        if (
+            parsed.scheme == "https"
+            and parsed.netloc.lower() in self.config.additional_download_hosts
+        ):
+            return path_or_url
+        raise EasyvistaError(
+            f"refusing to fetch {parsed.scheme}://{parsed.netloc} — it is "
+            f"outside the configured instance "
+            f"({server.scheme}://{server.netloc}); add its host to "
+            f"config.additional_download_hosts to allow an UNAUTHENTICATED "
+            f"download from it"
+        )
+
+    def is_offsite(self, url: str) -> bool:
+        """True when ``url`` is on an allow-listed host rather than the instance.
+
+        Splits URLs :meth:`resolve_url` has already admitted into the two that
+        need different clients; it is not a second admission check. The
+        instance's own origin answers ``False`` even when it is also listed, so a
+        redundant entry cannot strip the credential from an instance request.
+        """
+        parsed = urlsplit(url)
+        server = urlsplit(self.config.server)
+        if (parsed.scheme, parsed.netloc.lower()) == (
+            server.scheme,
+            server.netloc.lower(),
+        ):
+            return False
+        return parsed.netloc.lower() in self.config.additional_download_hosts
 
     def headers(self) -> dict[str, str]:
-        base = {"Accept": "application/json", "Content-Type": "application/json"}
+        """Every header a request to the configured instance carries.
+
+        Layered lowest to highest: the JSON defaults, the User-Agent
+        (``config.user_agent``, or :data:`DEFAULT_USER_AGENT` when that is
+        unset), the credential, and finally ``config.extra_headers`` -- which
+        therefore overrides all three. It cannot override the credential:
+        :class:`EasyvistaConfig` refuses an ``Authorization`` key at
+        construction, in any casing, rather than letting one silently shadow
+        ``config.token``.
+
+        ``extra_headers`` winning is the opposite of how ``default_params``
+        loses to a per-call parameter, and the asymmetry is deliberate. The
+        client sets ``max_rows`` and ``offset`` itself, so a query parameter the
+        caller could override would break a paging sweep; no header set here is
+        load-bearing once the credential is out of reach.
+
+        ``Content-Type: application/json`` is set client-wide, so it rides even
+        on a GET or a DELETE with no body. That is redundant rather than wrong --
+        httpx sets it per request from ``json=`` anyway -- and it is kept because
+        it is what the verified instance has always been sent. A request needing
+        another content type overrides it through ``RequestSpec.headers``.
+        """
+        base = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": self.config.user_agent or DEFAULT_USER_AGENT,
+        }
         if self.config.token:
             base["Authorization"] = f"Bearer {self.config.token}"
+        base.update(self.config.extra_headers)
         return base
+
+    def download_headers(self) -> dict[str, str]:
+        """Headers for a fetch from a host that is NOT the configured instance.
+
+        Identification and nothing else. No credential, because the whole point
+        of allowing a foreign download host is that reaching it must not hand
+        that host this instance's token; and no ``config.extra_headers``, which
+        is where a second secret (an API key, a proxy credential) would sit. No
+        ``Accept`` either: what comes back is bytes, not JSON.
+        """
+        return {"User-Agent": self.config.user_agent or DEFAULT_USER_AGENT}
+
+    def merge_params(
+        self, call: Mapping[str, Any] | None, spec: Mapping[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Layer the three query-parameter sources, most specific last.
+
+        ``config.default_params`` first, then what the caller passed to the
+        method, then what the resource builder put on the spec. The builder wins
+        on purpose: it is what sets ``search``, ``max_rows`` and ``offset``, so a
+        caller cannot replace the ticket filter on ``list_actions`` or the offset
+        an ``iter_*`` sweep is stepping.
+
+        Returns ``None`` rather than an empty dict when every layer is empty, so
+        a request that took no parameters before still takes none.
+        """
+        if not (self.config.default_params or call or spec):
+            return None
+        return {**self.config.default_params, **(call or {}), **(spec or {})}
 
     def auth(self) -> httpx.Auth | None:
         if self.config.uses_basic_auth:
@@ -217,6 +306,27 @@ class Transport(BaseTransport):
             timeout=config.timeout,
             verify=config.verify_ssl,
         )
+        # A second client, for the hosts config.additional_download_hosts opts
+        # in to. It exists to carry NO credential: the token is attached to
+        # self._client at CLIENT level, both as a header and (for Basic) as an
+        # httpx.Auth, and neither can be removed per request -- a per-request
+        # header can only replace Authorization, never delete it, and a
+        # per-request auth=None means "use the client default". Built here
+        # rather than on first use because two concurrent downloads would
+        # otherwise both construct one and leak the loser.
+        self._download_client: httpx.Client | None = None
+        if config.additional_download_hosts:
+            self._download_client = httpx.Client(
+                headers=self.download_headers(),
+                timeout=config.timeout,
+                verify=config.verify_ssl,
+            )
+
+    def _client_for(self, url: str) -> httpx.Client:
+        """The instance client, or the credential-free one for a foreign host."""
+        if self._download_client is not None and self.is_offsite(url):
+            return self._download_client
+        return self._client
 
     def __enter__(self) -> Transport:
         return self
@@ -225,17 +335,34 @@ class Transport(BaseTransport):
         self.close()
 
     def close(self) -> None:
-        self._client.close()
+        try:
+            self._client.close()
+        finally:
+            if self._download_client is not None:
+                self._download_client.close()
 
-    def _do_send(self, spec: RequestSpec) -> Any:
+    def _do_send(
+        self, spec: RequestSpec, params: Mapping[str, Any] | None
+    ) -> Any:
         response = self._client.request(
-            spec.method, self.build_url(spec.path), params=spec.params, json=spec.json
+            spec.method,
+            self.build_url(spec.path),
+            params=self.merge_params(params, spec.params),
+            json=spec.json,
+            headers=dict(spec.headers) if spec.headers else None,
         )
         if self.is_retryable_status(response.status_code):
             raise _RetryableResponse(response)
         return self.finish(response)
 
-    def send(self, spec: RequestSpec) -> Any:
+    def send(
+        self, spec: RequestSpec, *, params: Mapping[str, Any] | None = None
+    ) -> Any:
+        """Execute ``spec``, with ``params`` layered under the spec's own.
+
+        ``config.default_params`` sits under both -- see :meth:`merge_params`
+        for the full ordering.
+        """
         retryer = Retrying(
             stop=stop_after_attempt(self.config.max_retries + 1),
             wait=wait_exponential(multiplier=0.5, max=10),
@@ -243,16 +370,15 @@ class Transport(BaseTransport):
             reraise=True,
         )
         try:
-            return retryer(self._do_send, spec)
+            return retryer(self._do_send, spec, params)
         except _RetryableResponse as exc:
             return self.finish(exc.response)
         except httpx.TransportError as exc:
             raise EasyvistaConnectionError(f"connection failed: {exc}") from exc
 
     def _do_get_bytes(self, path_or_url: str) -> bytes:
-        response = self._client.get(
-            self.resolve_url(path_or_url), follow_redirects=True
-        )
+        url = self.resolve_url(path_or_url)
+        response = self._client_for(url).get(url, follow_redirects=True)
         if self.is_retryable_status(response.status_code):
             raise _RetryableResponse(response)
         if not response.is_success:
@@ -265,7 +391,11 @@ class Transport(BaseTransport):
         :meth:`BaseTransport.finish` always calls ``response.json()``, so binary
         responses need their own path. This one reuses the same retry policy and
         the same error mapping, so a 403 on an attachment still surfaces as
-        :class:`EasyvistaAuthError`. ``follow_redirects`` is on because a
+        :class:`EasyvistaAuthError`. ``config.default_params`` is deliberately
+        NOT applied: appending a query parameter to a signed download location is
+        a plausible way to invalidate it, and a date-format parameter is
+        meaningless on a fetch that returns bytes. ``follow_redirects`` is on
+        because a
         download URL commonly redirects to a signed location; httpx strips the
         ``Authorization`` header on a cross-origin redirect, so a foreign
         redirect degrades to an unauthenticated fetch rather than leaking the
@@ -307,8 +437,14 @@ class Transport(BaseTransport):
         actually been read -- hence the read before each raise, which is what
         makes the error mapping identical to :meth:`get_bytes`.
         """
-        response = self._client.send(
-            self._client.build_request("GET", self.resolve_url(path_or_url)),
+        url = self.resolve_url(path_or_url)
+        # One client for both calls: build_request is what stamps the
+        # client-level headers onto the request, so building with the instance
+        # client and sending with the download one would put the credential back
+        # on a foreign fetch.
+        client = self._client_for(url)
+        response = client.send(
+            client.build_request("GET", url),
             stream=True,
             follow_redirects=True,
         )

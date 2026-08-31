@@ -3,7 +3,8 @@
 from easyvista_python_client._async import AsyncEasyvistaClient
 from easyvista_python_client._sync import EasyvistaClient
 
-from .config import EasyvistaConfig
+from ._version import __version__
+from .config import DEFAULT_USER_AGENT, EasyvistaConfig
 from .context import TicketContext
 from .directory import DepartmentContext
 from .exceptions import (
@@ -37,9 +38,8 @@ from .references import Reference
 from .reporting import TicketStatistics, aggregate_tickets
 from .timestamps import format_ev_datetime, parse_ev_datetime
 
-__version__ = "0.2.0"
-
 __all__ = [
+    "DEFAULT_USER_AGENT",
     "Action",
     "ActionUpdate",
     "Asset",
