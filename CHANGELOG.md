@@ -120,6 +120,33 @@ a deprecation policy will follow the 1.0 release.
 - `TicketContext.to_markdown(fields=)` and the exported
   `DEFAULT_MARKDOWN_FIELDS` — the field table as `(label, column)` pairs.
   Extend rather than retype: `fields=[*DEFAULT_MARKDOWN_FIELDS, ("SLA", "SLA_ID")]`.
+- **Instance discovery** — four methods that answer "what do I have to pass to
+  create a ticket *here*", so no id has to be hardcoded from another
+  deployment:
+  - `get_api_spec(path="swagger")` reads the instance's own OpenAPI. Note the
+    route answers **HTTP 201**, not 200: this client is unaffected, but code
+    written beside it that gates on `status_code == 200` skips the document in
+    silence.
+  - `list_reference_table(path, ...)` reads any list route into
+    `SearchResult[GenericRecord]`. A 403 **propagates** rather than becoming
+    `[]` — an empty table is a legitimate answer, and collapsing the two would
+    let a caller conclude the instance has no statuses.
+  - `discover(name, ...)` resolves one reference to the ids, labels, codes and
+    GUIDs in use. `STATUS` additionally gets its `STATUS_GUID` from a ticket
+    sample, which is the only place one is readable and the value `set_status`
+    and `close_ticket` actually address a status by.
+  - `describe_instance(...)` profiles the lot into an `InstanceProfile` and
+    **never raises for one part**: every gap is named in `.unavailable` with a
+    machine-readable first token (`denied`, `failed`, `no-route`, `empty`,
+    `truncated`).
+  `IMPACT`, `SEVERITY`, `ORIGIN` and `ACTION_TYPE` have no route in the spec at
+  all, so they are sampling-only by construction — what comes back is the ids
+  *in use*, and a sample count is never a population count.
+- `GenericRecord`, `DiscoveredReference`, `InstanceProfile`, `ReferenceSource`
+  and `DEFAULT_DISCOVERY_NAMES` are exported from the package root.
+  `GenericRecord` declares **no columns** on purpose: a reference table's
+  response schema is tier 3, and the verified instance's own `/status` schema
+  is visibly wrong (it describes an SLA-shaped object with no status id).
 - `references.label_from_record` — the best human label anywhere in a
   reference-table row, matched by **suffix**. A reference table does not name
   its label column after the table: `groups` returns `GROUP_EN`, `locations`

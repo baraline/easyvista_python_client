@@ -33,7 +33,23 @@ from easyvista_python_client.directory import (
     _department_matches,
     _normalize_name,
 )
-from easyvista_python_client.exceptions import EasyvistaAuthError, EasyvistaNotFound
+from easyvista_python_client.discovery import (
+    DEFAULT_DISCOVERY_NAMES,
+    DiscoveredReference,
+    InstanceProfile,
+    ReferenceSource,
+    guids_from_sample,
+    merge_guids,
+    reference_from_table_row,
+    references_from_sample,
+    resolve_source,
+    sample_fields,
+)
+from easyvista_python_client.exceptions import (
+    EasyvistaAuthError,
+    EasyvistaError,
+    EasyvistaNotFound,
+)
 from easyvista_python_client.field_model import parse_memo
 from easyvista_python_client.filters import ev_equals_filter, is_safe_ev_value
 from easyvista_python_client.models.action import (
@@ -54,6 +70,7 @@ from easyvista_python_client.models.employee import (
     EmployeeUpdate,
     PostEmployee,
 )
+from easyvista_python_client.models.generic import GenericRecord
 from easyvista_python_client.models.request import PostRequest, Request, RequestUpdate
 from easyvista_python_client.pagination import SearchResult
 from easyvista_python_client.references import DEFAULT_LANGUAGE_ORDER
@@ -66,9 +83,11 @@ from easyvista_python_client.reporting import (
 from easyvista_python_client.resources import actions as actions_res
 from easyvista_python_client.resources import assets as assets_res
 from easyvista_python_client.resources import departments as departments_res
+from easyvista_python_client.resources import discovery as discovery_res
 from easyvista_python_client.resources import documents as documents_res
 from easyvista_python_client.resources import employees as employees_res
 from easyvista_python_client.resources import requests as requests_res
+from easyvista_python_client.resources.discovery import SWAGGER_PATH
 
 # Width of the action-body fan-out: a ceiling on requests in flight at once on
 # the async surface, inert on the sync one. This is the one fan-out here whose
@@ -78,6 +97,27 @@ from easyvista_python_client.resources import requests as requests_res
 # limit of 8 costs nothing (19 actions took 5.31s at limit 8 vs 5.43s unbounded
 # -- the server, not the client, is the bottleneck).
 _ACTION_FANOUT = 8
+
+
+def _unavailable_reason(exc: EasyvistaError) -> str:
+    """One ``InstanceProfile.unavailable`` value, first token machine-readable.
+
+    ``denied`` for 401/403, ``failed`` for everything else. The rest of the
+    string is for a human; split on the first space to branch on it.
+
+    A 403 here does NOT prove the route is denied: this API answers 403 for a
+    path that does not exist as well as for one a profile blocks, so the reason
+    says "denied or absent" rather than asserting which.
+    """
+    status = getattr(exc, "status_code", None)
+    if status in (401, 403):
+        return (
+            f"denied HTTP {status} -- the profile may lack read access, or the "
+            "route may not exist on this deployment; this API answers 403 for "
+            "both. Check get_api_spec()['paths']."
+        )
+    detail = f"HTTP {status}" if isinstance(status, int) else type(exc).__name__
+    return f"failed {detail}"
 
 
 class EasyvistaClient:
@@ -1179,6 +1219,439 @@ class EasyvistaClient:
         path = path.lstrip("/")
         field = path.rstrip("/").rsplit("/", 1)[-1]
         return parse_memo(self._transport.send(RequestSpec("GET", path)), field)
+
+    # --- instance discovery --------------------------------------------------
+    def get_api_spec(self, *, path: str = SWAGGER_PATH) -> dict[str, Any]:
+        """Fetch the instance's own OpenAPI description.
+
+        Returns the parsed document: ``info`` (``description`` carries the
+        product version, e.g. ``"Easyvista Service Manager REST API - 2025.3"``),
+        ``paths`` -- the routes *this* deployment exposes -- and ``components``.
+
+        **Trust the two halves differently.** ``paths`` is tier 2:
+        authoritative for this deployment, and the reason :meth:`discover` reads
+        urgencies at ``urgency`` rather than at the vendor-documented
+        ``urgencies``. ``components.schemas`` is tier 3: example-derived and
+        illustrative only. It declares ``required: []`` throughout and lists
+        whichever private ``E_*`` columns the example happened to carry, so a
+        field appearing in a schema is not a requirement and a field missing
+        from one is not forbidden.
+
+        .. warning::
+
+           **A GET to this route answers HTTP 201, not 200** (measured
+           2026-08-27 against one instance; it may not generalise). This client
+           is unaffected -- its transport treats any 2xx as success -- but code
+           you write beside it that gates on ``response.status_code == 200``
+           skips this document in silence and concludes the instance publishes
+           no spec. The route is ``{api_root}/swagger``, that is
+           ``/api/{api_version}/{account}/swagger``; the bare-host
+           ``{server}/swagger`` answers 403.
+
+        ``path`` is a keyword so a deployment that publishes its description
+        elsewhere is reachable without patching this package; the default is the
+        route measured on the verified instance.
+
+        Raises like any other read -- a 401/403 becomes ``EasyvistaAuthError``
+        rather than an empty document, because an empty document and a denied
+        one must not look alike.
+        """
+        spec, parse = discovery_res.build_get_api_spec(path)
+        return parse(self._transport.send(spec))
+
+    def list_reference_table(
+        self,
+        path: str,
+        *,
+        search: str | None = None,
+        fields: Iterable[str] | str | None = None,
+        sort: str | None = None,
+        max_rows: int | None = None,
+        offset: int | None = None,
+        params: Mapping[str, Any] | None = None,
+    ) -> SearchResult[GenericRecord]:
+        """Read any of the instance's list routes into column-free records.
+
+        ``path`` is resource-relative: ``"status"``, ``"urgency"``,
+        ``"catalog-requests"``, ``"locations"``, ``"groups"``, ``"slas"``,
+        ``"domains"``, ``"suppliers"``. Call :meth:`get_api_spec` and read
+        ``["paths"]`` to see which of them your deployment actually declares --
+        this package wraps about ten of that instance's hundred routes, and this
+        method is how you reach the rest of the read-only ones.
+
+        Records come back as :class:`GenericRecord`, which declares **no
+        columns**: nothing here assumes a schema, because the OpenAPI schemas for
+        these routes are tier 3 and one of them (``/status``) is visibly wrong.
+        Read a column by its API name from ``record.model_dump(by_alias=True)``,
+        or let ``record.reference(name)`` and ``record.classify_fields()`` do it
+        generically.
+
+        The four query parameters the spec declares on these routes are
+        ``max_rows``, ``sort``, ``fields`` and ``search``; each is sent only when
+        passed, so the default call is the bare route. ``offset`` is
+        vendor-documented for the requests list and merely *inferred* here, so it
+        too is sent only when asked for. ``params`` is merged last and wins, for
+        anything this signature does not model.
+
+        **A 403 propagates as ``EasyvistaAuthError``; it does not become
+        ``[]``.** An empty reference table is a legitimate answer on a lightly
+        configured instance, so collapsing a denial into an empty list would make
+        "you may not read this" indistinguishable from "there is nothing here" --
+        and a caller that builds a status map from an empty list concludes the
+        instance has no statuses and hardcodes a constant instead.
+        :meth:`describe_instance` is the layer that swallows the denial, and it
+        names the gap in ``.unavailable`` so the loss stays visible.
+
+        Note what a 403 does *not* tell you: this API answers **403 rather than
+        404 for a route that does not exist**, so a denied table and a misspelled
+        path are the same exception. ``get_api_spec()["paths"]`` distinguishes
+        them.
+
+        The result is a :class:`SearchResult`, not a list, so truncation is
+        detectable: compare ``.record_count`` with ``.total_record_count`` before
+        treating a page as the whole table. A route that answers with a bare
+        object and no envelope reports both as the number of records parsed, in
+        which case truncation cannot be detected from the response at all.
+        """
+        spec, parse = discovery_res.build_list_reference_table(
+            path,
+            search=search,
+            fields=fields,
+            sort=sort,
+            max_rows=max_rows,
+            offset=offset,
+            params=params,
+            context=self._validation_context,
+        )
+        return parse(self._transport.send(spec))
+
+    def _sample_records(
+        self,
+        source: ReferenceSource,
+        *,
+        sample_size: int,
+        search: str | None,
+        action_sample_tickets: int,
+        languages: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Sampled records carrying ``source``, as by-alias dumps.
+
+        Tickets are one sweep. Actions need a ticket sweep first, because the
+        actions list is filtered per ticket -- so the first
+        ``action_sample_tickets`` sampled RFC numbers are swept for their
+        actions. That sweep is always bounded: the ``offset``/``@next`` contract
+        is unverified on the actions endpoint (see :meth:`iter_actions`), and an
+        instance that ignores ``offset`` would otherwise repeat page one forever.
+        """
+        projection = sample_fields(source, languages=languages)
+        if source.sample_from != "actions":
+            return [
+                t.model_dump(by_alias=True)
+                for t in self.iter_tickets(
+                    search=search, fields=projection, max_records=sample_size
+                )
+            ]
+        rfcs = [
+            t.rfc_number
+            for t in self.iter_tickets(
+                search=search,
+                fields=["RFC_NUMBER"],
+                max_records=max(action_sample_tickets, 1),
+            )
+            if t.rfc_number
+        ]
+        records: list[dict[str, Any]] = []
+        for rfc in rfcs:
+            records.extend(
+                [
+                    a.model_dump(by_alias=True)
+                    for a in self.iter_actions(
+                        rfc, fields=projection, max_records=sample_size
+                    )
+                ]
+            )
+        return records
+
+    def discover(
+        self,
+        name: str,
+        *,
+        strategy: str = "auto",
+        reference_path: str | None = None,
+        sample_size: int = 200,
+        action_sample_tickets: int = 5,
+        search: str | None = None,
+        reference_search: str | None = None,
+        max_rows: int | None = None,
+        with_guid: bool = True,
+        languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
+    ) -> list[DiscoveredReference]:
+        """Find the ids, labels and codes one reference uses on this instance.
+
+        ``name`` is a reference name: ``"STATUS"``, ``"URGENCY"``,
+        ``"CATALOG_REQUEST"``, ``"LOCATION"``, ``"DEPARTMENT"``, ``"SLA"``,
+        ``"GROUP"``, ``"IMPACT"``, ``"SEVERITY"``, ``"ORIGIN"``,
+        ``"ACTION_TYPE"`` -- or any other column, including a custom ``e_*``
+        one, which is read off sampled tickets.
+
+        ``strategy``:
+
+        * ``"auto"`` (default) -- read the reference table when this
+          deployment's OpenAPI declares a route for the name, and fall back to
+          sampling if that route is denied. Names with no route go straight to
+          sampling and cost no wasted request.
+        * ``"reference"`` -- the table only. A denial raises. A name with no
+          route and no ``reference_path`` raises ``ValueError`` rather than
+          quietly sampling.
+        * ``"sample"`` -- sampling only; no reference route is called.
+
+        **Four names have no route at all** on the verified instance:
+        ``IMPACT``, ``SEVERITY``, ``ORIGIN`` and ``ACTION_TYPE``. That is a
+        topology fact read from the spec's ``paths`` (tier 2), not a 403 someone
+        measured, so no strategy reaches a table for them. What comes back is
+        the ids *in use* in the sample: an id configured but unused is
+        invisible, and a ``count`` is a sample count, never a population one.
+
+        ``reference_path`` overrides the route -- the escape hatch for a
+        deployment that spells a table differently. Urgencies are the live
+        example: the vendor documents ``GET /urgencies`` while the verified
+        instance declares ``GET /urgency``, so the default is the singular one
+        and ``reference_path="urgencies"`` reaches the other.
+
+        ``search`` filters the **sample** (a ticket or action filter -- see the
+        ``easyvista-search-syntax`` skill, and note that unparseable syntax
+        returns the whole table rather than erroring). ``reference_search``
+        filters the **table**. ``sample_size`` caps records fetched client-side;
+        ``max_rows`` caps the table page.
+
+        **``STATUS`` also gets its GUID, and only from a sample.** A
+        ``STATUS_GUID`` is not searchable and no reference read returns one, but
+        every ticket's nested ``STATUS`` object carries it -- so with
+        ``with_guid`` on (the default) discovering ``STATUS`` additionally
+        sweeps tickets, reads ``record["STATUS"]["STATUS_GUID"]``, and merges
+        each guid onto the matching id. That costs one extra ticket sweep even
+        under ``strategy="reference"``; pass ``with_guid=False`` to skip it. The
+        GUID is what :meth:`set_status` and :meth:`close_ticket` address a
+        status by -- a ``STATUS_ID`` will not work there -- so this is usually
+        the value you came for. A status no sampled ticket currently holds keeps
+        ``guid=None``: the sample cannot reach it.
+
+        Everything returned is per-deployment configuration. Ids are not
+        portable; ``8`` is *Cloture* and ``12`` is *En cours* on the verified
+        instance -- adjacent numbers, opposite meanings. Resolve at start-up and
+        fail loudly, do not freeze a constant.
+        """
+        if strategy not in ("auto", "reference", "sample"):
+            raise ValueError(
+                f"strategy={strategy!r} is not one of 'auto', 'reference', "
+                "'sample'"
+            )
+        source = resolve_source(name, reference_path=reference_path)
+        found: list[DiscoveredReference] = []
+
+        if strategy == "reference" and source.reference_path is None:
+            raise ValueError(
+                f"{source.name} has no reference route in this deployment's "
+                "OpenAPI paths, so strategy='reference' cannot read one. Pass "
+                "reference_path= if your deployment declares one, or use "
+                "strategy='sample' (which is what 'auto' does here)."
+            )
+
+        if strategy != "sample" and source.reference_path is not None:
+            try:
+                page = self.list_reference_table(
+                    source.reference_path, search=reference_search, max_rows=max_rows
+                )
+            except EasyvistaAuthError:
+                if strategy == "reference":
+                    raise
+                page = None
+            if page is not None:
+                found = [
+                    reference_from_table_row(
+                        row.model_dump(by_alias=True), source, languages=languages
+                    )
+                    for row in page.records
+                ]
+
+        needs_sample = not found and strategy != "reference"
+        wants_guid = with_guid and bool(source.guid_field)
+        if needs_sample or wants_guid:
+            records = self._sample_records(
+                source,
+                sample_size=sample_size,
+                search=search,
+                action_sample_tickets=action_sample_tickets,
+                languages=languages,
+            )
+            if needs_sample:
+                found = references_from_sample(
+                    records, source, languages=languages
+                )
+            if wants_guid:
+                found = merge_guids(found, guids_from_sample(records, source))
+        return found
+
+    def describe_instance(
+        self,
+        *,
+        names: Sequence[str] = DEFAULT_DISCOVERY_NAMES,
+        strategy: str = "auto",
+        reference_paths: Mapping[str, str] | None = None,
+        sample_size: int = 200,
+        action_sample_tickets: int = 5,
+        search: str | None = None,
+        max_rows: int | None = None,
+        include_spec: bool = True,
+        languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
+    ) -> InstanceProfile:
+        """Profile this deployment: its version, its routes, and its reference ids.
+
+        One call that answers "what do I have to pass to create a ticket
+        *here*". Returns an :class:`InstanceProfile`; read its docstring for what
+        discovery cannot reach, which is as important as what it can.
+
+        **No part can fail the whole.** Each fetch is attempted independently; an
+        EasyVista error is recorded in ``.unavailable`` -- keyed by ``"spec"`` or
+        by the reference name, with a first token of ``denied``, ``failed``,
+        ``no-route``, ``empty`` or ``truncated`` -- and the remaining parts still
+        run. Nothing is invented for a part that failed: its entry in
+        ``.references`` is an empty list, and the reason is in ``.unavailable``.
+        Read that dict before concluding an instance has no statuses; a total
+        outage looks exactly like a bare instance except that every gap is named.
+
+        Only ``EasyvistaError`` and its subclasses are caught. A bug inside this
+        package therefore still propagates rather than being buried as a fake
+        instance limitation.
+
+        **It samples once, not once per name.** Every name that needs sampling is
+        projected into a single ticket sweep of at most ``sample_size`` records,
+        and the names that live on actions come from one action sweep over the
+        first ``action_sample_tickets`` of those tickets. So the cost is roughly
+        one spec read, one read per declared reference table, and two short
+        sweeps -- all GETs, nothing written.
+
+        ``reference_paths`` overrides individual routes by name (e.g.
+        ``{"URGENCY": "urgencies"}``); ``names`` narrows the work;
+        ``include_spec=False`` skips the OpenAPI read, at the cost of leaving
+        ``version`` and ``spec_paths`` empty. Every default is the value that
+        works on the verified instance today.
+        """
+        overrides = dict(reference_paths or {})
+        unavailable: dict[str, str] = {}
+        version: str | None = None
+        spec_paths: tuple[str, ...] = ()
+
+        if include_spec:
+            try:
+                document = self.get_api_spec()
+            except EasyvistaError as exc:
+                unavailable["spec"] = _unavailable_reason(exc)
+            else:
+                info = document.get("info")
+                if isinstance(info, dict):
+                    description = info.get("description") or info.get("title")
+                    version = description if isinstance(description, str) else None
+                paths = document.get("paths")
+                if isinstance(paths, dict):
+                    spec_paths = tuple(str(p) for p in paths)
+
+        sources = [
+            resolve_source(name, reference_path=overrides.get(name.strip().upper()))
+            for name in names
+        ]
+
+        # One sweep per surface, shared by every name that needs it, rather than
+        # one sweep per name -- which would be eleven.
+        ticket_projection: list[str] = []
+        action_projection: list[str] = []
+        for source in sources:
+            projection = sample_fields(source, languages=languages)
+            target = (
+                action_projection
+                if source.sample_from == "actions"
+                else ticket_projection
+            )
+            target.extend(c for c in projection if c not in target)
+
+        tickets: list[dict[str, Any]] = []
+        actions: list[dict[str, Any]] = []
+        rfcs: list[str] = []
+        try:
+            tickets = [
+                t.model_dump(by_alias=True)
+                for t in self.iter_tickets(
+                    search=search, fields=ticket_projection, max_records=sample_size
+                )
+            ]
+            rfcs = [
+                str(t["RFC_NUMBER"])
+                for t in tickets[: max(action_sample_tickets, 0)]
+                if t.get("RFC_NUMBER")
+            ]
+        except EasyvistaError as exc:
+            unavailable["sample:tickets"] = _unavailable_reason(exc)
+
+        if action_projection and rfcs:
+            try:
+                for rfc in rfcs:
+                    actions.extend(
+                        [
+                            a.model_dump(by_alias=True)
+                            for a in self.iter_actions(
+                                rfc, fields=action_projection, max_records=sample_size
+                            )
+                        ]
+                    )
+            except EasyvistaError as exc:
+                unavailable["sample:actions"] = _unavailable_reason(exc)
+
+        references: dict[str, list[DiscoveredReference]] = {}
+        for source in sources:
+            found: list[DiscoveredReference] = []
+            if source.reference_path is None:
+                unavailable[source.name] = (
+                    "no-route this deployment's OpenAPI declares no list route "
+                    "for it, so the ids below are only those in use in the "
+                    "sample"
+                )
+            elif strategy != "sample":
+                try:
+                    page = self.list_reference_table(
+                        source.reference_path, max_rows=max_rows
+                    )
+                except EasyvistaError as exc:
+                    unavailable[source.name] = _unavailable_reason(exc)
+                else:
+                    found = [
+                        reference_from_table_row(
+                            row.model_dump(by_alias=True), source, languages=languages
+                        )
+                        for row in page.records
+                    ]
+                    if page.total_record_count > page.record_count:
+                        unavailable[source.name] = (
+                            f"truncated {page.record_count} of "
+                            f"{page.total_record_count} rows read"
+                        )
+            if not found:
+                records = actions if source.sample_from == "actions" else tickets
+                found = references_from_sample(records, source, languages=languages)
+            if source.guid_field:
+                found = merge_guids(found, guids_from_sample(tickets, source))
+            if not found and source.name not in unavailable:
+                unavailable[source.name] = (
+                    "empty the read succeeded and returned nothing"
+                )
+            references[source.name] = found
+
+        return InstanceProfile(
+            api_root=self.config.api_root,
+            version=version,
+            spec_paths=spec_paths,
+            references=references,
+            unavailable=unavailable,
+        )
 
     def get_ticket_context(
         self,

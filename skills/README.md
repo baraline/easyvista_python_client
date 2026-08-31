@@ -21,6 +21,7 @@ installed wheel, which carries only the `easyvista_python_client` package.
 | `easyvista-asset-workflow` | Create, fetch, search or iterate assets | `PostAsset`, `Asset` |
 | `easyvista-directory` | Resolve or provision departments and employees | `Department`, `Employee`, `find_departments` |
 | `easyvista-reporting-and-context` | Count and break down tickets, or build one context bundle | `TicketStatistics`, `aggregate_tickets`, `TicketContext`, `DepartmentContext` |
+| `easyvista-instance-discovery` | Find out what ids, routes and reference tables *this* deployment actually has, before hardcoding one | `describe_instance`, `discover`, `list_reference_table`, `get_api_spec`, `InstanceProfile`, `DiscoveredReference` |
 
 ## Sync and async
 

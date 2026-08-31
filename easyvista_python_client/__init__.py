@@ -7,6 +7,12 @@ from ._version import __version__
 from .config import DEFAULT_USER_AGENT, EasyvistaConfig
 from .context import DEFAULT_MARKDOWN_FIELDS, TicketContext
 from .directory import DepartmentContext
+from .discovery import (
+    DEFAULT_DISCOVERY_NAMES,
+    DiscoveredReference,
+    InstanceProfile,
+    ReferenceSource,
+)
 from .exceptions import (
     EasyvistaAuthError,
     EasyvistaConnectionError,
@@ -32,6 +38,7 @@ from .models.asset import Asset, PostAsset
 from .models.department import Department, DepartmentUpdate, PostDepartment
 from .models.document import Document
 from .models.employee import Employee, EmployeeUpdate, PostEmployee
+from .models.generic import GenericRecord
 from .models.request import PostRequest, Request, RequestUpdate
 from .pagination import SearchResult
 from .references import DEFAULT_LANGUAGE_ORDER, Reference, localized_label
@@ -39,6 +46,7 @@ from .reporting import TicketStatistics, aggregate_tickets
 from .timestamps import format_ev_datetime, parse_ev_datetime
 
 __all__ = [
+    "DEFAULT_DISCOVERY_NAMES",
     "DEFAULT_LANGUAGE_ORDER",
     "DEFAULT_MARKDOWN_FIELDS",
     "DEFAULT_USER_AGENT",
@@ -49,6 +57,7 @@ __all__ = [
     "Department",
     "DepartmentContext",
     "DepartmentUpdate",
+    "DiscoveredReference",
     "Document",
     "EasyvistaAuthError",
     "EasyvistaClient",
@@ -62,6 +71,8 @@ __all__ = [
     "Employee",
     "EmployeeUpdate",
     "FieldClassification",
+    "GenericRecord",
+    "InstanceProfile",
     "PostAction",
     "PostAsset",
     "PostDepartment",
@@ -69,6 +80,7 @@ __all__ = [
     "PostRequest",
     "PostTask",
     "Reference",
+    "ReferenceSource",
     "Request",
     "RequestUpdate",
     "SearchResult",

@@ -2188,3 +2188,279 @@ async def test_a_configured_datetime_format_is_honoured_end_to_end(config):
         result = await client.search_tickets()
     assert result.records[0].last_update is not None
     assert result.records[0].last_update.year == 2026
+
+
+# --- instance discovery ------------------------------------------------------
+
+
+@respx.mock
+async def test_get_api_spec_accepts_a_201_response(config):
+    """The regression guard for the ``== 200`` trap.
+
+    A GET to this route answers **201**, not 200 (measured 2026-08-27 on one
+    instance). This client's transport gates on ``is_success``, so any 2xx
+    works -- but code written beside it that checks ``status_code == 200``
+    skips the document in silence and concludes the instance publishes no spec.
+    Asserting on 201 specifically is the whole point; a 200 here would prove
+    nothing.
+    """
+    respx.get(f"{ROOT}/swagger").mock(
+        return_value=httpx.Response(
+            201, json={"info": {"description": "EV REST API - 2025.3"}, "paths": {}}
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        document = await client.get_api_spec()
+    assert document["info"]["description"] == "EV REST API - 2025.3"
+
+
+@respx.mock
+async def test_get_api_spec_honours_a_custom_path(config):
+    """The route is tier 4 -- measured on one instance and NOT declared in that
+    instance's own paths -- so a deployment publishing elsewhere needs a way
+    through that is not a fork."""
+    route = respx.get(f"{ROOT}/openapi.json").mock(
+        return_value=httpx.Response(200, json={"paths": {}})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.get_api_spec(path="openapi.json")
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_list_reference_table_lets_a_403_propagate(config):
+    """A denial must not look like an empty table.
+
+    An empty reference table is a legitimate answer on a lightly configured
+    instance. Collapsing a 403 into ``[]`` would make "you may not read this"
+    indistinguishable from "there is nothing here" -- and a caller building a
+    status map from ``[]`` concludes the instance has no statuses and reaches
+    for a hardcoded constant. ``describe_instance`` is the swallowing layer.
+    """
+    respx.get(f"{ROOT}/catalog-requests").mock(return_value=httpx.Response(403))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaAuthError):
+            await client.list_reference_table("catalog-requests")
+
+
+@respx.mock
+async def test_list_reference_table_returns_a_search_result_with_counts(config):
+    """A SearchResult, not a bare list, so truncation is detectable."""
+    respx.get(f"{ROOT}/urgency").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [{"URGENCY_ID": 1, "URGENCY_EN": "Low"}],
+                "record_count": "1",
+                "total_record_count": "7",
+            },
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        page = await client.list_reference_table("urgency")
+    assert page.record_count == 1
+    assert page.total_record_count == 7
+    assert page.records[0].model_dump(by_alias=True)["URGENCY_EN"] == "Low"
+
+
+@respx.mock
+async def test_discover_status_populates_the_guid_from_a_ticket_sample(config):
+    """The STATUS_GUID recipe, asserted end to end.
+
+    A STATUS_GUID is not searchable and no reference read returns one, but
+    every ticket's nested STATUS object carries it. The GUID is what
+    ``set_status`` and ``close_ticket`` address a status by -- a STATUS_ID will
+    not work there -- so this is usually the value the caller came for.
+    """
+    respx.get(f"{ROOT}/status").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"STATUS_ID": 8, "STATUS_FR": "Cloture"},
+                    {"STATUS_ID": 12, "STATUS_FR": "En cours"},
+                ]
+            },
+        )
+    )
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {
+                        "RFC_NUMBER": "I1",
+                        "STATUS": {
+                            "STATUS_ID": "8",
+                            "STATUS_GUID": "{ABC}",
+                            "STATUS_FR": "Cloture",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        found = await client.discover("STATUS", sample_size=5)
+    by_id = {r.id: r for r in found}
+    assert by_id["8"].guid == "{ABC}"
+    # A status present in the table but held by no sampled ticket keeps
+    # guid=None: the sample cannot reach it, and inventing one would hand back
+    # a GUID that addresses nothing.
+    assert by_id["12"].guid is None
+
+
+@respx.mock
+async def test_discover_a_routeless_name_never_calls_a_reference_route(config):
+    """IMPACT has no route in the spec at all, so no request is wasted on one."""
+    impact_route = respx.get(f"{ROOT}/impact").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {"RFC_NUMBER": "I1", "IMPACT_ID": "17"},
+                    {"RFC_NUMBER": "I2", "IMPACT_ID": "17"},
+                    {"RFC_NUMBER": "I3", "IMPACT_ID": "21"},
+                ]
+            },
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        found = await client.discover("IMPACT", sample_size=10)
+    assert impact_route.call_count == 0
+    assert [(r.id, r.count) for r in found] == [("17", 2), ("21", 1)]
+    assert all(r.source == "sample" for r in found)
+
+
+@respx.mock
+async def test_discover_strategy_reference_lets_a_403_raise(config):
+    respx.get(f"{ROOT}/status").mock(return_value=httpx.Response(403))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaAuthError):
+            await client.discover("STATUS", strategy="reference")
+
+
+@respx.mock
+async def test_discover_auto_falls_back_to_the_sample_on_a_denied_route(config):
+    respx.get(f"{ROOT}/status").mock(return_value=httpx.Response(403))
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {
+                        "RFC_NUMBER": "I1",
+                        "STATUS": {"STATUS_ID": "8", "STATUS_FR": "Cloture"},
+                    }
+                ]
+            },
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        found = await client.discover("STATUS", sample_size=5)
+    assert [(r.id, r.source) for r in found] == [("8", "sample")]
+
+
+async def test_discover_strategy_reference_refuses_a_routeless_name(config):
+    """Rather than quietly sampling, which would answer a different question."""
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="no reference route"):
+            await client.discover("IMPACT", strategy="reference")
+
+
+async def test_discover_refuses_an_unknown_strategy(config):
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="strategy="):
+            await client.discover("STATUS", strategy="guess")
+
+
+@respx.mock
+async def test_describe_instance_names_every_gap_and_still_returns_a_profile(config):
+    """No part can fail the whole.
+
+    ``/catalog-requests`` is denied here and everything else succeeds: the
+    profile still holds the other names, and the gap is named rather than
+    silently empty.
+    """
+    respx.get(f"{ROOT}/swagger").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "info": {"description": "EV REST API - 2025.3"},
+                "paths": {"/requests": {}, "/actions": {}},
+            },
+        )
+    )
+    respx.get(f"{ROOT}/catalog-requests").mock(return_value=httpx.Response(403))
+    for table in ("status", "urgency", "locations", "departments", "slas", "groups"):
+        respx.get(f"{ROOT}/{table}").mock(
+            return_value=httpx.Response(200, json={"records": [{"NAME_EN": "x"}]})
+        )
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200, json={"records": [{"RFC_NUMBER": "I1", "IMPACT_ID": "17"}]}
+        )
+    )
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(
+            200, json={"records": [{"ACTION_ID": 1, "ACTION_TYPE_ID": 94}]}
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        profile = await client.describe_instance(
+            sample_size=5, action_sample_tickets=1
+        )
+    assert profile.version == "EV REST API - 2025.3"
+    assert "/requests" in profile.spec_paths
+    assert profile.unavailable["CATALOG_REQUEST"].startswith("denied")
+    assert profile.references["STATUS"]
+    assert profile.references["IMPACT"][0].id == "17"
+    # The four routeless names say so, rather than looking like empty tables.
+    for routeless in ("IMPACT", "SEVERITY", "ORIGIN", "ACTION_TYPE"):
+        assert profile.unavailable[routeless].startswith("no-route")
+
+
+@respx.mock
+async def test_describe_instance_records_a_truncated_table(config):
+    """The rows present are real; they are just not all of them."""
+    respx.get(f"{ROOT}/swagger").mock(
+        return_value=httpx.Response(201, json={"info": {}, "paths": {}})
+    )
+    respx.get(f"{ROOT}/status").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [{"STATUS_ID": 8, "STATUS_FR": "Cloture"}],
+                "record_count": 1,
+                "total_record_count": 40,
+            },
+        )
+    )
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        profile = await client.describe_instance(names=["STATUS"], sample_size=1)
+    assert profile.unavailable["STATUS"].startswith("truncated")
+    assert profile.references["STATUS"]  # and the rows still came back
+
+
+@respx.mock
+async def test_describe_instance_returns_a_profile_when_everything_is_denied(config):
+    """A total outage looks like a bare instance EXCEPT that every gap is named.
+
+    Which is exactly why the docstring tells the reader to check
+    ``.unavailable`` before concluding an instance has no statuses.
+    """
+    respx.route(host="ev.test").mock(return_value=httpx.Response(403))
+    async with AsyncEasyvistaClient(config) as client:
+        profile = await client.describe_instance(
+            names=["STATUS", "IMPACT"], sample_size=1
+        )
+    assert profile.spec_paths == ()
+    assert profile.unavailable["spec"].startswith("denied")
+    assert profile.references["STATUS"] == []
+    assert profile.references["IMPACT"] == []

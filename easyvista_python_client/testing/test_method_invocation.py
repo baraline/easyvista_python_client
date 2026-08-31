@@ -79,6 +79,13 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
     "count_tickets": ((), {}),
     "create_action": (("I1", PostAction(action_type_id=94, group_id=3)), {}),
+    # sample_size=1 / action_sample_tickets=1 keep the blanket-mocked runs
+    # cheap: the shared PAYLOAD carries one RFC_NUMBER and one ACTION_ID with no
+    # `@next`, so every sweep terminates after one page on both surfaces.
+    "describe_instance": ((), {"sample_size": 1, "action_sample_tickets": 1}),
+    "discover": (("STATUS",), {"sample_size": 1, "action_sample_tickets": 1}),
+    "get_api_spec": ((), {}),
+    "list_reference_table": (("status",), {}),
     "create_task": (("I1", PostTask(action_type_id=94, group_id=3)), {}),
     "create_asset": ((PostAsset(catalog_id=1),), {}),
     "create_department": ((PostDepartment(),), {}),
