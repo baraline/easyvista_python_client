@@ -21,10 +21,15 @@ from easyvista_python_client._sync._transport import (
 )
 from easyvista_python_client._transport import RequestSpec
 from easyvista_python_client.config import DocumentDeletePathStyle, EasyvistaConfig
-from easyvista_python_client.context import TicketContext
+from easyvista_python_client.context import TicketContext, _degraded_entry
 from easyvista_python_client.directory import (
+    DEPARTMENT_MEMO_FIELD,
+    DEPARTMENT_NAME_COLUMNS,
+    DEPARTMENT_NOTE_FIELDS,
+    RECENT_TICKET_FIELDS,
     RECENT_TICKETS_SORT,
     DepartmentContext,
+    _as_fields,
     _department_matches,
     _normalize_name,
 )
@@ -308,6 +313,47 @@ class EasyvistaClient:
         result = self.search_tickets(search=search, max_rows=1)
         return result.total_record_count
 
+    def _collect_tickets(
+        self,
+        *,
+        search: str | None,
+        fields: str | list[str] | None,
+        max_records: int | None,
+    ) -> tuple[list[Request], int | None]:
+        """Page tickets, returning them plus the first page's reported total.
+
+        Exists because :meth:`iter_tickets` discards the envelope: it yields
+        records one at a time and has no way to also hand back
+        ``total_record_count``, which is what tells a capped aggregation how
+        large the population it sampled actually was. The paging is the same
+        offset walk :meth:`iter_tickets` performs and issues the same requests
+        for the same cap; it collects a whole page and trims at the end rather
+        than stopping mid-page, which changes nothing on the wire.
+
+        The total is the server's count for ``search`` alone. Any client-side
+        date window is applied later, so it is not comparable with the
+        aggregated total when one is set.
+        """
+        page_size = self.config.default_max_rows
+        offset = 0
+        population_total: int | None = None
+        records: list[Request] = []
+        while max_records is None or len(records) < max_records:
+            result = self.search_tickets(
+                search=search, fields=fields, max_rows=page_size, offset=offset
+            )
+            if population_total is None:
+                population_total = result.total_record_count
+            if not result.records:
+                break
+            records.extend(result.records)
+            if result.next_url is None:
+                break
+            offset += len(result.records)
+        if max_records is not None:
+            del records[max_records:]
+        return records, population_total
+
     def ticket_statistics(
         self,
         *,
@@ -324,30 +370,40 @@ class EasyvistaClient:
         pass ``None`` to aggregate all) and groups them by each name in
         ``dimensions`` (default: all of ``DEFAULT_DIMENSIONS``). ``created_since`` /
         ``created_until`` apply an inclusive client-side window on the ticket's
-        creation date. When the cap truncates, the result describes the fetched
-        subset — use :meth:`count_tickets` for the true total.
+        creation date.
+
+        When the cap truncates, the result describes the fetched subset and
+        ``TicketStatistics.truncated`` is ``True``; ``population_total`` carries
+        the server's own count for ``search``, read off the first page at no
+        extra request. ``truncated`` reports "the cap was reached", so it is
+        ``True`` for a population whose size is exactly the cap; compare it
+        against ``population_total`` when that distinction matters.
+        ``population_total`` is counted before any client-side
+        ``created_since``/``created_until`` window, so it is not comparable with
+        ``total`` when one is set.
 
         Delegates to the same pure :func:`aggregate_tickets` on both surfaces.
         The page is collected into a list first because that function consumes
-        a plain iterable, and the async surface's ``iter_tickets`` is an async
-        generator it cannot take directly.
+        a plain iterable.
         """
         dims = DEFAULT_DIMENSIONS if dimensions is None else dimensions
         has_date_filter = created_since is not None or created_until is not None
         fields = fields_for_references(dims, include_creation_date=has_date_filter)
-        tickets = [
-            t
-            for t in self.iter_tickets(
-                search=search, fields=fields, max_records=max_records
-            )
-        ]
-        return aggregate_tickets(
+        tickets, population_total = self._collect_tickets(
+            search=search, fields=fields, max_records=max_records
+        )
+        stats = aggregate_tickets(
             tickets,
             dimensions=dims,
             created_since=created_since,
             created_until=created_until,
             languages=languages,
         )
+        # aggregate_tickets is offline and knows nothing about pages or caps,
+        # so these two are stamped here rather than computed in there.
+        stats.truncated = max_records is not None and len(tickets) >= max_records
+        stats.population_total = population_total
+        return stats
 
     def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
         """Update a ticket's writable fields.
@@ -923,26 +979,53 @@ class EasyvistaClient:
                 return
             offset += len(result.records)
 
-    def get_department_comment(self, department_id: str | int) -> str | None:
+    def get_department_comment(
+        self,
+        department_id: str | int,
+        *,
+        memo_field: str = DEPARTMENT_MEMO_FIELD,
+    ) -> str | None:
         """Return the department's note (a Memo).
 
         ``""`` for an empty note; propagates transport errors so a 403/404 is
         distinguishable from an empty note (uses the generic ``resolve_memo``).
+
+        ``memo_field`` is the last path segment of
+        ``GET departments/{id}/{comment}``. In the instance OpenAPI document
+        read 2026-08-27 that segment is a path *parameter* named ``comment``,
+        not a literal -- the sibling ``GET requests/{rfc_number}/{comment}``
+        describes the same parameter as "Memo field type, could be comment,
+        description". So the route selects a memo column, and the default is
+        only the column the verified instance carries. Same idea as
+        :meth:`get_ticket_context`'s ``memo_fields``.
         """
-        return self.resolve_memo(
-            f"departments/{department_id}/comment_department"
-        )
+        return self.resolve_memo(f"departments/{department_id}/{memo_field}")
 
     def find_departments(
-        self, name: str, *, limit: int | None = None
+        self,
+        name: str,
+        *,
+        limit: int | None = None,
+        by: str | Sequence[str] = "auto",
     ) -> list[Department]:
         """Resolve departments by a fuzzy, language-agnostic ``name``.
 
-        Fast path (neutral): an all-digit ``name`` matches ``DEPARTMENT_ID`` exactly,
-        otherwise ``DEPARTMENT_CODE`` exactly; a hit returns immediately. Fuzzy
-        fallback: scan every department and match ``name`` — normalized so
-        ``"Acme Corp" == "ACME-CORP" == "acmecorp"`` — as a substring of any
-        string field. ``limit`` caps the result count. Returns ``[]`` on no match.
+        Fast path (server-side, exact): ``by`` names the columns to try, in
+        order, and the first one that returns records wins. ``"auto"`` tries
+        ``DEPARTMENT_CODE`` alone for a name containing anything but digits,
+        and ``DEPARTMENT_CODE`` then ``DEPARTMENT_ID`` for an all-digit one --
+        code first, because a department whose code is all digits would
+        otherwise be looked up as an id and a different department would come
+        back with no error. That costs one extra round trip when the digits are
+        an id and not a code. Pass a single column name to pin one lookup
+        (``by="DEPARTMENT_ID"``), an ordered sequence to choose your own, or an
+        empty sequence to skip the fast path.
+
+        Fuzzy fallback: scan every department and match ``name`` -- normalized
+        so ``"Acme Corp" == "ACME-CORP" == "acmecorp"``, and accent- and
+        case-folded so ``"Systemes"`` matches the same name written with its
+        accents -- as a substring of any string field. ``limit`` caps the result
+        count. Returns ``[]`` on no match.
 
         A ``name`` that cannot be expressed in EasyVista's search grammar (see
         :func:`~easyvista_python_client.is_safe_ev_value`) skips the server fast
@@ -953,10 +1036,22 @@ class EasyvistaClient:
         # expressed server-side would otherwise be interpolated raw — where a ','
         # silently widens the result set. Such names skip straight to the local
         # scan below, which handles any characters.
-        field = "DEPARTMENT_ID" if name.isdigit() else "DEPARTMENT_CODE"
+        #
+        # `isinstance(by, str)` is checked BEFORE the sequence branch, or
+        # `by="DEPARTMENT_ID"` would be read as eleven single-character columns.
+        if by == "auto":
+            columns: tuple[str, ...] = (
+                DEPARTMENT_NAME_COLUMNS if name.isdigit() else ("DEPARTMENT_CODE",)
+            )
+        elif isinstance(by, str):
+            columns = (by,)
+        else:
+            columns = tuple(by)
         if is_safe_ev_value(name):
-            search = ev_equals_filter(field, name)
-            if search is not None:
+            for column in columns:
+                search = ev_equals_filter(column, name)
+                if search is None:
+                    continue
                 fast = self.search_departments(search=search)
                 if fast.records:
                     return fast.records if limit is None else fast.records[:limit]
@@ -1152,24 +1247,37 @@ class EasyvistaClient:
         # not five.
         ticket = self.get_ticket(rfc_number)
 
+        degraded: set[str] = set()
+
         # The asymmetry between these two except clauses is real and
         # load-bearing: the memos degrade on 404 *and* 403, while the two list
         # calls catch EasyvistaAuthError ONLY, so a 404 there still fails the
-        # bundle. Do not tidy them into a shared handler.
+        # bundle. Do not tidy them into a shared handler. Each records its own
+        # swallow inside its own clause, which keeps that asymmetry visible
+        # rather than hiding it behind a helper.
         def _actions() -> list[Action]:
             try:
                 return self.list_actions(rfc_number)
-            except EasyvistaAuthError:
+            except EasyvistaAuthError as exc:
+                degraded.add(_degraded_entry("actions", exc))
                 return []
 
         def _documents() -> list[Document]:
             try:
                 return self.list_documents(rfc_number)
-            except EasyvistaAuthError:
+            except EasyvistaAuthError as exc:
+                degraded.add(_degraded_entry("documents", exc))
                 return []
 
         memo_results = settle(
-            *(self._safe_memo(f"requests/{rfc_number}/{name}") for name in memo_fields),
+            *(
+                self._safe_memo(
+                    f"requests/{rfc_number}/{name}",
+                    degraded=degraded,
+                    branch=f"memo:{name}",
+                )
+                for name in memo_fields
+            ),
             _actions(),
             _documents(),
         )
@@ -1188,6 +1296,7 @@ class EasyvistaClient:
             actions=actions,
             documents=documents,
             memos=memos,
+            degraded=frozenset(degraded),
         )
 
     def _resolve_action_bodies(self, actions: list[Action]) -> list[Action]:
@@ -1222,8 +1331,14 @@ class EasyvistaClient:
         department_id: str | int,
         *,
         recent_tickets: int = 10,
+        recent_tickets_sort: str | None = RECENT_TICKETS_SORT,
+        ticket_fields: str | Sequence[str] | None = RECENT_TICKET_FIELDS,
+        employee_fields: str | Sequence[str] | None = None,
+        asset_fields: str | Sequence[str] | None = None,
         dimensions: Sequence[str] | None = None,
         languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
+        statistics_max_records: int | None = 100,
+        memo_fields: Sequence[str] = DEPARTMENT_NOTE_FIELDS,
         include_statistics: bool = True,
         include_assets: bool = True,
         resolve_manager: bool = True,
@@ -1231,18 +1346,64 @@ class EasyvistaClient:
     ) -> DepartmentContext:
         """Assemble a department plus its employees, manager, note, tickets and assets.
 
-        Only :meth:`get_department` is required; every related part is wrapped so a
-        403/404 degrades it to ``[]`` / ``None`` / ``0`` (same pattern as
-        :meth:`get_ticket_context`). The flags trim the heavier related calls.
-        Tickets and assets filter on ``DEPARTMENT_ID:"<id>"``. ``recent_tickets``
-        is ordered by **descending ``RFC_NUMBER``** (``RECENT_TICKETS_SORT``),
-        which is newest-first only where RFC numbers are issued monotonically:
-        it is a varchar, so the sort orders by the request-type prefix letter
-        before the date. The token must stay
-        space-separated: a colon form is silently ignored and degrades to the
-        API's default order with no error (measured live 2026-08-17). Ordering
-        therefore depends on the server honouring that token, which the live
-        suite asserts rather than this method.
+        Only :meth:`get_department` is required; every related part is wrapped
+        so a 403/404 degrades it to ``[]`` / ``None`` / ``0``, and records
+        itself in ``DepartmentContext.degraded`` so the degradation is visible
+        rather than silent. The flags trim the heavier related calls. Tickets
+        and assets filter on ``DEPARTMENT_ID:"<id>"``.
+
+        Every value this method samples with is a keyword, and every default is
+        what it sampled with before -- with one exception, ``ticket_fields``.
+
+        ``recent_tickets_sort`` is the sort token for the recent-ticket page,
+        defaulting to ``RECENT_TICKETS_SORT`` (``"RFC_NUMBER DESC"``). That is
+        **descending RFC_NUMBER**, which is newest-first only where RFC numbers
+        are issued monotonically: it is a varchar, so the sort orders by the
+        request-type prefix letter before the date, and on an instance issuing
+        more than one prefix every ``R...`` outranks every ``I...``. The default
+        is deliberately not a date column: an unhonoured sort token is silently
+        ignored by this API and degrades to the server's default order with no
+        error (see :meth:`iter_tickets`), so a date default would swap a
+        disclosed flaw for a hidden one, and ``RFC_NUMBER DESC`` is the one
+        token this repository has actually measured for this call. Pass
+        ``recent_tickets_sort="CREATION_DATE_UT DESC"`` on a deployment where
+        you have checked that a date sort is honoured, or ``None`` to send no
+        sort at all -- in which case "recent" means whatever order the server
+        returns.
+
+        ``ticket_fields`` is the ``fields=`` projection for the recent tickets.
+        Its default, ``RECENT_TICKET_FIELDS``, **projects** -- unlike every
+        other default here, this is a change from the previous behaviour, and
+        it is deliberate. Sending no projection is not neutral: on the verified
+        instance the default list projection returns ``TITLE`` present but empty
+        (tier 4 -- measured on one instance, 400 tickets scanned, zero with a
+        populated title; it may not generalise), so ``recent_tickets[i].title``
+        was ``None`` for every caller. Projecting also narrows what else comes
+        back: pass ``ticket_fields=None`` to send no projection, or your own
+        list to widen it.
+
+        ``employee_fields`` and ``asset_fields`` project the employee and asset
+        sweeps; both default to ``None``, which sends no projection, as before.
+
+        ``statistics_max_records`` caps the statistics sample and defaults to
+        100 -- the cap ``ticket_statistics`` applies, which this call inherited
+        silently before. The sample is unsorted, so it is not the department's
+        first hundred tickets by any ordering; when it truncates,
+        ``ticket_statistics.truncated`` is ``True`` and ``population_total``
+        carries the server's own count. ``ticket_count`` remains the true total
+        and is unaffected by this cap. Pass ``None`` to aggregate every ticket.
+
+        ``memo_fields`` names which Memo sub-resources to resolve, defaulting to
+        ``("comment_department",)``. The API models a memo name as a path
+        segment (``GET departments/{id}/{memo}``) (tier 2 --
+        ``docs/vendor-api-reference.md``: declared in the instance's OpenAPI
+        ``paths``), so a deployment carrying its directory note elsewhere is
+        reached by naming it here. Every resolved memo lands in
+        ``DepartmentContext.memos``; ``note`` is the first one that came back
+        with text. ``include_note=False`` skips all of them. Pass a tuple or
+        list, not a bare string: ``str`` itself satisfies ``Sequence[str]``, so
+        a bare name would be iterated one character at a time, one nonsense
+        request per letter.
 
         On the async surface the seven independent branches are issued
         concurrently, costing two waves instead of eight serial steps; on the
@@ -1260,14 +1421,23 @@ class EasyvistaClient:
         if search is None:
             raise ValueError("department_id is required to build a department context")
 
+        degraded: set[str] = set()
+        ticket_projection = _as_fields(ticket_fields)
+
         # Every branch here degrades on both 403 and 404, unlike the ticket
         # bundle above, whose two list calls catch EasyvistaAuthError only. The
         # `include_*` / `resolve_*` flags sit inside the branch so a disabled one
         # costs no request at all, exactly as a plain `if` around the call would.
         def _employees() -> list[Employee]:
             try:
-                return [e for e in self.iter_employees(search=search)]
-            except (EasyvistaAuthError, EasyvistaNotFound):
+                return [
+                    e
+                    for e in self.iter_employees(
+                        search=search, fields=_as_fields(employee_fields)
+                    )
+                ]
+            except (EasyvistaAuthError, EasyvistaNotFound) as exc:
+                degraded.add(_degraded_entry("employees", exc))
                 return []
 
         def _manager() -> Employee | None:
@@ -1275,20 +1445,27 @@ class EasyvistaClient:
                 return None
             try:
                 return self.get_employee(department.manager_id)
-            except (EasyvistaAuthError, EasyvistaNotFound):
+            except (EasyvistaAuthError, EasyvistaNotFound) as exc:
+                degraded.add(_degraded_entry("manager", exc))
                 return None
 
-        def _note() -> str | None:
+        def _memos() -> dict[str, str | None]:
             if not include_note:
-                return None
-            return self._safe_memo(
-                f"departments/{department_id}/comment_department"
-            )
+                return {}
+            return {
+                name: self._safe_memo(
+                    f"departments/{department_id}/{name}",
+                    degraded=degraded,
+                    branch=f"memo:{name}",
+                )
+                for name in memo_fields
+            }
 
         def _ticket_count() -> int:
             try:
                 return self.count_tickets(search=search)
-            except (EasyvistaAuthError, EasyvistaNotFound):
+            except (EasyvistaAuthError, EasyvistaNotFound) as exc:
+                degraded.add(_degraded_entry("ticket_count", exc))
                 return 0
 
         def _recent() -> list[Request]:
@@ -1297,11 +1474,13 @@ class EasyvistaClient:
                     t
                     for t in self.iter_tickets(
                         search=search,
-                        sort=RECENT_TICKETS_SORT,
+                        fields=ticket_projection,
+                        sort=recent_tickets_sort,
                         max_records=recent_tickets,
                     )
                 ]
-            except (EasyvistaAuthError, EasyvistaNotFound):
+            except (EasyvistaAuthError, EasyvistaNotFound) as exc:
+                degraded.add(_degraded_entry("recent_tickets", exc))
                 return []
 
         def _statistics() -> TicketStatistics | None:
@@ -1312,22 +1491,30 @@ class EasyvistaClient:
                     search=search,
                     dimensions=dimensions,
                     languages=languages,
+                    max_records=statistics_max_records,
                 )
-            except (EasyvistaAuthError, EasyvistaNotFound):
+            except (EasyvistaAuthError, EasyvistaNotFound) as exc:
+                degraded.add(_degraded_entry("statistics", exc))
                 return None
 
         def _assets() -> list[Asset]:
             if not include_assets:
                 return []
             try:
-                return [a for a in self.iter_assets(search=search)]
-            except (EasyvistaAuthError, EasyvistaNotFound):
+                return [
+                    a
+                    for a in self.iter_assets(
+                        search=search, fields=_as_fields(asset_fields)
+                    )
+                ]
+            except (EasyvistaAuthError, EasyvistaNotFound) as exc:
+                degraded.add(_degraded_entry("assets", exc))
                 return []
 
         (
             employees,
             manager,
-            note,
+            memos,
             ticket_count,
             recent,
             statistics,
@@ -1335,13 +1522,14 @@ class EasyvistaClient:
         ) = settle(
             _employees(),
             _manager(),
-            _note(),
+            _memos(),
             _ticket_count(),
             _recent(),
             _statistics(),
             _assets(),
         )
 
+        note = next((text for text in memos.values() if text), None)
         return DepartmentContext(
             department=department,
             employees=employees,
@@ -1351,10 +1539,27 @@ class EasyvistaClient:
             recent_tickets=recent,
             ticket_statistics=statistics,
             assets=assets,
+            memos=memos,
+            degraded=frozenset(degraded),
         )
 
-    def _safe_memo(self, path: str) -> str | None:
+    def _safe_memo(
+        self,
+        path: str,
+        *,
+        degraded: set[str] | None = None,
+        branch: str = "",
+    ) -> str | None:
+        """Resolve a Memo, degrading a 403/404 to ``None``.
+
+        When ``degraded`` is given, a swallowed failure is recorded there as
+        ``"<branch>:<status>"`` so the bundle can report it. Left at ``None``
+        for the action-body resolution, where a missing note is not a section
+        the caller could be misled about.
+        """
         try:
             return self.resolve_memo(path)
-        except (EasyvistaNotFound, EasyvistaAuthError):
+        except (EasyvistaNotFound, EasyvistaAuthError) as exc:
+            if degraded is not None:
+                degraded.add(_degraded_entry(branch or path, exc))
             return None

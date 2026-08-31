@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 from ._fields import _text
 from ._html import html_to_text
+from .exceptions import EasyvistaError
 from .models.action import Action
 from .models.document import Document
 from .models.request import Request
@@ -28,6 +29,29 @@ DEFAULT_MARKDOWN_FIELDS: tuple[tuple[str, str], ...] = (
 def _cell(value: str) -> str:
     """Make a value safe inside a Markdown table cell."""
     return value.replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _degraded_entry(branch: str, exc: EasyvistaError) -> str:
+    """Build a ``degraded`` entry: ``"<branch>:<http-status>"``.
+
+    ``"?"`` stands in for an error carrying no status code, which the transport
+    always sets but a hand-constructed exception need not.
+    """
+    status = getattr(exc, "status_code", None)
+    return f"{branch}:{status}" if isinstance(status, int) else f"{branch}:?"
+
+
+def _degraded_status(degraded: Iterable[str], branch: str) -> str | None:
+    """The HTTP status recorded for ``branch``, or ``None`` if it is not degraded.
+
+    ``rpartition``, not ``split``: a memo branch is itself named
+    ``"memo:<field>"``, so only the LAST colon separates the status.
+    """
+    for entry in degraded:
+        name, _, status = entry.rpartition(":")
+        if name == branch:
+            return status
+    return None
 
 
 def _memo_heading(name: str) -> str:
@@ -54,6 +78,12 @@ class TicketContext:
     (``GET /requests/{rfc}/{memo}``) (tier 2 -- ``docs/vendor-api-reference.md``:
     declared in the instance's OpenAPI ``paths``), so a deployment may carry
     others.
+
+    ``degraded`` records which sub-resource fetches were swallowed, as
+    ``"<branch>:<http-status>"`` entries -- split with ``rsplit(":", 1)``,
+    because a memo branch is itself named ``"memo:<field>"``. Branch names are
+    ``actions``, ``documents`` and ``memo:<field>``. An empty set means nothing
+    was swallowed; it does not mean everything was populated.
     """
 
     ticket: Request
@@ -62,13 +92,31 @@ class TicketContext:
     actions: list[Action]
     documents: list[Document]
     memos: dict[str, str | None] = field(default_factory=dict)
+    degraded: frozenset[str] = frozenset()
 
     def to_markdown(
         self,
         *,
+        fields: Sequence[tuple[str, str]] | None = None,
         languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
     ) -> str:
         """Render an href-free Markdown document for this ticket.
+
+        ``fields`` is the field table, as ``(label, field_name)`` pairs; it
+        defaults to :data:`DEFAULT_MARKDOWN_FIELDS`. Each field is resolved with
+        ``Request.reference``, so a nested object yields its localized label, a
+        bare id yields the id, and a timestamp column yields EasyVista's own
+        rendering. A pair whose field resolves to nothing is dropped, so naming
+        a column this instance does not return costs an absent row, not an
+        error. Pass a list of pairs, never a flat list of names.
+
+        A section recorded in ``degraded`` renders a one-line notice naming the
+        HTTP status instead of being omitted, so an export cannot read as "this
+        ticket has no attachments" when the attachment list was refused. Only
+        the actions and documents sections do this: a memo that was refused and
+        a memo that is genuinely empty both render as no block, and injecting a
+        heading for the refused one would break the role-based rule below. It is
+        recorded in ``degraded`` either way.
 
         Headings name the *role* a block plays, not the field it came from:
         when only one memo has text it is the body and is titled
@@ -102,7 +150,7 @@ class TicketContext:
         # produced for these columns, naive-datetime fallback included. It is a
         # strict superset for anything else -- an int-valued column now renders
         # instead of yielding "".
-        for label, column in DEFAULT_MARKDOWN_FIELDS:
+        for label, column in DEFAULT_MARKDOWN_FIELDS if fields is None else fields:
             value = self.ticket.reference(column, languages=languages).display
             if value:
                 rows.append((label, value))
@@ -201,6 +249,12 @@ class TicketContext:
                 if body:
                     lines.extend(["", body])
                 lines.append("")
+        elif (
+            actions_status := _degraded_status(self.degraded, "actions")
+        ) is not None:
+            lines.extend(
+                ["## Actions", "", f"_Not available (HTTP {actions_status})._", ""]
+            )
 
         if self.documents:
             lines.extend(["## Attachments", ""])
@@ -209,5 +263,16 @@ class TicketContext:
                 if name:
                     lines.append(f"- {name}")
             lines.append("")
+        elif (
+            documents_status := _degraded_status(self.degraded, "documents")
+        ) is not None:
+            lines.extend(
+                [
+                    "## Attachments",
+                    "",
+                    f"_Not available (HTTP {documents_status})._",
+                    "",
+                ]
+            )
 
         return "\n".join(lines).rstrip() + "\n"

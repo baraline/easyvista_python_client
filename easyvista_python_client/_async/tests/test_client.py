@@ -26,6 +26,7 @@ from easyvista_python_client.directory import DepartmentContext
 from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
     EasyvistaError,
+    EasyvistaNotFound,
     EasyvistaServerError,
     EasyvistaValidationError,
 )
@@ -380,6 +381,27 @@ async def test_delete_document_rejects_a_document_without_an_id(config):
 
 
 @respx.mock
+async def test_get_department_comment_honours_a_memo_field_override(config):
+    """The route's last segment is a memo-field selector, not a literal.
+
+    In the instance OpenAPI document read 2026-08-27 it is a path *parameter*
+    named ``comment``, and the sibling ``GET requests/{rfc_number}/{comment}``
+    describes the same parameter as "Memo field type, could be comment,
+    description". So a deployment whose department memo column is named
+    differently is not locked out.
+    """
+    default_route = respx.get(f"{ROOT}/departments/60/comment_department").mock(
+        return_value=httpx.Response(200, json={"COMMENT_DEPARTMENT": "default"})
+    )
+    override = respx.get(f"{ROOT}/departments/60/comment_service").mock(
+        return_value=httpx.Response(200, json={"COMMENT_SERVICE": "overridden"})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.get_department_comment(60, memo_field="comment_service")
+    assert override.call_count == 1
+    assert default_route.call_count == 0
+
+
 @respx.mock
 async def test_download_document_fetches_the_ddl_href(config):
     route = respx.get("https://ev.test/dl/7").mock(
@@ -812,7 +834,14 @@ def _stats_responder(request):
 
 
 @respx.mock
-async def test_ticket_statistics_aggregates_over_iter_tickets(config):
+async def test_ticket_statistics_aggregates_across_pages(config):
+    """No longer routes through ``iter_tickets``.
+
+    ``iter_tickets`` yields records one at a time and discards the envelope, so
+    it cannot also hand back ``total_record_count`` -- the one number that says
+    how large the population a capped aggregation sampled actually was.
+    ``_collect_tickets`` walks the same offsets and issues the same requests.
+    """
     from easyvista_python_client import TicketStatistics
 
     respx.get(f"{ROOT}/requests").mock(side_effect=_stats_responder)
@@ -821,14 +850,54 @@ async def test_ticket_statistics_aggregates_over_iter_tickets(config):
     assert isinstance(stats, TicketStatistics)
     assert stats.total == 3
     assert stats.breakdowns["STATUS"] == {"Open": 2, "Closed": 1}
+    assert stats.truncated is False
+    assert stats.population_total == 3
+
+
+@respx.mock
+async def test_ticket_statistics_passes_languages_through_to_the_aggregator(config):
+    # Proves the keyword reaches aggregate_tickets on the real dispatch path,
+    # not just in the pure function's own tests.
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "records": [
+                    {
+                        "RFC_NUMBER": "I1",
+                        "STATUS": {"STATUS_EN": "[Open]", "STATUS_FR": "Ouvert"},
+                    }
+                ],
+                "record_count": 1,
+                "total_record_count": 1,
+            },
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        default = await client.ticket_statistics(dimensions=["STATUS"])
+        french = await client.ticket_statistics(
+            dimensions=["STATUS"], languages=("_FR",)
+        )
+    # The bracketed English echo loses to the real French sibling by default...
+    assert default.breakdowns["STATUS"] == {"Ouvert": 1}
+    # ...and asking for French directly reaches the same column.
+    assert french.breakdowns["STATUS"] == {"Ouvert": 1}
 
 
 @respx.mock
 async def test_ticket_statistics_respects_max_records(config):
+    """The cap truncating is now disclosed rather than silent.
+
+    That is the whole point of the two new fields: ``total == 1`` describes a
+    sample of one out of three, and before this a caller had no way to tell
+    that from a population of one.
+    """
     respx.get(f"{ROOT}/requests").mock(side_effect=_stats_responder)
     async with AsyncEasyvistaClient(config) as client:
         stats = await client.ticket_statistics(dimensions=["STATUS"], max_records=1)
     assert stats.total == 1  # capped before the second page
+    assert stats.truncated is True
+    assert stats.population_total == 3
 
 
 @respx.mock
@@ -937,9 +1006,14 @@ async def test_find_departments_fast_path_by_code(config):
 
 
 @respx.mock
-async def test_find_departments_fast_path_by_id(config):
-    # An all-digit name uses the DEPARTMENT_ID fast path (not DEPARTMENT_CODE)
-    # and returns on the first hit without ever falling back to iter_departments.
+async def test_find_departments_auto_tries_code_before_id(config):
+    """An all-digit name is a candidate CODE before it is a candidate ID.
+
+    It used to go straight to ``DEPARTMENT_ID``, so a department whose CODE is
+    all digits was looked up as an id and a **different** department came back
+    with HTTP 200 and no hint. Code first fixes that; the id lookup still
+    happens, one request later, when no such code exists.
+    """
     route = respx.get(f"{ROOT}/departments").mock(
         return_value=httpx.Response(
             200,
@@ -952,8 +1026,58 @@ async def test_find_departments_fast_path_by_id(config):
     async with AsyncEasyvistaClient(config) as client:
         found = await client.find_departments("60")
     assert [d.department_id for d in found] == [60]
-    assert route.calls.last.request.url.params["search"] == 'DEPARTMENT_ID:"60"'
+    assert route.calls.last.request.url.params["search"] == 'DEPARTMENT_CODE:"60"'
     assert route.call_count == 1
+
+
+@respx.mock
+async def test_find_departments_auto_falls_back_to_id_for_an_all_digit_name(config):
+    """The regression guard for the wrong-record bug.
+
+    When the digits are an id and not a code, the code lookup misses and the id
+    lookup runs -- one extra round trip, on a path the fast path only ever was
+    an optimization for.
+    """
+    empty = httpx.Response(200, json={"records": [], "total_record_count": 0})
+    hit = httpx.Response(
+        200,
+        json={"records": [{"DEPARTMENT_ID": 60}], "total_record_count": 1},
+    )
+    route = respx.get(f"{ROOT}/departments").mock(side_effect=[empty, hit])
+    async with AsyncEasyvistaClient(config) as client:
+        found = await client.find_departments("60")
+    assert [d.department_id for d in found] == [60]
+    assert route.call_count == 2
+    searches = [call.request.url.params["search"] for call in route.calls]
+    assert searches == ['DEPARTMENT_CODE:"60"', 'DEPARTMENT_ID:"60"']
+
+
+@respx.mock
+async def test_find_departments_by_pins_a_single_column(config):
+    """``by`` restores the old lookup exactly, or skips the fast path entirely.
+
+    ``by="DEPARTMENT_ID"`` must be read as ONE column, not as eleven
+    single-character ones -- ``str`` satisfies ``Sequence[str]``, so the string
+    branch is checked first.
+    """
+    route = respx.get(f"{ROOT}/departments").mock(
+        return_value=httpx.Response(
+            200,
+            json={"records": [{"DEPARTMENT_ID": 60}], "total_record_count": 1},
+        )
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        found = await client.find_departments("60", by="DEPARTMENT_ID")
+    assert [d.department_id for d in found] == [60]
+    assert route.call_count == 1
+    assert route.calls.last.request.url.params["search"] == 'DEPARTMENT_ID:"60"'
+
+    # `by=[]` skips the fast path: the only call is the fuzzy scan's own
+    # unfiltered sweep.
+    route.reset()
+    async with AsyncEasyvistaClient(config) as client:
+        await client.find_departments("60", by=[])
+    assert "search" not in route.calls.last.request.url.params
 
 
 @respx.mock
@@ -1202,6 +1326,40 @@ async def test_get_ticket_context_degrades_on_missing_subresources(config):
     assert ctx.comment is None
     assert ctx.actions == []
     assert ctx.documents == []
+    # Each swallow is now recorded, so `[]` is distinguishable from "forbidden".
+    assert ctx.degraded == frozenset(
+        {
+            "memo:description:404",
+            "memo:comment:404",
+            "actions:403",
+            "documents:403",
+        }
+    )
+
+
+@respx.mock
+async def test_get_ticket_context_still_raises_on_a_404_from_a_list_call(config):
+    """The asymmetry between the two except clauses is load-bearing.
+
+    The memos degrade on 404 *and* 403, while the two list calls catch
+    ``EasyvistaAuthError`` ONLY -- so a 404 there still fails the bundle. Adding
+    the degraded-recording line inside each clause must not have widened either
+    caught tuple. This test reddens if a later tidy-up merges them.
+    """
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    for memo in ("description", "comment"):
+        respx.get(f"{ROOT}/requests/I1/{memo}").mock(
+            return_value=httpx.Response(404, json={})
+        )
+    respx.get(f"{ROOT}/actions").mock(return_value=httpx.Response(404, json={}))
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaNotFound):
+            await client.get_ticket_context("I1")
 
 
 @respx.mock
@@ -1518,6 +1676,175 @@ async def test_get_department_context_full_assembly(config):
     assert ctx.employees[0].employee_id == 1
     assert ctx.assets[0].asset_id == 7
     assert ctx.ticket_statistics is not None
+
+
+@respx.mock
+async def test_get_department_context_honours_memo_fields(config):
+    """``memo_fields`` threads the same memo selector through the bundle.
+
+    A sequence rather than a single name, mirroring
+    :meth:`get_ticket_context`'s own ``memo_fields``: every resolved memo lands
+    in ``memos`` and ``note`` is the first with text. The read stays wrapped in
+    the bundle's 403/404 degradation, unlike :meth:`get_department_comment`,
+    which raises -- swapping that would change the bundle's failure semantics,
+    not just its route.
+    """
+    respx.get(f"{ROOT}/departments/60").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    respx.get(f"{ROOT}/assets").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    default_route = respx.get(f"{ROOT}/departments/60/comment_department").mock(
+        return_value=httpx.Response(200, json={"COMMENT_DEPARTMENT": "default"})
+    )
+    override = respx.get(f"{ROOT}/departments/60/comment_service").mock(
+        return_value=httpx.Response(200, json={"COMMENT_SERVICE": "overridden"})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        ctx = await client.get_department_context(
+            60, resolve_manager=False, memo_fields=("comment_service",)
+        )
+    assert ctx.note == "overridden"
+    assert ctx.memos == {"comment_service": "overridden"}
+    assert override.call_count == 1
+    assert default_route.call_count == 0
+
+
+def _department_bundle_mocks(ticket_route_json=None):
+    """Mock every branch of the department bundle with an empty-but-valid page.
+
+    Returns the ``/requests`` route so a caller can inspect the parameters the
+    recent-tickets and statistics sweeps sent.
+    """
+    respx.get(f"{ROOT}/departments/60").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    respx.get(f"{ROOT}/employees").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    respx.get(f"{ROOT}/assets").mock(
+        return_value=httpx.Response(200, json={"records": []})
+    )
+    respx.get(f"{ROOT}/departments/60/comment_department").mock(
+        return_value=httpx.Response(200, json={"COMMENT_DEPARTMENT": "note"})
+    )
+    return respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200,
+            json=ticket_route_json
+            or {"records": [], "record_count": 0, "total_record_count": 0},
+        )
+    )
+
+
+@respx.mock
+async def test_get_department_context_projects_and_sorts_recent_tickets(config):
+    """The one deliberate default change, pinned at the request level.
+
+    Sending no projection is not neutral: on the verified instance the default
+    list projection returns TITLE present but EMPTY, so every recent ticket's
+    ``.title`` was ``None`` for every caller. The default now projects.
+    """
+    route = _department_bundle_mocks()
+    async with AsyncEasyvistaClient(config) as client:
+        await client.get_department_context(60, resolve_manager=False)
+    sweeps = [
+        call.request.url.params
+        for call in route.calls
+        if call.request.url.params.get("sort")
+    ]
+    assert len(sweeps) == 1
+    assert sweeps[0]["sort"] == "RFC_NUMBER DESC"
+    assert "TITLE" in sweeps[0]["fields"]
+
+
+@respx.mock
+async def test_get_department_context_forwards_a_caller_projection_and_sort(config):
+    """``ticket_fields=None`` restores the exact previous request."""
+    route = _department_bundle_mocks()
+    async with AsyncEasyvistaClient(config) as client:
+        await client.get_department_context(
+            60,
+            resolve_manager=False,
+            include_statistics=False,
+            ticket_fields=["RFC_NUMBER"],
+            recent_tickets_sort=None,
+        )
+    params = route.calls.last.request.url.params
+    assert params["fields"] == "RFC_NUMBER"
+    assert "sort" not in params
+
+    route.reset()
+    async with AsyncEasyvistaClient(config) as client:
+        await client.get_department_context(
+            60,
+            resolve_manager=False,
+            include_statistics=False,
+            ticket_fields=None,
+        )
+    assert "fields" not in route.calls.last.request.url.params
+
+
+@respx.mock
+async def test_get_department_context_caps_the_statistics_sample(config):
+    """``statistics_max_records`` was inherited silently from
+    ``ticket_statistics``; it is a keyword now, and the truncation is
+    disclosed."""
+    _department_bundle_mocks(
+        {
+            "records": [{"RFC_NUMBER": "I1"}, {"RFC_NUMBER": "I2"}],
+            "record_count": 2,
+            "total_record_count": 2,
+        }
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        ctx = await client.get_department_context(
+            60, resolve_manager=False, statistics_max_records=1, dimensions=["STATUS"]
+        )
+    assert ctx.ticket_statistics is not None
+    assert ctx.ticket_statistics.total == 1
+    assert ctx.ticket_statistics.truncated is True
+    assert ctx.ticket_statistics.population_total == 2
+
+
+@pytest.mark.parametrize("status", [403, 404])
+@respx.mock
+async def test_get_department_context_records_degraded_branches(config, status):
+    """A swallowed 403 used to be indistinguishable from an empty result.
+
+    The department bundle degrades on both 403 and 404, so both are recorded.
+    Entries are ``"<branch>:<status>"`` and a memo branch is itself
+    ``"memo:<field>"``, which is why they must be split with ``rsplit``.
+    """
+    respx.get(f"{ROOT}/departments/60").mock(
+        return_value=httpx.Response(200, json={"records": [{"DEPARTMENT_ID": 60}]})
+    )
+    for path in ("employees", "requests", "assets"):
+        respx.get(f"{ROOT}/{path}").mock(return_value=httpx.Response(status))
+    respx.get(f"{ROOT}/departments/60/comment_department").mock(
+        return_value=httpx.Response(status)
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        ctx = await client.get_department_context(60, resolve_manager=False)
+    for branch in (
+        "employees",
+        "recent_tickets",
+        "assets",
+        "ticket_count",
+        "statistics",
+        "memo:comment_department",
+    ):
+        assert f"{branch}:{status}" in ctx.degraded
+    # The bundle still assembles; degradation is reported, not raised.
+    assert ctx.department.department_id == 60
+    assert ctx.note is None
 
 
 @pytest.mark.parametrize("status", [403, 404])

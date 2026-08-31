@@ -90,6 +90,36 @@ a deprecation policy will follow the 1.0 release.
   top-level form was a profile denial, not a missing route. The default
   `"nested"` is unchanged. `delete_document` also accepts a `Document` in place
   of its id, and `rfc_number` may be `None` under `"top_level"`.
+- `get_department_comment(..., memo_field=)` and
+  `get_department_context(..., memo_fields=)`. The last segment of
+  `GET departments/{id}/{comment}` is a memo-field *selector* in the
+  instance's own spec, not a literal, so a deployment whose department memo
+  column is named differently is no longer locked out. `memo_fields` is a
+  sequence, mirroring `get_ticket_context`: every resolved memo lands in
+  `DepartmentContext.memos` and `note` is the first with text.
+- `get_department_context` gains `recent_tickets_sort`, `ticket_fields`,
+  `employee_fields`, `asset_fields` and `statistics_max_records`. Every value
+  it sampled with was a literal buried in a branch; each is now a keyword whose
+  default is what it sampled with before, `ticket_fields` excepted (see
+  Changed). `statistics_max_records` in particular was inherited silently from
+  `ticket_statistics`.
+- `find_departments(..., by=)` — the columns the server-side fast path tries,
+  in order. `"auto"` (the default), a single column name, an explicit sequence,
+  or `[]` to skip the fast path entirely.
+- `TicketStatistics.truncated` and `.population_total`, so a capped
+  aggregation says it sampled rather than counted. `population_total` is the
+  server's own count for the search, read off the first page at **no extra
+  request**; it is counted before any client-side date window, so it is not
+  comparable with `total` when one is set. `aggregate_tickets` is pure and
+  offline and leaves both at their defaults.
+- `DepartmentContext.degraded` and `TicketContext.degraded` — which branches
+  were swallowed, as `"<branch>:<http-status>"` entries. A 403 that degraded to
+  `[]` was previously indistinguishable from a genuinely empty result. Split
+  with `rsplit(":", 1)`: a memo branch is itself named `"memo:<field>"`.
+- `DepartmentContext.memos`, keyed by the field name requested.
+- `TicketContext.to_markdown(fields=)` and the exported
+  `DEFAULT_MARKDOWN_FIELDS` — the field table as `(label, column)` pairs.
+  Extend rather than retype: `fields=[*DEFAULT_MARKDOWN_FIELDS, ("SLA", "SLA_ID")]`.
 - `references.label_from_record` — the best human label anywhere in a
   reference-table row, matched by **suffix**. A reference table does not name
   its label column after the table: `groups` returns `GROUP_EN`, `locations`
@@ -131,6 +161,25 @@ a deprecation policy will follow the 1.0 release.
   `extra_payload`, instead of pydantic's bare "Extra inputs are not permitted".
   The message stops short of promising the write will work: on this API an
   exclusion is usually a measured misbehaviour, and a 200 is not a receipt.
+- **BREAKING**: `get_department_context`'s recent tickets are now **projected**
+  with `RECENT_TICKET_FIELDS`. The previous default sent no `fields=` at all,
+  and on the verified instance the unprojected list projection returns `TITLE`
+  present but **empty** (tier 4 — 400 tickets scanned, zero with a populated
+  title), so `recent_tickets[i].title` was `None` for every caller. Projecting
+  fixes that but narrows the rest: a caller reading a column outside the seven
+  — a custom `e_*`, `DEPARTMENT_ID`, `URGENCY_ID` — off a recent ticket loses
+  it. `ticket_fields=None` restores the exact previous request.
+- **BREAKING**: `find_departments` with an all-digit name now tries
+  `DEPARTMENT_CODE` before `DEPARTMENT_ID`. A department whose code is all
+  digits was previously looked up as an id, returning a **different department
+  with HTTP 200 and no hint** — that is the bug being fixed. Where no such code
+  exists the result is identical and one extra request is spent.
+  `by="DEPARTMENT_ID"` restores the old lookup exactly.
+- **BREAKING**: `find_departments`' fuzzy fallback now folds accents and
+  compatibility forms (NFKD + `casefold`), so it can return **more** departments
+  than before. It is strictly more permissive — no name that matched stops
+  matching — and it is what makes an unaccented search term reach an accented
+  label, which it could not do on an instance whose department names are French.
 - **Envelope matching is now case-insensitive**, over the same fixed candidate
   list and in the same priority order — never a scan of whatever keys the
   payload carries. Envelope casing is not stable across deployments: the

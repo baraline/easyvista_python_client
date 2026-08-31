@@ -316,3 +316,73 @@ def test_to_markdown_language_order_changes_labels_but_not_headings():
         assert "## Attachments" in md
 
 
+# --- the field table is a parameter, and a refused section says so -----------
+
+
+def test_to_markdown_default_fields_are_unchanged():
+    """The equivalence check for collapsing the row extraction.
+
+    The two date rows used to take a separate ``_text(data.get(...))`` path
+    while the four reference rows went through ``reference()``. They are one
+    path now, which is only safe because ``resolve_reference`` renders a
+    datetime through ``format_ev_datetime`` -- byte-identically to what
+    ``_text`` produced. These are the same six literals the header test asserts;
+    a drift in either direction reddens both.
+    """
+    md = TicketContext(_ticket(), None, None, [], []).to_markdown()
+    assert "| Status | En cours |" in md
+    assert "| Department | Example Department |" in md
+    assert "| Catalog | [EXAMPLE] - ticket |" in md
+    assert "| Created | 2025-11-28T11:35:22.000+01:00 |" in md
+    assert "| Updated | 2025-11-28T16:14:41.133+01:00 |" in md
+
+
+def test_to_markdown_honours_custom_fields():
+    """``fields`` is (label, column) pairs, not a flat list of column names.
+
+    A pair whose column resolves to nothing is dropped, so naming a column the
+    instance does not return costs an absent row rather than an error.
+    """
+    ticket = Request.model_validate(
+        {"RFC_NUMBER": "I1", "EXTERNAL_REFERENCE": "EVCLI-42"}
+    )
+    md = TicketContext(ticket, None, None, [], []).to_markdown(
+        fields=[("Ref", "EXTERNAL_REFERENCE"), ("Absent", "NOT_A_COLUMN")]
+    )
+    assert "| Ref | EVCLI-42 |" in md
+    assert "Absent" not in md
+    assert "| Status |" not in md
+
+
+def test_to_markdown_reports_a_degraded_section():
+    """A refused list must not read as an empty one.
+
+    Omitting the section silently makes the export say "this ticket has no
+    attachments" when the attachment list was actually forbidden -- exactly the
+    kind of confident wrong statement an LLM reading this document would repeat.
+    """
+    md = TicketContext(
+        _ticket(), None, None, [], [], degraded=frozenset({"actions:403"})
+    ).to_markdown()
+    assert "## Actions" in md
+    assert "_Not available (HTTP 403)._" in md
+    # An undegraded empty bundle still renders no heading at all.
+    plain = TicketContext(_ticket(), None, None, [], []).to_markdown()
+    assert "## Actions" not in plain
+    assert "Not available" not in plain
+
+
+def test_to_markdown_degraded_lookup_survives_a_colon_in_the_branch_name():
+    """A memo branch is itself ``"memo:<field>"``, so the split must be on the
+    LAST colon. A plain ``split(":")`` would read the branch as ``"memo"`` and
+    never match ``"documents"`` here."""
+    md = TicketContext(
+        _ticket(),
+        None,
+        None,
+        [],
+        [],
+        degraded=frozenset({"memo:comment:404", "documents:403"}),
+    ).to_markdown()
+    assert "## Attachments" in md
+    assert "_Not available (HTTP 403)._" in md

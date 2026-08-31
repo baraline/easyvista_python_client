@@ -5,7 +5,7 @@ from easyvista_python_client._sync import EasyvistaClient
 
 from ._version import __version__
 from .config import DEFAULT_USER_AGENT, EasyvistaConfig
-from .context import TicketContext
+from .context import DEFAULT_MARKDOWN_FIELDS, TicketContext
 from .directory import DepartmentContext
 from .exceptions import (
     EasyvistaAuthError,
@@ -40,6 +40,7 @@ from .timestamps import format_ev_datetime, parse_ev_datetime
 
 __all__ = [
     "DEFAULT_LANGUAGE_ORDER",
+    "DEFAULT_MARKDOWN_FIELDS",
     "DEFAULT_USER_AGENT",
     "Action",
     "ActionUpdate",
