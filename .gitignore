@@ -47,3 +47,9 @@ docs/easyvista-field-inventory.md
 # print real employees' names and e-mail addresses. Kept on disk so they stay
 # usable locally; never published.
 scripts/probe_*.py
+
+# Local agent instructions. Working notes for whoever drives this repo with an
+# AI assistant, not project documentation: they reference the private preprod
+# instance's behaviour and this machine's credential layout. Anything here that
+# a public reader needs belongs in CONTRIBUTING.md, docs/, or a skill instead.
+CLAUDE.md
