@@ -24,28 +24,43 @@ something here looks wrong.
 ## The grammar
 
 - `FIELD:"value"` — exact match.
-- `~` is a **pattern operator**, not a synonym for `:`. It only behaves like
-  "contains" or "starts with" when the value carries an **explicit** wildcard:
-  `*` and `%` both expand (`FIELD~"*abc*"` substring, `FIELD~"abc*"` prefix —
-  verified live 2026-08-17, and `%` reproduces the same match count as `*`).
-  Given a **bare** value with no wildcard, `~` degenerates to exact match —
-  identical to `:` — which is why this skill previously documented it as
-  exact-match-only; that conclusion held only for the wildcard-free inputs it
-  was tested with. `:` never expands a wildcard, even when one is present in
-  the value: `FIELD:"abc*"` matches nothing. Use `ev_contains_filter` /
-  `ev_starts_with_filter` rather than building the pattern by hand.
-- `*` and `%` are not the only metacharacters under `~`. `_` matches any
-  **single** character and `[` opens a character class — measured live,
-  replacing one character of an RFC that matched 1 row with `_`, or with
-  `[0-9]`, matched 9. There is **no escape**: `\_` returned 0 rows, i.e. the
-  backslash is compared literally. `ev_contains_filter` /
-  `ev_starts_with_filter` therefore raise `ValueError` for a value containing
-  any of `* % _ [`, because silently matching more rows is worse than failing.
-  This bites on ordinary input, not exotic input: `_` is pervasive in EasyVista
-  codes, and `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` would otherwise also
-  match `LAPTOP-01` and `LAPTOP001` with HTTP 200 and no hint. For an **exact**
-  match on such a value use `ev_equals_filter` — `:` does not expand a wildcard,
-  so a `_` in the value is compared literally there. Only if you need to
+- `~` is documented by the vendor as plain **Contains** (Oxygen 1.7+) — one
+  word, no example, no wildcard mentioned. **On the instance this package was
+  characterized against it is a pattern operator instead** (measured live
+  2026-08-17; one deployment, may not generalise): it behaves like "contains"
+  or "starts with" only when the value carries an **explicit** wildcard. `*`
+  and `%` both expand there (`FIELD~"*abc*"` substring, `FIELD~"abc*"` prefix,
+  and `%` reproduced `*`'s match count exactly). Given a **bare** value, `~`
+  degenerates to exact match — identical to `:` — which is why this skill once
+  documented it as exact-match-only; that conclusion held only for the
+  wildcard-free inputs it was tested with. `:` never expands a wildcard even
+  when the value contains one: `FIELD:"abc*"` matches nothing.
+  `ev_contains_filter` / `ev_starts_with_filter` append `*` by default, which
+  is right for a deployment like the verified one. On a deployment that
+  follows the vendor's reading and compares `*` literally, that default
+  returns **zero rows with HTTP 200 and no hint** — pass `wildcard=None` there
+  to emit the bare value, or `wildcard="%"` for a LIKE-style backend. Confirm
+  which reading your deployment follows once, by comparing a filtered count
+  against the unfiltered baseline; you cannot tell from a single response.
+  Note `wildcard=None` on `ev_starts_with_filter` removes the *anchor*, not
+  just the token — it is a substring match on a vendor-conformant deployment.
+- `*` and `%` are not the only metacharacters under `~`, and the other two
+  belong to the **operator**, not to the wildcard the builders append. `_`
+  matches any **single** character and `[` opens a character class — measured
+  live 2026-08-18 on one instance with a *wildcard-free* pattern: replacing an
+  RFC's last character with `_`, or with `[0-9]`, turned a 1-row exact match
+  into 9, while `[<the real character>x]` still matched the one row. There is
+  **no escape**: a backslash before `_` returned 0 rows, i.e. it is compared
+  literally. So `ev_contains_filter` / `ev_starts_with_filter` raise
+  `ValueError` for `_` or `[` in the value at **every** `wildcard=` setting,
+  `None` included, and additionally for `*` or `%` while a wildcard is being
+  appended (a second one would compose with it). With `wildcard=None` a `*` or
+  `%` in the value passes through, which is how to hand-build a pattern.
+  This bites on ordinary input, not exotic input: `_` is pervasive in
+  EasyVista codes, and `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` would
+  otherwise also match `LAPTOP-01` and `LAPTOP001` with HTTP 200 and no hint.
+  For an **exact** match on such a value use `ev_equals_filter` — `:` does not
+  expand a wildcard, so a `_` there is compared literally. Only if you need to
   pattern-match *around* a literal `_` are you stuck: filter server-side on a
   wider condition and match exactly in Python.
 - `,` combines conditions: **OR** when every condition names the same field,
@@ -268,7 +283,10 @@ with EasyvistaClient.from_env() as client:
 from easyvista_python_client import EasyvistaClient, ev_contains_filter
 
 with EasyvistaClient.from_env() as client:
-    # A bare '~' is exact match; the wildcard is what makes it "contains".
+    # ev_contains_filter appends '*' by default: on the instance this package
+    # was characterized against, a bare '~' is exact match and the wildcard is
+    # what makes it "contains". The vendor documents '~' as plain Contains --
+    # if that is your deployment, pass wildcard=None instead.
     result = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
     print(result.total_record_count)
 ```

@@ -318,12 +318,144 @@ def test_wildcard_builders_reject_a_metacharacter_inside_the_value(bad):
 
 
 @pytest.mark.parametrize("blank", [None, "", "   "])
-def test_blank_wildcard_value_returns_none_not_a_match_everything_pattern(blank):
+@pytest.mark.parametrize("wildcard", ["*", "%", None])
+def test_blank_wildcard_value_returns_none_not_a_match_everything_pattern(
+    blank, wildcard
+):
     """``FIELD~"**"`` would match every row — the exact silent-widening shape.
 
     ``None`` is included because the signature says ``str | None``: without the
     guard, ``str(None)`` would render ``FIELD~"*None*"``, a pattern that both
     widens silently and matches on a value no caller ever supplied.
+
+    The ``wildcard`` axis pins that the blank guard sits *ahead* of the render
+    on every setting. At ``wildcard=None`` the pattern would be ``FIELD~""``
+    rather than ``FIELD~"**"`` — it asks nothing instead of asking everything,
+    which is a different failure, but returning ``None`` uniformly is what lets
+    callers compose without a per-setting conditional.
     """
-    assert ev_contains_filter("ASSET_TAG", blank) is None
-    assert ev_starts_with_filter("ASSET_TAG", blank) is None
+    assert ev_contains_filter("ASSET_TAG", blank, wildcard=wildcard) is None
+    assert ev_starts_with_filter("ASSET_TAG", blank, wildcard=wildcard) is None
+
+
+# --- `wildcard=`: which reading of `~` this expression is built for ----------
+#
+# The vendor documents `~` as plain Contains (tier 1, no wildcard named); this
+# package measured it live 2026-08-17 as a pattern operator needing an explicit
+# one (tier 4, one instance). The default stays the measured reading, so every
+# test above this line exercises the unchanged path.
+
+
+def test_percent_wildcard_is_emitted_verbatim():
+    """``%`` is the token a LIKE-backed deployment may use instead of ``*``."""
+    assert (
+        ev_contains_filter("ASSET_TAG", "LAPTOP", wildcard="%")
+        == 'ASSET_TAG~"%LAPTOP%"'
+    )
+    assert (
+        ev_starts_with_filter("RFC_NUMBER", "I26081", wildcard="%")
+        == 'RFC_NUMBER~"I26081%"'
+    )
+
+
+def test_wildcard_none_appends_nothing():
+    """``wildcard=None`` emits the bare value — the vendor's plain Contains.
+
+    The equality between the two builders is the point, not an accident of the
+    assertion style: with nothing appended there is no anchor left to
+    distinguish a prefix from a substring, so ``ev_starts_with_filter`` stops
+    expressing a prefix at all. That is why its docstring warns that ``None``
+    removes the *anchor* rather than swapping a token.
+    """
+    contains = ev_contains_filter("ASSET_TAG", "LAPTOP", wildcard=None)
+    starts_with = ev_starts_with_filter("ASSET_TAG", "LAPTOP", wildcard=None)
+    assert contains == 'ASSET_TAG~"LAPTOP"'
+    assert contains == starts_with
+
+
+@pytest.mark.parametrize(
+    "bad", ["LAP_TOP", "LAPTOP_01", "LAP[0-9]TOP", r"LAP\_TOP"]
+)
+def test_wildcard_none_still_refuses_the_operators_own_metacharacters(bad):
+    """``_`` and ``[`` belong to ``~`` itself, not to the appended wildcard.
+
+    This is the item's central decision, and it is settled by this repo's own
+    live probe rather than by inference:
+    ``integration_tests/test_live_change_window.py:659-660`` builds
+    ``RFC_NUMBER~"{stem}_"`` and ``RFC_NUMBER~"{stem}[0-9]"`` as raw ``search=``
+    strings with **no builder-added wildcard**, and each widened a one-row exact
+    match to nine. So the tempting premise — that with nothing appended a
+    metacharacter is merely a character — holds for ``*``/``%`` and is false
+    for these two. Relaxing them under ``wildcard=None`` would trade a loud,
+    local ``ValueError`` for the silent widening these builders exist to
+    prevent, on the only deployment anyone has measured.
+
+    ``LAP\\_TOP`` is refused for the ``_`` it contains, not for the backslash:
+    a backslash is compared literally under ``~`` (``<stem>\\_`` matched
+    nothing live), so it escapes nothing.
+    """
+    with pytest.raises(ValueError, match="metacharacter"):
+        ev_contains_filter("ASSET_TAG", bad, wildcard=None)
+    with pytest.raises(ValueError, match="metacharacter"):
+        ev_starts_with_filter("ASSET_TAG", bad, wildcard=None)
+
+
+def test_wildcard_none_admits_a_caller_placed_wildcard():
+    """With nothing appended, ``*``/``%`` in the value are the caller's own.
+
+    This is the supported way to hand-build a pattern through these builders:
+    the value still goes through ``escape_ev_value``, so the ``"`` defence
+    holds, but the wildcard placement becomes the caller's.
+    """
+    assert (
+        ev_contains_filter("ASSET_TAG", "*LAPTOP*", wildcard=None)
+        == 'ASSET_TAG~"*LAPTOP*"'
+    )
+    assert (
+        ev_contains_filter("ASSET_TAG", "%LAPTOP%", wildcard=None)
+        == 'ASSET_TAG~"%LAPTOP%"'
+    )
+    # The complement: while a wildcard IS being appended, BOTH tokens are
+    # refused, not merely the one being appended -- either would compose with
+    # it.
+    with pytest.raises(ValueError, match="metacharacter"):
+        ev_contains_filter("ASSET_TAG", "LAP*TOP", wildcard="%")
+    with pytest.raises(ValueError, match="metacharacter"):
+        ev_contains_filter("ASSET_TAG", "LAP%TOP", wildcard="*")
+
+
+@pytest.mark.parametrize("token", ["?", "**", "", '"'])
+def test_an_unsupported_wildcard_token_is_refused(token):
+    """The token bypasses ``escape_ev_value``, so its domain must be closed.
+
+    ``'"'`` is the load-bearing case: the token is interpolated as part of
+    ``pattern``, outside the value escaping, so without this check it would
+    terminate the quoted value and reach the ``,`` combinator — reopening the
+    exact hole ``escape_ev_value`` exists to shut.
+    """
+    with pytest.raises(ValueError, match="wildcard="):
+        ev_contains_filter("ASSET_TAG", "LAPTOP", wildcard=token)
+    with pytest.raises(ValueError, match="wildcard="):
+        ev_starts_with_filter("ASSET_TAG", "LAPTOP", wildcard=token)
+
+
+@pytest.mark.parametrize("blank", [None, "  "])
+def test_an_unsupported_wildcard_token_is_refused_even_for_a_blank_value(blank):
+    """A bad token is a fault in the caller's code, not in their data.
+
+    Validating it after the blank-value early return would make the same wrong
+    call succeed or raise depending on what happened to be in ``value`` that
+    day, which is the worst shape a programming error can take.
+    """
+    with pytest.raises(ValueError, match="wildcard="):
+        ev_contains_filter("ASSET_TAG", blank, wildcard="?")
+    with pytest.raises(ValueError, match="wildcard="):
+        ev_starts_with_filter("ASSET_TAG", blank, wildcard="?")
+
+
+def test_a_double_quote_is_still_refused_with_no_wildcard():
+    """``escape_ev_value`` runs on every path, including ``wildcard=None``."""
+    with pytest.raises(ValueError):
+        ev_contains_filter("ASSET_TAG", 'LAP"TOP', wildcard=None)
+    with pytest.raises(ValueError):
+        ev_starts_with_filter("ASSET_TAG", 'LAP"TOP', wildcard=None)

@@ -611,6 +611,12 @@ def test_every_refused_metacharacter_really_is_one_under_tilde(
     since ``ev_contains_filter``/``ev_starts_with_filter`` raise ``ValueError``
     on any of these in the caller's value by design — that rejection is the very
     thing this test is checking the justification for.
+
+    The ``_`` and ``[`` probes are built WITHOUT a wildcard on purpose, and that
+    is what justifies ``filters._OPERATOR_METACHARS`` being refused even at
+    ``wildcard=None``: these are metacharacters of ``~`` itself, not of the
+    token the builders append. If either probe ever measures as literal, that
+    refusal — and only that one — can be relaxed.
     """
     page = live_client.search_tickets(max_rows=1, fields=["RFC_NUMBER"])
     if not page.records or not page.records[0].rfc_number:

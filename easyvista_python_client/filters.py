@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from datetime import datetime
+from typing import Literal
 
 from .timestamps import format_ev_datetime, parse_ev_datetime
 
@@ -347,33 +348,84 @@ def ev_between_filter(
     return f"{field}:({low};{high})"
 
 
-# Every character that is a metacharacter to `~`, measured live 2026-08-18
-# against one instance:
-#   *  %  multi-character wildcards, interchangeable
-#   _     SINGLE-character wildcard -- replacing one character of an RFC that
-#         matched 1 row turned it into 9
-#   [     opens a character class -- `[0-9]` in the same position also gave 9,
-#         and `[<realchar>x]` gave 1, so the class is genuinely evaluated
-# There is no escape: `\_` returned 0 rows, i.e. the backslash is compared
-# literally. So these builders refuse rather than silently changing which
-# records match -- and `_` is not exotic in EasyVista, it is pervasive in asset
-# tags, catalog codes and `e_*` column values.
-_PATTERN_METACHARS = ("*", "%", "_", "[")
+# The wildcard tokens this builder can APPEND. `*` is the one measured live
+# 2026-08-17 on the verified instance; `%` reproduced its exact match count
+# there (32 of 4317), and is the token a LIKE-backed deployment may use
+# instead. Not exported: see `wildcard=` on the two public builders.
+_WILDCARD_TOKENS = ("*", "%")
+
+# Metacharacters of `~` ITSELF, evaluated whether or not this builder appends a
+# wildcard. Measured live 2026-08-18 against one instance, and it may not
+# generalise: the probes in integration_tests/test_live_change_window.py are
+# raw `FIELD~"<stem>_"` and `FIELD~"<stem>[0-9]"` -- no wildcard added at all --
+# and each widened a one-row exact match to nine, while `[<realchar>x]` still
+# matched the one row, so the class is genuinely evaluated. There is no escape:
+# a backslash before `_` returned 0 rows, i.e. it is compared literally. These
+# stay refused at EVERY `wildcard=` setting, because the refusal was never about
+# what this builder adds. `_` is not exotic in EasyVista -- it is pervasive in
+# asset tags, catalog codes and `e_*` column values.
+_OPERATOR_METACHARS = ("_", "[")
+
+# Everything refused while a wildcard IS being appended: the operator's own
+# metacharacters plus the wildcard tokens, a second one of which inside the
+# value would compose with the appended one.
+_PATTERN_METACHARS = _WILDCARD_TOKENS + _OPERATOR_METACHARS
 
 
-def _wildcard_filter(field: str, value: str | None, pattern: str) -> str | None:
+def _wildcard_filter(
+    field: str,
+    value: str | None,
+    pattern: str,
+    wildcard: Literal["*", "%"] | None,
+) -> str | None:
     """Shared body for the ``~`` pattern builders.
 
-    ``pattern`` is a format string over ``{v}`` placing the wildcards.
+    ``pattern`` is a format string over ``{w}`` (the wildcard token, or ``""``
+    when none is appended) and ``{v}`` (the escaped value).
+
+    ``wildcard`` is validated before anything else, so an unsupported token is
+    refused even on a call whose blank ``value`` would return ``None`` -- it is
+    a fault in the caller's code, not in their data, and it must not depend on
+    what happens to be in ``value`` that day.
     """
+    if wildcard is not None and wildcard not in _WILDCARD_TOKENS:
+        raise ValueError(
+            f"wildcard={wildcard!r} is not a token these builders emit. Pass "
+            "'*' (the default, and the token measured live on the verified "
+            "instance), '%' (interchangeable with it there, and the token a "
+            "LIKE-backed deployment may use instead), or None to append "
+            "nothing -- the vendor's plain Contains reading of '~'. The token "
+            "is interpolated outside the value escaping, so it comes from a "
+            "closed set on purpose; for any other pattern, build the "
+            "expression yourself and pass it as a raw search= string."
+        )
     if value is None:
         return None
     text = str(value).strip()
     if not text:
-        # A blank value would render `FIELD~"**"`, which matches every row —
-        # the silent-widening failure these builders exist to prevent.
+        # With a wildcard appended a blank value renders `FIELD~"**"`, which
+        # matches every row -- the silent-widening failure these builders exist
+        # to prevent. With none appended it renders `FIELD~""`, which asks
+        # nothing. Both return None, so callers compose without conditionals
+        # either way.
         return None
-    if any(char in text for char in _PATTERN_METACHARS):
+    if wildcard is None:
+        if any(char in text for char in _OPERATOR_METACHARS):
+            raise ValueError(
+                f"{value!r} contains a pattern metacharacter (one of _ [). "
+                "These are metacharacters of '~' ITSELF, not of the wildcard "
+                "this builder appends, so wildcard=None does not make them "
+                "literal: measured live 2026-08-18 against one instance (it "
+                'may not generalise), FIELD~"<stem>_" with no wildcard '
+                "appended widened a one-row exact match to nine, and [0-9] in "
+                "the same position did the same. EasyVista provides no escape "
+                "-- a backslash is compared literally. For an EXACT match use "
+                "ev_equals_filter: ':' does not expand a wildcard. If your "
+                "deployment compares '_' literally under '~' -- the vendor "
+                "documents '~' as plain Contains and names no metacharacters "
+                "-- pass the expression as a raw search= string."
+            )
+    elif any(char in text for char in _PATTERN_METACHARS):
         raise ValueError(
             f"{value!r} contains a pattern metacharacter (one of * % _ [). "
             "These builders add the wildcards themselves; a metacharacter "
@@ -382,42 +434,104 @@ def _wildcard_filter(field: str, value: str | None, pattern: str) -> str | None:
             "-- a backslash is taken literally (verified live). For an EXACT "
             "match on a value containing one, use ev_equals_filter: ':' does "
             "not expand a wildcard. To pattern-match around one, filter "
-            "server-side on a wider condition and compare exactly in Python."
+            "server-side on a wider condition and compare exactly in Python. "
+            "To place '*' or '%' yourself, pass wildcard=None and put them in "
+            "the value."
         )
-    return f'{field}~"{pattern.format(v=escape_ev_value(text))}"'
+    rendered = pattern.format(
+        w="" if wildcard is None else wildcard, v=escape_ev_value(text)
+    )
+    return f'{field}~"{rendered}"'
 
 
-def ev_contains_filter(field: str, value: str | None) -> str | None:
+def ev_contains_filter(
+    field: str,
+    value: str | None,
+    *,
+    wildcard: Literal["*", "%"] | None = "*",
+) -> str | None:
     """Build a substring match: ``FIELD~"*value*"``.
 
-    ``~`` **is** a pattern operator, and it needs an explicit wildcard — verified
-    live: ``RFC_NUMBER~"*260817*"`` matched 33 rows while
-    ``RFC_NUMBER:"I26081*"`` matched 0, because ``:`` never expands wildcards.
-    Without a wildcard, ``~`` degenerates to exact match, which is why this
-    package previously documented it as "exact-match, not contains" — that
-    conclusion held only for the inputs it was tested with.
+    Two readings of ``~`` are on record, and this builder resolves them in
+    favour of the measured one:
 
-    A value containing ``*``, ``%``, ``_`` or ``[`` raises ``ValueError``: all
-    four are metacharacters to ``~`` (``_`` matches any single character, ``[``
-    opens a character class), and no escape for them exists. Refusing beats
-    silently matching records the caller did not ask for —
+    * **Tier 1, vendor documentation** -- ``~`` is *Contains* (Oxygen 1.7+).
+      The vendor's grammar table gives it one word, no example, and names
+      neither a wildcard nor any metacharacter. On a deployment that behaves
+      that way, ``FIELD~"value"`` is already the substring match.
+    * **Tier 4, measured live 2026-08-17 against one instance, which may not
+      generalise** -- ``~`` behaved as a *pattern* operator needing an explicit
+      wildcard. ``RFC_NUMBER~"*260817*"`` matched 33 rows while a bare value
+      matched only the one exact row, and ``RFC_NUMBER:"I26081*"`` matched 0,
+      because ``:`` never expands a wildcard.
+
+    ``wildcard`` chooses between them. It defaults to ``"*"`` -- the tier-4
+    reading -- because that is the only behaviour anyone has measured. Pass
+    ``wildcard="%"`` for a deployment whose wildcard is the LIKE one (``%``
+    reproduced ``*``'s exact match count on the verified instance, so the two
+    are interchangeable there), or ``wildcard=None`` to emit ``FIELD~"value"``
+    with nothing appended, which is the vendor's plain Contains.
+
+    **The two settings fail in opposite directions, and neither failure is
+    visible in the response.** Appending a wildcard on a deployment that
+    compares ``*`` literally returns zero rows with HTTP 200 and no hint;
+    ``wildcard=None`` on a deployment like the verified one degenerates to an
+    exact match. Confirm once which reading your deployment follows -- compare
+    a filtered count against the unfiltered baseline -- rather than guessing
+    per call.
+
+    A value containing ``_`` or ``[`` raises ``ValueError`` **at every**
+    ``wildcard`` setting, including ``None``: both are metacharacters of ``~``
+    itself rather than of the wildcard this builder appends. Measured live
+    2026-08-18 against one instance, and it may not generalise --
+    ``FIELD~"<stem>_"``, with no wildcard appended at all, widened a one-row
+    exact match to nine; ``[0-9]`` in the same position did the same; and there
+    is no escape, a backslash before the character being compared literally.
+    ``*`` and ``%`` are refused **only** while a wildcard is being appended,
+    where a second one in the value would compose with it; with
+    ``wildcard=None`` they pass through, which is how to hand-build a pattern
+    through this builder.
+
+    Refusing beats silently matching records the caller did not ask for --
     ``ev_contains_filter("ASSET_TAG", "LAPTOP_01")`` would otherwise also match
     ``LAPTOP-01`` and ``LAPTOP001`` with HTTP 200 and no hint. For an **exact**
     match on such a value use :func:`ev_equals_filter`, whose ``:`` does not
-    expand a wildcard; only pattern-matching *around* a literal metacharacter is
-    impossible, and that needs a wider server-side condition plus an exact
-    comparison in Python.
+    expand a wildcard. Only pattern-matching *around* a literal metacharacter
+    is impossible here: that needs a wider server-side condition plus an exact
+    comparison in Python, or an expression built by hand and passed to the
+    caller's own ``search=`` argument, which every search method accepts as a
+    raw unvalidated string.
     """
-    return _wildcard_filter(field, value, "*{v}*")
+    return _wildcard_filter(field, value, "{w}{v}{w}", wildcard)
 
 
-def ev_starts_with_filter(field: str, value: str | None) -> str | None:
-    """Build a prefix match: ``FIELD~"value*"`` (verified live: 32 rows).
+def ev_starts_with_filter(
+    field: str,
+    value: str | None,
+    *,
+    wildcard: Literal["*", "%"] | None = "*",
+) -> str | None:
+    """Build a prefix match: ``FIELD~"value*"`` (verified live 2026-08-17: 32 rows).
 
-    Refuses the same four metacharacters in ``value`` as
-    :func:`ev_contains_filter`, for the same reason and with the same exit.
+    ``wildcard`` means what it means in :func:`ev_contains_filter`, including
+    its default of ``"*"`` and the two readings of ``~`` documented there --
+    the vendor's tier-1 *Contains*, and this package's tier-4 measurement of a
+    pattern operator, taken 2026-08-17 against one instance and not necessarily
+    general.
+
+    **``wildcard=None`` does not express a prefix on either kind of
+    deployment.** It emits ``FIELD~"value"``, which is an exact match on the
+    verified instance and an *unanchored substring* match on a deployment that
+    follows the vendor's reading. So on this builder ``None`` removes the
+    anchor rather than swapping a token: use it only once you have confirmed
+    which reading you are on, and expect a wider result set than the function
+    name promises if that reading is the vendor's.
+
+    Refuses ``_`` and ``[`` in ``value`` at every ``wildcard`` setting, and
+    ``*``/``%`` while a wildcard is being appended, for the reasons and with
+    the exits given in :func:`ev_contains_filter`.
     """
-    return _wildcard_filter(field, value, "{v}*")
+    return _wildcard_filter(field, value, "{v}{w}", wildcard)
 
 
 __all__ = [

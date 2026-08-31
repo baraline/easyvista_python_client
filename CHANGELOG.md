@@ -11,6 +11,19 @@ a deprecation policy will follow the 1.0 release.
 
 ### Added
 
+- `ev_contains_filter` / `ev_starts_with_filter` take a keyword-only
+  `wildcard: Literal["*", "%"] | None = "*"`. The vendor documents `~` as
+  plain **Contains** (tier 1); this package measured it live 2026-08-17 on one
+  instance as a *pattern* operator needing an explicit wildcard (tier 4, may
+  not generalise) and defaults to that reading. On a deployment that follows
+  the vendor's, the appended `*` is compared literally and the filter returns
+  **zero rows with HTTP 200 and no hint** — a silent narrowing, the mirror of
+  the silent widening the metacharacter guard already prevents. Pass
+  `wildcard=None` there, or `wildcard="%"` for a LIKE-style backend. The
+  default is unchanged, so output against the verified instance is identical.
+  `_` and `[` stay refused at every setting (they are metacharacters of `~`
+  itself, measured with a wildcard-free probe); `*` and `%` are now refused
+  only while a wildcard is being appended.
 - `languages=` on every label resolver — `resolve_reference`,
   `localized_label`, `EasyvistaModel.reference`, `TicketContext.to_markdown`,
   `aggregate_tickets`, `ticket_statistics` and `get_department_context` — so a

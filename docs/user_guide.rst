@@ -433,12 +433,15 @@ Assets
    one = client.get_asset(str(asset.asset_id))
    found = client.search_assets(search=ev_equals_filter("ASSET_TAG", "LAPTOP-001"), max_rows=50)
 
-   # A bare '~' is exact match, identical to ':' -- substring search needs an
-   # explicit wildcard, which ev_contains_filter adds for you: ASSET_TAG~"*LAPTOP*"
-   # The value itself must carry none of * % _ [ -- all four are metacharacters
-   # to '~', and ev_contains_filter raises ValueError rather than widening the
-   # match silently. So "LAPTOP_01" raises; use ev_equals_filter for an exact
-   # match on a tag containing '_'. See "Searching and pagination" below.
+   # On the instance this package was characterized against, a bare '~' is exact
+   # match, identical to ':' -- substring search needs an explicit wildcard, which
+   # ev_contains_filter appends for you: ASSET_TAG~"*LAPTOP*". The vendor documents
+   # '~' as plain Contains, so pass wildcard=None if that is your deployment.
+   # The value itself must carry no '_' or '[' (metacharacters to '~' itself, at
+   # every wildcard= setting) and no '*'/'%' while a wildcard is being appended;
+   # ev_contains_filter raises ValueError rather than widening the match silently.
+   # So "LAPTOP_01" raises; use ev_equals_filter for an exact match on a tag
+   # containing '_'. See "Searching and pagination" below.
    laptops = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"), max_rows=50)
 
 Documents
@@ -598,23 +601,35 @@ Searching and pagination
 The verified search grammar is:
 
 - ``FIELD:"value"`` — exact match.
-- ``~`` — a **pattern operator**, not a synonym for ``:``. It only acts as one with an *explicit*
-  wildcard in the value: ``*`` and ``%`` both expand (verified live 2026-08-17 — ``~"I26081*"``
-  matched 32 rows, ``~"*260817*"`` matched 33, ``~"*0001"`` matched 432, and ``~"<prefix>%"``
-  reproduced the same count as the ``*`` equivalent, so ``%`` is a wildcard too). Given a
-  **bare** value with no wildcard, ``~`` degenerates to exact match — identical to ``:`` — which is
-  why this package once documented it as exact-match-only; that conclusion held only for the
-  wildcard-free inputs it was tested with. ``:`` never expands a wildcard even when one is present
-  in the value: ``:"I26081*"`` matched **0** rows on the same data. Build the pattern with
+- ``~`` — the vendor documents it as plain **Contains** (Oxygen 1.7+), one word, no example, no
+  wildcard named. **On the instance this package was characterized against it is a pattern
+  operator instead** (measured live 2026-08-17; one deployment, may not generalise): it acts as
+  one only with an *explicit* wildcard in the value, and ``*`` and ``%`` both expand there
+  (``~"I26081*"`` matched 32 rows, ``~"*260817*"`` matched 33, ``~"*0001"`` matched 432, and
+  ``~"<prefix>%"`` reproduced the same count as the ``*`` equivalent, so ``%`` is a wildcard too).
+  Given a **bare** value with no wildcard, ``~`` degenerates to exact match — identical to ``:`` —
+  which is why this package once documented it as exact-match-only; that conclusion held only for
+  the wildcard-free inputs it was tested with. ``:`` never expands a wildcard even when one is
+  present in the value: ``:"I26081*"`` matched **0** rows on the same data. Build the pattern with
   :func:`~easyvista_python_client.ev_contains_filter` (``FIELD~"*value*"``) or
   :func:`~easyvista_python_client.ev_starts_with_filter` (``FIELD~"value*"``) rather than by hand.
-- ``*`` and ``%`` are **not** the only metacharacters under ``~``. ``_`` matches any **single**
-  character and ``[`` opens a character class — measured live 2026-08-18: replacing one character
-  of an RFC that matched 1 row with ``_``, or with ``[0-9]``, matched 9, while ``[<the real
-  character>x]`` still matched 1. There is **no escape**: ``\_`` matched 0 rows, i.e. the backslash
-  is compared literally. Both builders above therefore raise ``ValueError`` for a value containing
-  any of ``* % _ [`` rather than silently matching records you did not ask for. This bites on
-  ordinary input: ``_`` is pervasive in EasyVista codes, and
+  Both append ``*`` by default; on a deployment that follows the vendor's reading and compares
+  ``*`` literally, that default returns **zero rows with HTTP 200 and no hint**, so pass
+  ``wildcard=None`` there (or ``wildcard="%"`` for a LIKE-style backend). The two settings fail in
+  opposite directions and neither failure is visible in the response — confirm which reading your
+  deployment follows once, by comparing a filtered count against the unfiltered baseline. On
+  ``ev_starts_with_filter``, ``wildcard=None`` removes the *anchor* rather than swapping a token:
+  it is a substring match on a vendor-conformant deployment, not a prefix.
+- ``*`` and ``%`` are **not** the only metacharacters under ``~``, and the other two belong to the
+  **operator** rather than to the wildcard the builders append. ``_`` matches any **single**
+  character and ``[`` opens a character class — measured live 2026-08-18 with a *wildcard-free*
+  pattern: replacing one character of an RFC that matched 1 row with ``_``, or with ``[0-9]``,
+  matched 9, while ``[<the real character>x]`` still matched 1. There is **no escape**: ``\_``
+  matched 0 rows, i.e. the backslash is compared literally. Both builders above therefore raise
+  ``ValueError`` for ``_`` or ``[`` in the value at **every** ``wildcard=`` setting, ``None``
+  included, and additionally for ``*`` or ``%`` while a wildcard is being appended (a second one
+  would compose with it); with ``wildcard=None`` those two pass through, which is how to
+  hand-build a pattern. This bites on ordinary input: ``_`` is pervasive in EasyVista codes, and
   ``ev_contains_filter("ASSET_TAG", "LAPTOP_01")`` raises for that reason — unhandled, it would
   also have matched ``LAPTOP-01`` and ``LAPTOP001`` with HTTP 200 and no hint. For an **exact**
   match on such a value use :func:`~easyvista_python_client.ev_equals_filter`, since ``:`` does not
