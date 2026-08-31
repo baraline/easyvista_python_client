@@ -45,7 +45,8 @@ from easyvista_python_client import (
 #: ``records[0]``. So a search sees a one-record page with real counts, and a
 #: single-record get/create/update sees that same record. ``parse_memo`` finds
 #: no matching field and returns ``None``, which is a legal ``resolve_memo``
-#: result. ``ASSET_ID`` must be an int -- ``Asset`` rejects a string.
+#: result. ``ASSET_ID`` is an int here because that is the shape the live list
+#: returns; ``Asset`` also accepts the ``""`` sentinel and a numeric string.
 PAYLOAD = {
     "records": [
         {
@@ -77,7 +78,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "close_ticket": (("I1",), {}),
     "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
     "count_tickets": ((), {}),
-    "create_action": (("I1", PostAction()), {}),
+    "create_action": (("I1", PostAction(action_type_id=94, group_id=3)), {}),
     "create_task": (("I1", PostTask(action_type_id=94, group_id=3)), {}),
     "create_asset": ((PostAsset(catalog_id=1),), {}),
     "create_department": ((PostDepartment(),), {}),

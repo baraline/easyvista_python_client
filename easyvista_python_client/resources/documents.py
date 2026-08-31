@@ -16,11 +16,6 @@ from ..models.document import Document
 from ..pagination import extract_records
 
 
-def _first_document(data: Any) -> Document:
-    records = extract_records(data)
-    return Document.model_validate(records[0] if records else data)
-
-
 def _document_records(data: Any) -> list[dict[str, Any]]:
     """Find the list of document dicts in a list response.
 
@@ -35,12 +30,56 @@ def _document_records(data: Any) -> list[dict[str, Any]]:
     return extract_records(data)
 
 
-def _all_documents(data: Any) -> list[Document]:
-    return [Document.model_validate(r) for r in _document_records(data)]
+def _first_document(
+    context: dict[str, Any] | None = None,
+) -> Callable[[Any], Document]:
+    """Build the single-document parser, binding the validation context.
+
+    A factory rather than a bare function so ``context`` is fixed at build time
+    and the returned parser keeps the ``Callable[[Any], Document]`` shape every
+    other builder returns. ``Document`` declares no timestamp column today, so
+    the context reaches nothing -- it is threaded anyway because "every builder
+    that returns a parser takes a context" is a rule with no exception for a
+    future field addition to forget.
+
+    Goes through :func:`_document_records`, not ``extract_records``: the create
+    and list responses are the same resource on the same instance, and reading
+    them by two different rules is how a capital-D ``Documents`` echo produced
+    an all-``None`` ``Document`` built from the wrapper.
+    """
+
+    def parse(data: Any) -> Document:
+        records = _document_records(data)
+        return Document.model_validate(
+            records[0] if records else data, context=context
+        )
+
+    return parse
+
+
+def _all_documents(
+    context: dict[str, Any] | None = None,
+) -> Callable[[Any], list[Document]]:
+    """Build the document-list parser, binding the validation context.
+
+    A factory for the same reason as :func:`_first_document`.
+    """
+
+    def parse(data: Any) -> list[Document]:
+        return [
+            Document.model_validate(r, context=context)
+            for r in _document_records(data)
+        ]
+
+    return parse
 
 
 def build_add_document(
-    rfc_number: str, *, filename: str, content: bytes
+    rfc_number: str,
+    *,
+    filename: str,
+    content: bytes,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Document]]:
     filedata = base64.b64encode(content).decode("ascii")
     spec = RequestSpec(
@@ -48,13 +87,18 @@ def build_add_document(
         f"requests/{rfc_number}/documents",
         json={"documents": [{"filename": filename, "filedata": filedata}]},
     )
-    return spec, _first_document
+    return spec, _first_document(context)
 
 
 def build_list_documents(
     rfc_number: str,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], list[Document]]]:
-    return RequestSpec("GET", f"requests/{rfc_number}/documents"), _all_documents
+    return (
+        RequestSpec("GET", f"requests/{rfc_number}/documents"),
+        _all_documents(context),
+    )
 
 
 def build_delete_document(rfc_number: str, document_id: str) -> RequestSpec:

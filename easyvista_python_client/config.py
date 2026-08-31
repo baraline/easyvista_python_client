@@ -110,6 +110,19 @@ class EasyvistaConfig:
     user_agent: str | None = None
     default_params: Mapping[str, Any] = field(default_factory=dict)
     additional_download_hosts: frozenset[str] = frozenset()
+    #: Extra ``datetime.strptime`` patterns to accept when reading a timestamp
+    #: column, tried only after EasyVista's own ISO-8601 form fails. Empty by
+    #: default, which is exactly today's behaviour.
+    #:
+    #: This exists because the read models refuse a timestamp they cannot parse
+    #: rather than guessing an instant, and a search validates a whole page at
+    #: once -- so on a deployment whose format differs, one column fails every
+    #: record on the page. Naming the format is the way through that is not a
+    #: fork. Nothing is guessed: a value matching none of the listed patterns
+    #: still raises, and a pattern can never change how a real ISO-8601 stamp
+    #: parses, because that is tried first. A pattern that yields a naive
+    #: datetime is read as UTC.
+    datetime_input_formats: tuple[str, ...] = ()
     _server_normalized: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:

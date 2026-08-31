@@ -13,7 +13,13 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from .common import EasyvistaModel, EasyvistaWriteModel, OptionalDateTime, OptionalInt
+from .common import (
+    EasyvistaModel,
+    EasyvistaWriteModel,
+    OptionalDateTime,
+    OptionalInt,
+    _shipped_keys,
+)
 
 
 class Request(EasyvistaModel):
@@ -93,10 +99,18 @@ class Request(EasyvistaModel):
     end_date_ut: OptionalDateTime = Field(default=None, alias="END_DATE_UT")
     last_update: OptionalDateTime = Field(default=None, alias="LAST_UPDATE")
     sla_id: OptionalInt = Field(default=None, alias="SLA_ID")
-    # Verified live (2026-07-28 Phase 0 probe, U6) as a string on every ticket
-    # checked -- never an int -- so no int branch is declared here.
-    time_used_to_solve_request: str | None = Field(
-        default=None, alias="TIME_USED_TO_SOLVE_REQUEST"
+    # Type, tier 4: measured as a string on every ticket checked in one
+    # 2026-07-28 probe of one instance -- which is evidence about that instance
+    # on that day, not about the column. Nothing vendor-documents it. So the
+    # declaration accepts both forms and coerces neither
+    # (``union_mode="left_to_right"`` tries ``str`` first, and pydantic's
+    # ``str`` does not absorb an int). Declared ``str`` alone, a deployment
+    # returning ``3600`` failed the whole record -- and on a search, the whole
+    # page.
+    time_used_to_solve_request: str | int | None = Field(
+        default=None,
+        alias="TIME_USED_TO_SOLVE_REQUEST",
+        union_mode="left_to_right",
     )
 
     @model_validator(mode="after")
@@ -228,6 +242,28 @@ class PostRequest(EasyvistaWriteModel):
 
     catalog_guid: str | None = None
     catalog_code: str | None = None
+    # Asset and configuration-item selectors, each family in the vendor's
+    # documented priority order (tier 1, docs/vendor-api-reference.md).
+    #
+    # The wire spellings have NO underscore -- ``assetid``, ``assettag``.
+    # ``to_api()`` serializes by ATTRIBUTE NAME (``model_dump()`` without
+    # ``by_alias``), so an alias would never reach the body and renaming these
+    # to ``asset_id``/``asset_tag`` would ship a key the vendor does not
+    # document. The documented case-insensitivity is not underscore-
+    # insensitivity.
+    #
+    # The vendor types all six as **string**. ``assetid`` and ``ci_id`` are
+    # widened to ``int | str`` for the same reason ``recipient_id`` is: a caller
+    # holding ``Asset.asset_id`` holds an int. Whichever type is passed
+    # serializes unchanged, with no coercion between them. Tier 1, and NOT
+    # verified live by this package's suite -- a deployment may reject one the
+    # vendor lists.
+    assetid: int | str | None = None
+    assettag: str | None = None
+    asset_name: str | None = None
+    ci_id: int | str | None = None
+    ci_asset_tag: str | None = None
+    ci_name: str | None = None
     title: str | None = None
     description: str | None = None
     origin: int | str | None = None
@@ -260,11 +296,19 @@ class PostRequest(EasyvistaWriteModel):
         answers HTTP 590 with a SQL parser error naming no field at all, which
         is easy to misread as a server defect -- so this is refused here, where
         the message can say what is missing.
+
+        The check reads the body ``to_api()`` will actually send, not the
+        attributes declared on this model, so
+        ``extra_payload={"CATALOG_GUID": ...}`` satisfies it. That is not a
+        courtesy: ``extra_payload`` is the documented route past a declared
+        field, and a guard that could not see it would refuse bodies the API
+        accepts. Deriving from ``to_api()`` also means the check cannot drift
+        from that method's documented case-insensitive merge rule.
         """
-        if not self.catalog_guid and not self.catalog_code:
+        if not _shipped_keys(self) & {"catalog_guid", "catalog_code"}:
             raise ValueError(
                 "a create body needs a subject: pass catalog_guid (preferred) "
-                "or catalog_code"
+                "or catalog_code, on the model or through extra_payload"
             )
         return self
 

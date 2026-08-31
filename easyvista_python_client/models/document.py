@@ -21,7 +21,15 @@ class Document(EasyvistaModel):
     filename: str | None = Field(default=None, alias="FILE_NAME")
     name: str | None = Field(default=None, alias="NAME")
     document: str | None = Field(default=None, alias="DOCUMENT")
-    document_id: str | None = Field(default=None, alias="DOCUMENT_ID")
+    # Tier 4 and non-coercing, for the same reason as
+    # ``Request.time_used_to_solve_request``: this column's type was observed on
+    # one instance, never vendor-documented. Declared ``str`` alone, an instance
+    # returning a JSON number for DOCUMENT_ID failed the record -- and because
+    # the list parser validates a whole page in one comprehension, every
+    # attachment on the ticket with it.
+    document_id: str | int | None = Field(
+        default=None, alias="DOCUMENT_ID", union_mode="left_to_right"
+    )
     download_href: str | None = Field(default=None, alias="DDL_HREF")
 
     @model_validator(mode="after")

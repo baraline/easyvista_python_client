@@ -10,10 +10,12 @@ Claims that *are* about one surface only live in ``test_concurrency.py``,
 which is hand-written on both sides and never generated.
 """
 
+import dataclasses
 import json
 from collections.abc import Iterator
 
 import httpx
+import pydantic
 import pytest
 import respx
 
@@ -143,7 +145,9 @@ def test_create_and_list_actions(config):
         return_value=httpx.Response(200, json={"records": [{"ACTION_ID": 5}]})
     )
     with EasyvistaClient(config) as client:
-        action = client.create_action("I1", PostAction(description="hi"))
+        action = client.create_action(
+            "I1", PostAction(action_type_id=94, group_id=3, description="hi")
+        )
         listed = client.list_actions("I1")
     assert action.action_id == 5
     assert listed[0].action_id == 5
@@ -1753,3 +1757,51 @@ def test_list_actions_keeps_its_rfc_filter_when_a_caller_passes_search(config):
     with EasyvistaClient(config) as client:
         client.list_actions("I1", params={"search": 'RFC_NUMBER:"other"'})
     assert route.calls.last.request.url.params["search"] == 'REQUEST.RFC_NUMBER:"I1"'
+
+
+@respx.mock
+def test_get_ticket_forwards_a_fields_projection(config):
+    """A projection on the item route, for when one column poisons the record.
+
+    A value the read model refuses fails the entire ``Request``, and without
+    this there was no way to read the rest of the ticket. Note the item route
+    may ignore ``fields`` -- the verified instance's own OpenAPI declares it on
+    ``GET /requests`` but not on ``GET /requests/{rfc_number}``.
+    """
+    route = respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"records": [{"RFC_NUMBER": "I1"}]})
+    )
+    with EasyvistaClient(config) as client:
+        client.get_ticket("I1", fields=["RFC_NUMBER", "TITLE"])
+    assert route.calls.last.request.url.params["fields"] == "RFC_NUMBER,TITLE"
+
+
+@respx.mock
+def test_a_configured_datetime_format_is_honoured_end_to_end(config):
+    """The only test that walks the whole thread: config field to model_validate.
+
+    The read models refuse a timestamp they cannot parse rather than guessing
+    an instant, and a search validates a whole page in one comprehension -- so
+    on a deployment whose format differs, one column fails every record on the
+    page. ``datetime_input_formats`` is the way through that is not a fork.
+
+    Both halves matter. The default config must still refuse the payload (the
+    guard is not softened), and the configured one must accept it (the context
+    actually reaches ``model_validate`` through 26 builder signatures).
+    """
+    payload = {"records": [{"RFC_NUMBER": "I1", "LAST_UPDATE": "17/08/2026 15:40:00"}]}
+    respx.get(f"{ROOT}/requests").mock(return_value=httpx.Response(200, json=payload))
+
+    with EasyvistaClient(config) as client:
+        with pytest.raises(
+            pydantic.ValidationError, match="not an EasyVista timestamp"
+        ):
+            client.search_tickets()
+
+    tolerant = dataclasses.replace(
+        config, datetime_input_formats=("%d/%m/%Y %H:%M:%S",)
+    )
+    with EasyvistaClient(tolerant) as client:
+        result = client.search_tickets()
+    assert result.records[0].last_update is not None
+    assert result.records[0].last_update.year == 2026

@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    model_validator,
+)
 
 from ..field_model import FieldClassification, classify
 from ..references import DEFAULT_LANGUAGE_ORDER, Reference, resolve_reference
@@ -30,7 +37,30 @@ OptionalInt = Annotated[int | None, BeforeValidator(_empty_str_to_none)]
 """An ``int | None`` field that treats the API's ``""`` sentinel as ``None``."""
 
 
-def _empty_str_to_none_datetime(value: Any) -> Any:
+def _parse_with_context_formats(value: Any, info: ValidationInfo) -> datetime | None:
+    """Try the caller's own timestamp formats, if it supplied any.
+
+    Opt-in and empty by default: with no context this returns ``None``
+    immediately and the guard below raises exactly as it always has. The
+    patterns are :meth:`datetime.datetime.strptime` format strings, so nothing
+    is ever guessed -- a value matching none of them still raises. A pattern
+    that parses to a naive datetime is stamped UTC, the same assumption
+    :func:`~easyvista_python_client.parse_ev_datetime` documents for an
+    offset-less literal on the read path.
+    """
+    context = info.context
+    if not isinstance(context, dict) or not isinstance(value, str):
+        return None
+    for pattern in context.get("datetime_input_formats") or ():
+        try:
+            parsed = datetime.strptime(value.strip(), pattern)
+        except (TypeError, ValueError):
+            continue
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _empty_str_to_none_datetime(value: Any, info: ValidationInfo) -> Any:
     """Coerce EasyVista's ``""`` sentinel for an absent date to ``None``.
 
     Distinct from :func:`_empty_str_to_none`: a *malformed* timestamp must still
@@ -51,12 +81,27 @@ def _empty_str_to_none_datetime(value: Any) -> Any:
     credible ``2025-08-17T12:40:41.610Z``. Absorbing the one format change this
     guard exists to surface is the opposite of the intended behaviour, so junk
     raises here instead.
+
+    **The cost of raising is a whole record, and on a search a whole PAGE.**
+    ``resources/descriptor.py`` validates a page in a list comprehension, so one
+    unparseable timestamp on one row fails the entire ``search_tickets`` call,
+    not just that row. That is the deliberate trade -- a wrong instant is worse
+    than a loud failure -- but it is the reason for the escape hatch below.
+
+    A deployment whose timestamps are genuinely a different format can name that
+    format instead of forking: pass
+    ``EasyvistaConfig(datetime_input_formats=("%d/%m/%Y %H:%M:%S",))`` and every
+    read through the client validates under it. The native ISO-8601 form is
+    tried first, so a listed pattern can never change how a real EasyVista stamp
+    parses, and an unlisted format still raises here.
     """
     if value is None:
         return None
     if isinstance(value, str) and not value.strip():
         return None
     parsed = parse_ev_datetime(value)
+    if parsed is None:
+        parsed = _parse_with_context_formats(value, info)
     if parsed is None:
         raise ValueError(
             f"{value!r} is not an EasyVista timestamp. EasyVista sends ISO 8601 "
@@ -129,6 +174,39 @@ class EasyvistaWriteModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _point_unknown_keys_at_extra_payload(cls, data: Any) -> Any:
+        """Name the unknown keys, and the supported way past them.
+
+        ``extra="forbid"`` catches a caller typo, which is what it is for, but
+        its own message ("Extra inputs are not permitted") never mentions
+        ``extra_payload`` -- the model's documented route for a field it
+        declines to declare. Someone who has just read that a field was
+        excluded has no way to learn from the error that there is a way
+        through.
+
+        The message stops short of promising the write will work. On this
+        package an exclusion is usually a *measured misbehaviour*, not a gap in
+        the documentation: ``RequestUpdate.status_id`` returned HTTP 200,
+        applied its companion field and dropped the status in silence.
+        ``extra_payload`` gets the field onto the wire; it cannot make the
+        server store it.
+        """
+        if not isinstance(data, dict):
+            return data
+        unknown = sorted(str(key) for key in data if key not in cls.model_fields)
+        if not unknown:
+            return data
+        raise ValueError(
+            f"{cls.__name__} does not declare {', '.join(unknown)}. Check the "
+            "spelling first. If the field is real on your deployment, send it "
+            "as extra_payload={...}: it merges last and reaches the wire as "
+            "written. Some fields are absent here because they were measured "
+            "to misbehave, not merely because they are undocumented, so "
+            "re-read afterwards -- a 200 is not a receipt on this API."
+        )
+
     custom_fields: dict[str, Any] = Field(default_factory=dict)
     extra_payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -176,3 +254,25 @@ class EasyvistaWriteModel(BaseModel):
             }
             data.update(self.extra_payload)
         return data
+
+
+def _shipped_keys(model: EasyvistaWriteModel) -> set[str]:
+    """The case-folded keys of the body :meth:`EasyvistaWriteModel.to_api` will
+    actually send.
+
+    Derived from ``to_api()`` rather than from the declared attributes, so a
+    required field supplied through ``extra_payload`` -- this package's
+    documented route past a field the model declines to declare -- satisfies a
+    guard instead of being refused for a body the API would have accepted.
+    Deriving it here also means a guard cannot drift from ``to_api``'s
+    case-insensitive merge rule, because it *is* that rule.
+
+    A ``None`` value is dropped. ``to_api`` already drops ``None`` for declared
+    fields; a ``None`` arriving through ``extra_payload`` is an absent value,
+    not a supplied one.
+    """
+    return {
+        str(key).casefold()
+        for key, value in model.to_api().items()
+        if value is not None
+    }

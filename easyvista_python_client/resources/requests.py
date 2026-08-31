@@ -29,12 +29,19 @@ REQUESTS: ResourceDescriptor[Request] = ResourceDescriptor(
 
 def build_create_ticket(
     payload: PostRequest,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Request]]:
-    return build_create(REQUESTS, payload)
+    return build_create(REQUESTS, payload, context=context)
 
 
-def build_get_ticket(rfc_number: str) -> tuple[RequestSpec, Callable[[Any], Request]]:
-    return build_get(REQUESTS, rfc_number)
+def build_get_ticket(
+    rfc_number: str,
+    *,
+    fields: Iterable[str] | str | None = None,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Request]]:
+    return build_get(REQUESTS, rfc_number, fields=fields, context=context)
 
 
 def build_search_tickets(
@@ -44,6 +51,7 @@ def build_search_tickets(
     sort: str | None = None,
     max_rows: int | None = None,
     offset: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], SearchResult[Request]]]:
     return build_search(
         REQUESTS,
@@ -52,13 +60,17 @@ def build_search_tickets(
         sort=sort,
         max_rows=max_rows,
         offset=offset,
+        context=context,
     )
 
 
 def build_update_ticket(
-    rfc_number: str, update: RequestUpdate
+    rfc_number: str,
+    update: RequestUpdate,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Request]]:
-    return build_update(REQUESTS, rfc_number, update)
+    return build_update(REQUESTS, rfc_number, update, context=context)
 
 
 def build_close_ticket(
@@ -69,6 +81,7 @@ def build_close_ticket(
     comment: str | None = None,
     end_date: str | None = None,
     catalog_guid: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Request]]:
     """Build the ``{"closed": {...}}`` PUT spec — the API's status-set route.
 
@@ -128,6 +141,7 @@ def build_set_status(
     *,
     status_guid: str,
     comment: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Request]]:
     """Build a spec that sets ``rfc_number``'s status to ``status_guid``.
 
@@ -136,4 +150,6 @@ def build_set_status(
     envelope without one is a close request with nothing to close to, and making
     that unexpressible is the point of having this function at all.
     """
-    return build_close_ticket(rfc_number, status_guid=status_guid, comment=comment)
+    return build_close_ticket(
+        rfc_number, status_guid=status_guid, comment=comment, context=context
+    )

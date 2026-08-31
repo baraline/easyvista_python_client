@@ -23,7 +23,10 @@ ACTIONS: ResourceDescriptor[Action] = ResourceDescriptor(
 
 
 def build_create_action(
-    rfc_number: str, payload: PostAction
+    rfc_number: str,
+    payload: PostAction,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Action]]:
     # Create is nested under the request, one action per call, with a bare body
     # (NOT wrapped in an ``actions`` array) — verified against a live instance.
@@ -37,7 +40,10 @@ def build_create_action(
 
 
 def build_create_task(
-    rfc_number: str, payload: PostTask
+    rfc_number: str,
+    payload: PostTask,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Action]]:
     """Build ``POST requests/{rfc}/tasks`` -- an action created already ENDED.
 
@@ -62,6 +68,7 @@ def build_search_actions(
     fields: Iterable[str] | str | None = None,
     max_rows: int | None = None,
     offset: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], SearchResult[Action]]]:
     """One page of a ticket's actions, envelope included.
 
@@ -83,7 +90,12 @@ def build_search_actions(
     if search is None:
         raise ValueError("rfc_number is required to list a ticket's actions")
     return build_search(
-        ACTIONS, search=search, fields=fields, max_rows=max_rows, offset=offset
+        ACTIONS,
+        search=search,
+        fields=fields,
+        max_rows=max_rows,
+        offset=offset,
+        context=context,
     )
 
 
@@ -92,6 +104,7 @@ def build_list_actions(
     *,
     fields: Iterable[str] | str | None = None,
     max_rows: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], list[Action]]]:
     """One page of a ticket's actions, as a bare list.
 
@@ -101,7 +114,7 @@ def build_list_actions(
     ``EasyvistaClient.iter_actions`` pages instead.
     """
     spec, parse_search = build_search_actions(
-        rfc_number, fields=fields, max_rows=max_rows
+        rfc_number, fields=fields, max_rows=max_rows, context=context
     )
 
     def parse(data: Any) -> list[Action]:
@@ -112,6 +125,8 @@ def build_list_actions(
 
 def build_get_action(
     action_id: str | int,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Action]]:
     """Fetch ONE action by id.
 
@@ -122,15 +137,18 @@ def build_get_action(
     nested ``requests/{rfc}/actions/{id}`` is rejected with HTTP 403, the same
     way the nested list path is.
     """
-    return build_get(ACTIONS, action_id)
+    return build_get(ACTIONS, action_id, context=context)
 
 
 def build_update_action(
-    action_id: str | int, payload: ActionUpdate
+    action_id: str | int,
+    payload: ActionUpdate,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Action]]:
     """Edit one action, via the TOP-LEVEL ``actions/{id}`` path.
 
     The nested ``requests/{rfc}/actions/{id}`` form is rejected with HTTP 403,
     the same way the nested list and item paths are (verified live).
     """
-    return build_update(ACTIONS, action_id, payload)
+    return build_update(ACTIONS, action_id, payload, context=context)

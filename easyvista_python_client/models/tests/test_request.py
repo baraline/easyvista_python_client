@@ -473,3 +473,97 @@ def test_workflow_start_false_is_sent_not_dropped() -> None:
     must not have that silently discarded."""
     body = PostRequest(catalog_code="X", workflow_start=False).to_api()
     assert body["workflow_start"] is False
+
+
+# --- the create guard reads the body that ships, not the attributes declared --
+
+
+def test_extra_payload_satisfies_the_catalog_guard() -> None:
+    """``extra_payload`` is the documented route past a declared field.
+
+    A guard reading ``self.catalog_guid`` refused this body even though it is
+    exactly what the vendor documents as a complete create -- the model's own
+    escape hatch was unusable for the one field the model requires. Deriving
+    from ``to_api()`` fixes that and cannot drift from its case-insensitive
+    merge rule, because it *is* that rule.
+    """
+    payload = PostRequest(extra_payload={"CATALOG_GUID": "{ABC}"})
+    assert payload.to_api() == {"CATALOG_GUID": "{ABC}"}
+
+
+def test_an_explicit_none_in_extra_payload_does_not_satisfy_the_guard() -> None:
+    """A ``None`` is an absent value, not a supplied one.
+
+    ``to_api()`` already drops ``None`` for declared fields; without the
+    ``value is not None`` filter in ``_shipped_keys``, an explicit
+    ``{"catalog_code": None}`` would satisfy a guard while shipping nothing.
+    """
+    with pytest.raises(ValidationError, match="needs a subject"):
+        PostRequest(extra_payload={"catalog_code": None})
+
+
+def test_a_custom_field_named_catalog_code_does_not_satisfy_the_guard() -> None:
+    """``custom_fields`` serialize with an ``e_`` prefix, so the key differs.
+
+    ``e_catalog_code`` is not the key the API reads, and the guard correctly
+    still refuses -- deriving from ``to_api()`` gets this right for free.
+    """
+    with pytest.raises(ValidationError, match="needs a subject"):
+        PostRequest(custom_fields={"catalog_code": "X"})
+
+
+# --- the asset / CI selectors -----------------------------------------------
+
+
+def test_post_request_ships_the_asset_and_ci_selectors() -> None:
+    """All six are tier 1, and the wire spellings have NO underscore.
+
+    ``to_api()`` serializes by attribute name (``model_dump()`` without
+    ``by_alias``), so a ``serialization_alias`` would never reach the body and
+    renaming these to ``asset_id`` / ``asset_tag`` would ship keys the vendor
+    does not document. The documented case-insensitivity is not
+    underscore-insensitivity, which is what this test pins.
+    """
+    body = PostRequest(
+        catalog_code="X",
+        assetid=9504,
+        assettag="ZGCSS_732",
+        asset_name="a laptop",
+        ci_id=77,
+        ci_asset_tag="CI-1",
+        ci_name="a service",
+    ).to_api()
+    assert body["assetid"] == 9504
+    assert body["assettag"] == "ZGCSS_732"
+    assert body["asset_name"] == "a laptop"
+    assert body["ci_id"] == 77
+    assert body["ci_asset_tag"] == "CI-1"
+    assert body["ci_name"] == "a service"
+    assert "asset_id" not in body
+    assert "asset_tag" not in body
+
+
+def test_an_int_assetid_serializes_unchanged() -> None:
+    """The vendor types it a string; the int branch exists because a caller
+    holding ``Asset.asset_id`` holds an int. Neither branch coerces."""
+    assert PostRequest(catalog_code="X", assetid=9504).to_api()["assetid"] == 9504
+    assert PostRequest(catalog_code="X", assetid="9504").to_api()["assetid"] == "9504"
+
+
+def test_time_used_to_solve_request_accepts_both_a_string_and_an_int() -> None:
+    """Tier 4 measured a string on one instance on one day; that is evidence
+    about the instance, not about the column. A ``str``-only declaration
+    rejected ``3600`` and failed the whole record -- on a search, the whole
+    page. Neither branch coerces into the other."""
+    assert (
+        Request.model_validate(
+            {"TIME_USED_TO_SOLVE_REQUEST": "3600"}
+        ).time_used_to_solve_request
+        == "3600"
+    )
+    assert (
+        Request.model_validate(
+            {"TIME_USED_TO_SOLVE_REQUEST": 3600}
+        ).time_used_to_solve_request
+        == 3600
+    )

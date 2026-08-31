@@ -33,25 +33,48 @@ class ResourceDescriptor(Generic[M]):
     model: type[M]
 
 
-def _first_record_parser(desc: ResourceDescriptor[M]) -> Callable[[Any], M]:
+def _first_record_parser(
+    desc: ResourceDescriptor[M], context: dict[str, Any] | None = None
+) -> Callable[[Any], M]:
     """Build a parser that validates the first extracted record (or bare ``data``).
 
     Shared by :func:`build_get`, :func:`build_create` and :func:`build_update` —
     all three parse a single record, either wrapped in the resource's envelope
     (or ``records``) or returned bare (e.g. a create's ``HREF``-only body).
+
+    ``context`` is the pydantic validation context, bound here at build time
+    rather than passed to the returned parser: it is fixed for the lifetime of
+    a client, so binding it early keeps the parser signature
+    ``Callable[[Any], M]``. ``None`` — the default — makes every
+    ``model_validate`` call byte-identical to a context-free one.
     """
 
     def parse(data: Any) -> M:
         records = extract_records(data, desc.envelope_key)
-        return desc.model.model_validate(records[0] if records else data)
+        return desc.model.model_validate(
+            records[0] if records else data, context=context
+        )
 
     return parse
 
 
 def build_get(
-    desc: ResourceDescriptor[M], record_id: Any
+    desc: ResourceDescriptor[M],
+    record_id: Any,
+    *,
+    fields: Iterable[str] | str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], M]]:
-    return RequestSpec("GET", f"{desc.path}/{record_id}"), _first_record_parser(desc)
+    params: dict[str, Any] = {}
+    if fields is not None:
+        params["fields"] = fields if isinstance(fields, str) else ",".join(fields)
+    # ``params or None`` rather than a bare ``{}``: with no projection the spec
+    # must be identical to the one this builder has always produced, and the
+    # suite asserts on ``spec.params``.
+    return (
+        RequestSpec("GET", f"{desc.path}/{record_id}", params=params or None),
+        _first_record_parser(desc, context),
+    )
 
 
 def build_search(
@@ -62,6 +85,7 @@ def build_search(
     sort: str | None = None,
     max_rows: int | None = None,
     offset: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], SearchResult[M]]]:
     params: dict[str, Any] = {}
     if search is not None:
@@ -77,7 +101,7 @@ def build_search(
 
     def parse(data: Any) -> SearchResult[M]:
         records = [
-            desc.model.model_validate(r)
+            desc.model.model_validate(r, context=context)
             for r in extract_records(data, desc.envelope_key)
         ]
         return build_search_result(data, records)
@@ -86,14 +110,21 @@ def build_search(
 
 
 def build_create(
-    desc: ResourceDescriptor[M], payload: EasyvistaWriteModel
+    desc: ResourceDescriptor[M],
+    payload: EasyvistaWriteModel,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], M]]:
     spec = RequestSpec("POST", desc.path, json={desc.envelope_key: [payload.to_api()]})
-    return spec, _first_record_parser(desc)
+    return spec, _first_record_parser(desc, context)
 
 
 def build_update(
-    desc: ResourceDescriptor[M], record_id: Any, payload: EasyvistaWriteModel
+    desc: ResourceDescriptor[M],
+    record_id: Any,
+    payload: EasyvistaWriteModel,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], M]]:
     spec = RequestSpec("PUT", f"{desc.path}/{record_id}", json=payload.to_api())
-    return spec, _first_record_parser(desc)
+    return spec, _first_record_parser(desc, context)

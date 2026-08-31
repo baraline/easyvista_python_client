@@ -158,6 +158,92 @@ def test_a_naive_datetime_input_comes_back_aware():
     assert got == datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
 
 
+# --- the caller's own timestamp formats, opt-in and empty by default ---------
+#
+# The raise-rather-than-guess default above stays exactly as it is; the tests in
+# this block are about the escape hatch beside it, for a deployment whose
+# timestamps are genuinely a different format. Nothing here softens the guard --
+# an unlisted format still raises.
+
+
+def test_no_context_behaves_exactly_as_before():
+    """The default path is untouched: an explicit ``context=None`` still raises."""
+    with pytest.raises(pydantic.ValidationError):
+        _Probe.model_validate({"when": "20260817"}, context=None)
+
+
+def test_an_unlisted_format_still_raises_under_a_context():
+    """Naming a format is not a licence to guess at every other one."""
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        _Probe.model_validate(
+            {"when": "not-a-date"},
+            context={"datetime_input_formats": ["%d/%m/%Y"]},
+        )
+    assert exc_info.value.errors()[0]["loc"] == ("when",)
+
+
+def test_a_named_format_is_accepted_and_stamped_utc():
+    """A pattern yielding a naive datetime is read as UTC.
+
+    The same assumption ``parse_ev_datetime`` already documents for an
+    offset-less literal on the read path, so the two paths agree.
+    """
+    got = _Probe.model_validate(
+        {"when": "17/08/2026 15:40:00"},
+        context={"datetime_input_formats": ["%d/%m/%Y %H:%M:%S"]},
+    ).when
+    assert got == datetime(2026, 8, 17, 15, 40, 0, tzinfo=timezone.utc)
+
+
+def test_a_context_format_never_shadows_the_native_iso_form():
+    """Order is load-bearing: ``parse_ev_datetime`` runs FIRST.
+
+    ``"%Y%m%d"`` would happily consume the leading ``20260817`` of an ISO
+    stamp if strptime were tried first, silently discarding the time and the
+    offset. Because the native form is tried first, adding a pattern can never
+    change how a real EasyVista timestamp parses.
+    """
+    got = _Probe.model_validate(
+        {"when": "2026-08-17T15:40:41.610+02:00"},
+        context={"datetime_input_formats": ["%Y%m%d"]},
+    ).when
+    assert got == datetime(
+        2026, 8, 17, 15, 40, 41, 610000, tzinfo=timezone(timedelta(hours=2))
+    )
+
+
+# --- an unknown key names itself, and names extra_payload -------------------
+
+
+def test_an_unknown_field_names_itself_and_extra_payload():
+    """``extra="forbid"``'s own message never mentions the way through.
+
+    Someone who has just read that a field was excluded from a model has no way
+    to learn from "Extra inputs are not permitted" that ``extra_payload``
+    exists. The message must also stop short of promising the write works: on
+    this API an exclusion is usually a measured misbehaviour, and a 200 is not
+    a receipt.
+    """
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        PostRequest(catalog_code="X", ctalog_guid="typo")
+    message = str(exc_info.value)
+    assert "ctalog_guid" in message
+    assert "extra_payload" in message
+    assert "a 200 is not a receipt on this API." in message
+
+
+def test_a_known_field_is_not_intercepted():
+    """The validator returns the input untouched when nothing is unknown."""
+    assert PostRequest(catalog_code="X", title="t").to_api()["title"] == "t"
+
+
+def test_a_non_mapping_input_falls_through():
+    """A non-mapping must reach pydantic's own error, not this validator's."""
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        PostRequest.model_validate("nonsense")
+    assert "extra_payload" not in str(exc_info.value)
+
+
 def test_extra_payload_serializes_verbatim_without_prefix() -> None:
     """extra_payload keys reach the wire exactly as written."""
     payload = PostRequest(catalog_code="X", extra_payload={"URGENCY_ID": "4"})

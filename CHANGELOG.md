@@ -66,6 +66,23 @@ a deprecation policy will follow the 1.0 release.
   request.
 - `RequestSpec.headers`, for a single request needing a content type other than
   the client-level `application/json`.
+- `PostRequest` gains the six tier-1 asset / configuration-item selectors:
+  `assetid`, `assettag`, `asset_name`, `ci_id`, `ci_asset_tag`, `ci_name`. The
+  wire spellings have no underscore, which is what the vendor documents — the
+  documented case-insensitivity is not underscore-insensitivity.
+- `PostAction` gains `action_type_guid`, `group_mail` and `parent_action_id`,
+  all tier-1 optional fields the model did not declare.
+- `EasyvistaConfig.datetime_input_formats` — extra `strptime` patterns tried
+  only after EasyVista's own ISO-8601 form fails. Empty by default. The read
+  models refuse a timestamp they cannot parse rather than guessing an instant,
+  and a search validates a whole page in one comprehension, so on a deployment
+  whose format differs one column fails every record on the page. Nothing is
+  guessed: an unlisted format still raises, and a pattern can never change how
+  a real EasyVista stamp parses because that is tried first.
+- `get_ticket(fields=...)` — a projection on the item route, for when one
+  column poisons the whole record. Note the verified instance's own OpenAPI
+  declares `fields` on `GET /requests` but not on `GET /requests/{rfc_number}`
+  (tier 2), so the item route may ignore it.
 - `references.label_from_record` — the best human label anywhere in a
   reference-table row, matched by **suffix**. A reference table does not name
   its label column after the table: `groups` returns `GROUP_EN`, `locations`
@@ -76,6 +93,37 @@ a deprecation policy will follow the 1.0 release.
 
 ### Changed
 
+- **BREAKING**: `PostAction` now requires an action type and a group, the same
+  way `PostTask` always has and on the same vendor sentence ("Required:
+  `action_type_id`, and one of `group_id` / `group_mail` / `group_name`").
+  `PostAction()` used to construct fine and ship `{"action": {}}`, drawing an
+  HTTP 590 that named no field; it now raises at construction with a message
+  that names what is missing. A body supplying either through `extra_payload`
+  satisfies the guard.
+- `PostAction.action_type_id` and `.group_id` widen from `int | None` to
+  `int | str | None`, matching `PostTask`. They had diverged for no recorded
+  reason, so a non-numeric id worked through `create_task` and failed through
+  `create_action`. Purely permissive.
+- `Asset.asset_id` and `.status_id` accept EasyVista's `""` sentinel
+  (`OptionalInt`), as every other read model already did. A CMDB row with an
+  unset `STATUS_ID` used to fail the whole page, and inside
+  `get_department_context` it failed the whole bundle.
+- `Request.time_used_to_solve_request` and `Document.document_id` widen to
+  non-coercing `str | int | None`. Both were typed from a single observation of
+  a single instance; an instance sending the other form failed the record, and
+  for documents that meant every attachment on the ticket.
+- `PostAsset.catalog_id` and `.status_id` accept `int | str`, coercing a
+  numeric string to the number the instance's own create example shows and
+  passing a non-numeric value through as written.
+- The required-field guards on `PostRequest`, `PostAction` and `PostTask` now
+  read the body `to_api()` will actually send rather than the declared
+  attributes, so a field supplied through `extra_payload` satisfies them.
+  Previously `PostRequest(extra_payload={"CATALOG_GUID": ...})` was refused
+  even though it ships exactly what the vendor documents as a complete create.
+- An unknown key on a write model now names itself and points at
+  `extra_payload`, instead of pydantic's bare "Extra inputs are not permitted".
+  The message stops short of promising the write will work: on this API an
+  exclusion is usually a measured misbehaviour, and a 200 is not a receipt.
 - **A `[bracketed]` untranslated label no longer wins over a real sibling
   translation.** `references._nested_label` scanned `_EN`/`_FR`/`_PATH` and
   accepted any non-empty string, while `localized_label` fifty lines below

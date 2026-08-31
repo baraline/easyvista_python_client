@@ -236,9 +236,10 @@ def test_post_action_carries_both_text_channels():
     channel unreachable at create time without ``extra_payload``.
     """
     assert PostAction(
-        action_type_id=94, description="public", comment="internal"
+        action_type_id=94, group_id=3, description="public", comment="internal"
     ).to_api() == {
         "action_type_id": 94,
+        "group_id": 3,
         "description": "public",
         "comment": "internal",
     }
@@ -246,7 +247,10 @@ def test_post_action_carries_both_text_channels():
 
 def test_post_action_omits_an_unset_comment():
     """The new field must not widen the body every caller already sends."""
-    assert "comment" not in PostAction(action_type_id=94, description="hi").to_api()
+    assert (
+        "comment"
+        not in PostAction(action_type_id=94, group_id=3, description="hi").to_api()
+    )
 
 
 def test_post_task_serializes_flat_for_the_tasks_endpoint():
@@ -346,3 +350,61 @@ def test_action_label_is_none_when_no_label_column_is_populated():
 # so this is if anything better evidence here than on the task route. Before
 # this, `PostAction()` constructed fine and shipped `{"action": {}}`, drawing an
 # HTTP 590 that named no field at all.
+
+
+def test_post_action_requires_a_type_and_a_group():
+    with pytest.raises(ValidationError, match="needs an action type"):
+        PostAction(group_id=3, description="orphan")
+    with pytest.raises(ValidationError, match="needs an assigned group"):
+        PostAction(action_type_id=94, description="orphan")
+
+
+def test_post_action_accepts_a_string_type_id_like_post_task_does():
+    """The two models' id types diverged for no recorded reason.
+
+    ``int | None`` here against ``int | str | None`` on ``PostTask`` made a
+    non-numeric type or group id work through ``create_task`` and fail through
+    ``create_action`` -- an inconsistency inside the package with no evidence
+    behind it. The instance's own OpenAPI declares ``action_type_id`` on this
+    route as a *string* (tier 3, illustrative), which argues for accepting one,
+    not for coercing to one: whichever type is passed serializes unchanged.
+    """
+    body = PostAction(action_type_id="94", group_id="GRP-1").to_api()
+    assert body["action_type_id"] == "94"
+    assert body["group_id"] == "GRP-1"
+
+
+def test_post_action_ships_group_mail_and_parent_action_id_and_guid():
+    """Three tier-1 optional fields the model did not declare."""
+    body = PostAction(
+        action_type_guid="{TYPE}", group_mail="n1@example.invalid", parent_action_id=7
+    ).to_api()
+    assert body["action_type_guid"] == "{TYPE}"
+    assert body["group_mail"] == "n1@example.invalid"
+    assert body["parent_action_id"] == 7
+
+
+def test_extra_payload_satisfies_the_action_guards():
+    """A guard reading declared attributes would refuse a body the API accepts."""
+    payload = PostAction(
+        extra_payload={"action_type_id": 94, "group_mail": "n1@example.invalid"}
+    )
+    assert payload.to_api() == {
+        "action_type_id": 94,
+        "group_mail": "n1@example.invalid",
+    }
+
+
+def test_an_extra_payload_action_type_guid_satisfies_the_task_guard():
+    """``PostTask`` deliberately does NOT declare ``action_type_guid``.
+
+    On the action route the field is tier 1 (2023.4+) and the instance's own
+    OpenAPI declares it; on the TASK route neither holds -- the vendor's task
+    page has never been transcribed into this repo (O-TASKDOC) and the
+    instance's schema for that route lists eleven properties without it.
+    Declaring it would put the model's word behind a field nothing supports
+    there. So the guard accepts the key without the model asserting the field
+    exists, and ``extra_payload`` is how it arrives.
+    """
+    body = PostTask(group_id=3, extra_payload={"action_type_guid": "{TYPE}"}).to_api()
+    assert body["action_type_guid"] == "{TYPE}"

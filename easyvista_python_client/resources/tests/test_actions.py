@@ -1,6 +1,10 @@
 import pytest
 
-from easyvista_python_client.models.action import Action, ActionUpdate, PostAction
+from easyvista_python_client.models.action import (
+    Action,
+    ActionUpdate,
+    PostAction,
+)
 from easyvista_python_client.resources import actions as a
 from easyvista_python_client.resources.actions import (
     build_get_action,
@@ -34,8 +38,11 @@ def test_build_create_action_bare_body_and_path():
 
 
 def test_build_create_action_custom_fields_prefix():
-    spec, _ = a.build_create_action("I1", PostAction(custom_fields={"team": "L2"}))
-    assert spec.json == {"e_team": "L2"}
+    spec, _ = a.build_create_action(
+        "I1",
+        PostAction(action_type_id=94, group_id=3, custom_fields={"team": "L2"}),
+    )
+    assert spec.json == {"action_type_id": 94, "group_id": 3, "e_team": "L2"}
 
 
 def test_build_list_actions_uses_top_level_filtered_endpoint():

@@ -85,6 +85,15 @@ class EasyvistaClient:
     def __init__(self, config: EasyvistaConfig) -> None:
         self.config = config
         self._transport = Transport(config)
+        # Built once and passed to every resource builder. ``None`` unless the
+        # caller named extra timestamp formats, so the default path calls
+        # ``model_validate(record, context=None)`` -- exactly what it always
+        # called.
+        self._validation_context: dict[str, Any] | None = (
+            {"datetime_input_formats": config.datetime_input_formats}
+            if config.datetime_input_formats
+            else None
+        )
 
     @classmethod
     def from_env(cls) -> EasyvistaClient:
@@ -158,7 +167,9 @@ class EasyvistaClient:
 
     # --- tickets -------------------------------------------------------------
     def create_ticket(self, ticket: PostRequest) -> Request:
-        spec, parse = requests_res.build_create_ticket(ticket)
+        spec, parse = requests_res.build_create_ticket(
+            ticket, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def create_tickets(self, tickets: Sequence[PostRequest]) -> list[Request]:
@@ -175,9 +186,42 @@ class EasyvistaClient:
         # this into a fan-out.
         return [self.create_ticket(ticket) for ticket in tickets]
 
-    def get_ticket(self, rfc_number: str) -> Request:
-        spec, parse = requests_res.build_get_ticket(rfc_number)
-        return parse(self._transport.send(spec))
+    def get_ticket(
+        self,
+        rfc_number: str,
+        *,
+        fields: str | list[str] | None = None,
+        params: Mapping[str, Any] | None = None,
+    ) -> Request:
+        """Fetch one ticket by RFC number.
+
+        ``fields`` is a projection -- the same comma-separated column list
+        :meth:`search_tickets` takes. Left ``None`` it sends no ``fields``
+        parameter at all, which is every request this method has ever sent.
+
+        Pass it when one column poisons the whole record. A value the read
+        model refuses -- a timestamp in an unexpected format, say -- fails the
+        entire :class:`Request`, and there is otherwise no way to read the rest
+        of the ticket.
+
+        One caveat, and it cuts against this parameter. The verified instance's
+        own OpenAPI declares ``fields`` on ``GET /requests`` (the list) but
+        **not** on ``GET /requests/{rfc_number}`` -- tier 2, read 2026-08-31 --
+        so the item route may ignore it and return the full record anyway. It
+        costs one request to find out on your deployment. The route that *is*
+        declared to take a projection is the list one, and it reaches the same
+        ticket::
+
+            search_tickets(
+                search=ev_equals_filter("RFC_NUMBER", rfc),
+                fields=["RFC_NUMBER", "TITLE"],
+                max_rows=1,
+            )
+        """
+        spec, parse = requests_res.build_get_ticket(
+            rfc_number, fields=fields, context=self._validation_context
+        )
+        return parse(self._transport.send(spec, params=params))
 
     def search_tickets(
         self,
@@ -192,7 +236,12 @@ class EasyvistaClient:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = requests_res.build_search_tickets(
-            search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
+            search=search,
+            fields=fields,
+            sort=sort,
+            max_rows=max_rows,
+            offset=offset,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec, params=params))
 
@@ -306,7 +355,9 @@ class EasyvistaClient:
         Cannot set a status: there is no flat status update on this API. See
         :meth:`set_status`, and :class:`RequestUpdate` for the measurements.
         """
-        spec, parse = requests_res.build_update_ticket(rfc_number, update)
+        spec, parse = requests_res.build_update_ticket(
+            rfc_number, update, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def set_status(
@@ -331,7 +382,10 @@ class EasyvistaClient:
         portable between instances.
         """
         spec, parse = requests_res.build_set_status(
-            rfc_number, status_guid=status_guid, comment=comment
+            rfc_number,
+            status_guid=status_guid,
+            comment=comment,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec))
 
@@ -388,6 +442,7 @@ class EasyvistaClient:
             comment=comment,
             end_date=end_date,
             catalog_guid=catalog_guid,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec))
 
@@ -418,7 +473,9 @@ class EasyvistaClient:
         payload can be refused 590/2013 on a ticket that accepted the same body
         earlier.
         """
-        spec, parse = actions_res.build_create_action(rfc_number, action)
+        spec, parse = actions_res.build_create_action(
+            rfc_number, action, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def create_task(self, rfc_number: str, task: PostTask) -> Action:
@@ -440,7 +497,9 @@ class EasyvistaClient:
         parent request. Diff :meth:`list_actions` across the call to address
         what you just created.
         """
-        spec, parse = actions_res.build_create_task(rfc_number, task)
+        spec, parse = actions_res.build_create_task(
+            rfc_number, task, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def list_actions(
@@ -483,7 +542,10 @@ class EasyvistaClient:
         ``DESCRIPTION.HREF`` is silently dropped.
         """
         spec, parse = actions_res.build_list_actions(
-            rfc_number, fields=fields, max_rows=self.config.default_max_rows
+            rfc_number,
+            fields=fields,
+            max_rows=self.config.default_max_rows,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec, params=params))
 
@@ -518,7 +580,11 @@ class EasyvistaClient:
         yielded = 0
         while max_records is None or yielded < max_records:
             spec, parse = actions_res.build_search_actions(
-                rfc_number, fields=fields, max_rows=page_size, offset=offset
+                rfc_number,
+                fields=fields,
+                max_rows=page_size,
+                offset=offset,
+                context=self._validation_context,
             )
             result = parse(self._transport.send(spec, params=params))
             if not result.records:
@@ -540,8 +606,10 @@ class EasyvistaClient:
         The note text lives behind :attr:`Action.description`'s href on this
         record; :meth:`get_ticket_context` resolves it for you.
         """
-        spec, parse = actions_res.build_get_action(action_id)
-        return parse(self._transport.send(spec))
+        spec, parse = actions_res.build_get_action(
+            action_id, context=self._validation_context
+        )
+        return parse(self._transport.send(spec, params=params))
 
     def update_action(self, action_id: str | int, update: ActionUpdate) -> Action:
         """Edit an existing action's note text.
@@ -557,7 +625,9 @@ class EasyvistaClient:
         are all ``None``. Re-read with :meth:`get_action` rather than reading
         fields off the return value.
         """
-        spec, parse = actions_res.build_update_action(action_id, update)
+        spec, parse = actions_res.build_update_action(
+            action_id, update, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def _resolve_action_body(self, action: Action) -> Action:
@@ -580,12 +650,18 @@ class EasyvistaClient:
 
     # --- assets --------------------------------------------------------------
     def create_asset(self, asset: PostAsset) -> Asset:
-        spec, parse = assets_res.build_create_asset(asset)
+        spec, parse = assets_res.build_create_asset(
+            asset, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
-    def get_asset(self, asset_id: str) -> Asset:
-        spec, parse = assets_res.build_get_asset(asset_id)
-        return parse(self._transport.send(spec))
+    def get_asset(
+        self, asset_id: str, *, params: Mapping[str, Any] | None = None
+    ) -> Asset:
+        spec, parse = assets_res.build_get_asset(
+            asset_id, context=self._validation_context
+        )
+        return parse(self._transport.send(spec, params=params))
 
     def search_assets(
         self,
@@ -600,7 +676,12 @@ class EasyvistaClient:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = assets_res.build_search_assets(
-            search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
+            search=search,
+            fields=fields,
+            sort=sort,
+            max_rows=max_rows,
+            offset=offset,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec, params=params))
 
@@ -644,12 +725,17 @@ class EasyvistaClient:
         self, rfc_number: str, *, filename: str, content: bytes
     ) -> Document:
         spec, parse = documents_res.build_add_document(
-            rfc_number, filename=filename, content=content
+            rfc_number,
+            filename=filename,
+            content=content,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec))
 
     def list_documents(self, rfc_number: str) -> list[Document]:
-        spec, parse = documents_res.build_list_documents(rfc_number)
+        spec, parse = documents_res.build_list_documents(
+            rfc_number, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def delete_document(self, rfc_number: str, document_id: str) -> None:
@@ -743,9 +829,13 @@ class EasyvistaClient:
             stream.close()
 
     # --- departments ----------------------------------------------------------
-    def get_department(self, department_id: str | int) -> Department:
-        spec, parse = departments_res.build_get_department(department_id)
-        return parse(self._transport.send(spec))
+    def get_department(
+        self, department_id: str | int, *, params: Mapping[str, Any] | None = None
+    ) -> Department:
+        spec, parse = departments_res.build_get_department(
+            department_id, context=self._validation_context
+        )
+        return parse(self._transport.send(spec, params=params))
 
     def search_departments(
         self,
@@ -760,7 +850,12 @@ class EasyvistaClient:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = departments_res.build_search_departments(
-            search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
+            search=search,
+            fields=fields,
+            sort=sort,
+            max_rows=max_rows,
+            offset=offset,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec, params=params))
 
@@ -849,20 +944,28 @@ class EasyvistaClient:
 
     def create_department(self, department: PostDepartment) -> Department:
         """Create a department (provisional; profile-gated — spec open item O-DIR-2)."""
-        spec, parse = departments_res.build_create_department(department)
+        spec, parse = departments_res.build_create_department(
+            department, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def update_department(
         self, department_id: str | int, update: DepartmentUpdate
     ) -> Department:
         """Update a department via PUT (provisional; profile-gated)."""
-        spec, parse = departments_res.build_update_department(department_id, update)
+        spec, parse = departments_res.build_update_department(
+            department_id, update, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     # --- employees ------------------------------------------------------------
-    def get_employee(self, employee_id: str | int) -> Employee:
-        spec, parse = employees_res.build_get_employee(employee_id)
-        return parse(self._transport.send(spec))
+    def get_employee(
+        self, employee_id: str | int, *, params: Mapping[str, Any] | None = None
+    ) -> Employee:
+        spec, parse = employees_res.build_get_employee(
+            employee_id, context=self._validation_context
+        )
+        return parse(self._transport.send(spec, params=params))
 
     def search_employees(
         self,
@@ -877,7 +980,12 @@ class EasyvistaClient:
         if max_rows is None:
             max_rows = self.config.default_max_rows
         spec, parse = employees_res.build_search_employees(
-            search=search, fields=fields, sort=sort, max_rows=max_rows, offset=offset
+            search=search,
+            fields=fields,
+            sort=sort,
+            max_rows=max_rows,
+            offset=offset,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec, params=params))
 
@@ -918,14 +1026,18 @@ class EasyvistaClient:
 
     def create_employee(self, employee: PostEmployee) -> Employee:
         """Create an employee (provisional; profile-gated — spec open item O-DIR-2)."""
-        spec, parse = employees_res.build_create_employee(employee)
+        spec, parse = employees_res.build_create_employee(
+            employee, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     def update_employee(
         self, employee_id: str | int, update: EmployeeUpdate
     ) -> Employee:
         """Update an employee via PUT (provisional; profile-gated)."""
-        spec, parse = employees_res.build_update_employee(employee_id, update)
+        spec, parse = employees_res.build_update_employee(
+            employee_id, update, context=self._validation_context
+        )
         return parse(self._transport.send(spec))
 
     # --- aggregated context --------------------------------------------------

@@ -180,3 +180,13 @@ def test_delete_actions_passes_a_bool_through_unchanged():
     """The vendor types it boolean; the package used to type it int only."""
     spec, _ = r.build_close_ticket("I1", delete_actions=False)
     assert spec.json["closed"]["delete_actions"] is False
+
+
+def test_build_get_ticket_forwards_a_fields_projection():
+    """No projection means no ``fields`` parameter at all -- the request this
+    builder has always sent."""
+    spec, _ = r.build_get_ticket("I1")
+    assert spec.params is None
+    spec, _ = r.build_get_ticket("I1", fields=["RFC_NUMBER", "TITLE"])
+    assert spec.params == {"fields": "RFC_NUMBER,TITLE"}
+

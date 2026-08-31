@@ -23,8 +23,10 @@ EMPLOYEES: ResourceDescriptor[Employee] = ResourceDescriptor(
 
 def build_get_employee(
     employee_id: str | int,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Employee]]:
-    return build_get(EMPLOYEES, employee_id)
+    return build_get(EMPLOYEES, employee_id, context=context)
 
 
 def build_search_employees(
@@ -34,6 +36,7 @@ def build_search_employees(
     sort: str | None = None,
     max_rows: int | None = None,
     offset: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], SearchResult[Employee]]]:
     return build_search(
         EMPLOYEES,
@@ -42,16 +45,22 @@ def build_search_employees(
         sort=sort,
         max_rows=max_rows,
         offset=offset,
+        context=context,
     )
 
 
 def build_create_employee(
     payload: PostEmployee,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Employee]]:
-    return build_create(EMPLOYEES, payload)
+    return build_create(EMPLOYEES, payload, context=context)
 
 
 def build_update_employee(
-    employee_id: str | int, update: EmployeeUpdate
+    employee_id: str | int,
+    update: EmployeeUpdate,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Employee]]:
-    return build_update(EMPLOYEES, employee_id, update)
+    return build_update(EMPLOYEES, employee_id, update, context=context)

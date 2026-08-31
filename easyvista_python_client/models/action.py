@@ -12,6 +12,7 @@ from .common import (
     EasyvistaWriteModel,
     OptionalDateTime,
     OptionalInt,
+    _shipped_keys,
 )
 
 
@@ -219,14 +220,67 @@ class PostAction(EasyvistaWriteModel):
     translations in the sibling columns (``FR='Commentaire [Public]'`` beside
     ``EN='Customer Comment'``), is a real visibility marker. An earlier
     revision of this package conflated the two and deleted the true finding.
+
+    **Mandatory (tier 1):** ``action_type_id`` (or ``action_type_name`` /
+    ``action_type_guid``), and one of ``group_id`` / ``group_name`` /
+    ``group_mail``. A body missing either is refused here rather than drawing
+    an HTTP 590 that names no field. Sent empty, this route answers 590 with
+    nothing a caller can act on -- the same failure :class:`PostTask` has
+    always guarded against, on the same vendor sentence.
     """
 
-    action_type_id: int | None = None
+    # Types mirror PostTask exactly. They diverged for no recorded reason --
+    # ``int | None`` here against ``int | str | None`` there -- which made a
+    # non-numeric type or group id work through ``create_task`` and fail
+    # through ``create_action``. The instance's own OpenAPI declares
+    # ``action_type_id`` on this route as a *string* (tier 3, illustrative
+    # only), which argues for accepting one, not for coercing to one: whichever
+    # type is passed serializes unchanged.
+    action_type_id: int | str | None = None
     action_type_name: str | None = None
-    group_id: int | None = None
+    # Tier 1, 2023.4+ (docs/vendor-api-reference.md). Declared here and NOT on
+    # PostTask -- see that class for why.
+    action_type_guid: str | None = None
+    group_id: int | str | None = None
     group_name: str | None = None
+    # Tier 1, and the third way to name the group. PostTask has always had it;
+    # this model's omission was an oversight, not a finding.
+    group_mail: str | None = None
+    # Tier 1, optional. An action of a child type hangs off its parent.
+    parent_action_id: int | str | None = None
     description: str | None = None
     comment: str | None = None
+
+    # Deliberately still undeclared, all tier 1 and all optional: contact_*,
+    # done_by_*, creation_date_ut, expected_start_date_ut, expected_end_date_ut,
+    # max_intervention_date_ut. Nothing in this package exercises any of them,
+    # and extra_payload reaches them today. Declaring six fields nobody has sent
+    # would put this model's word behind bodies it has never seen work.
+
+    @model_validator(mode="after")
+    def _require_a_type_and_a_group(self) -> PostAction:
+        """Refuse a body the API would reject with an unattributable 590.
+
+        Same rule and same tier-1 source as :class:`PostTask`'s guard. The
+        check reads the body ``to_api()`` will actually send, so a field
+        supplied through ``extra_payload`` satisfies it.
+        """
+        shipped = _shipped_keys(self)
+        if not shipped & {"action_type_id", "action_type_name", "action_type_guid"}:
+            raise ValueError(
+                "an action needs an action type: pass action_type_id "
+                "(preferred), action_type_name or action_type_guid. The type "
+                "also carries the public/internal distinction -- read the ids "
+                "off ACTION_LABEL_* on existing actions."
+            )
+        if not shipped & {"group_id", "group_name", "group_mail"}:
+            raise ValueError(
+                "an action needs an assigned group: pass group_id, group_name "
+                "or group_mail. Tier 1 lists it as required; omitting it on "
+                "the sibling tasks route drew HTTP 590 'Le groupe (Group_...) "
+                "est invalide' (measured 2026-08-28)."
+            )
+        return self
 
 
 class ActionUpdate(EasyvistaWriteModel):
@@ -310,19 +364,25 @@ class PostTask(EasyvistaWriteModel):
 
     @model_validator(mode="after")
     def _require_a_type_and_a_group(self) -> PostTask:
-        """Refuse a body the API would reject with an unattributable 590."""
-        if self.action_type_id is None and self.action_type_name is None:
+        """Refuse a body the API would reject with an unattributable 590.
+
+        Reads the body ``to_api()`` will send, not the declared attributes, so
+        a field passed through ``extra_payload`` satisfies it.
+        ``action_type_guid`` counts even though this model does not declare it:
+        nothing in the repository documents the task body's field list against
+        tier 1 (see O-TASKDOC in ``docs/vendor-api-reference.md``), so the
+        guard accepts the key without the model asserting the field exists on
+        this route.
+        """
+        shipped = _shipped_keys(self)
+        if not shipped & {"action_type_id", "action_type_name", "action_type_guid"}:
             raise ValueError(
                 "a task needs an action type: pass action_type_id (preferred) or "
-                "action_type_name. The type also carries the public/internal "
-                "distinction -- read the ids off ACTION_LABEL_* on existing actions."
+                "action_type_name, on the model or through extra_payload. The "
+                "type also carries the public/internal distinction -- read the "
+                "ids off ACTION_LABEL_* on existing actions."
             )
-        no_group = (
-            self.group_id is None
-            and self.group_name is None
-            and self.group_mail is None
-        )
-        if no_group:
+        if not shipped & {"group_id", "group_name", "group_mail"}:
             raise ValueError(
                 "a task needs an assigned group: pass group_id, group_name or "
                 "group_mail. Omitting it draws HTTP 590 'Le groupe (Group_...) "
