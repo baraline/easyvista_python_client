@@ -6,7 +6,13 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from .common import EasyvistaModel, EasyvistaWriteModel, OptionalDateTime, OptionalInt
+from ..references import localized_label
+from .common import (
+    EasyvistaModel,
+    EasyvistaWriteModel,
+    OptionalDateTime,
+    OptionalInt,
+)
 
 
 class Action(EasyvistaModel):
@@ -59,8 +65,9 @@ class Action(EasyvistaModel):
     # The action's human label, present on the default list row. On a
     # single-language instance the other language columns (``_EN``, ``_GE``,
     # ``_IT``, ``_PO``, ``_SP``, ``_L1``..``_L6``) echo this text wrapped in
-    # brackets to mark it untranslated; ``localized_label`` skips those. The
-    # brackets carry no other meaning.
+    # brackets to mark it untranslated; ``localized_label`` skips those. A
+    # bracketed *suffix* on distinct text is a different thing entirely and
+    # does carry meaning -- see :class:`PostAction`.
     action_label_fr: str | None = Field(default=None, alias="ACTION_LABEL_FR")
     # --- item-level fields (EV-R1, verified live 2026-08-17) ------------------
     # All ten are present on ``GET actions/{id}``. On the LIST endpoint:
@@ -114,6 +121,33 @@ class Action(EasyvistaModel):
             if tail.isdigit():
                 self.action_id = int(tail)
         return self
+
+    @property
+    def label(self) -> str | None:
+        """Best localized action label, whichever language column carries it.
+
+        Reads the ``ACTION_LABEL_<lang>`` columns in
+        :data:`~easyvista_python_client.DEFAULT_LANGUAGE_ORDER` and returns the
+        first that is populated and not an untranslated ``[placeholder]``.
+        Prefer this over ``action_label_fr``, which names one column: on a
+        single-language instance the *other* language columns echo the primary
+        text wrapped in brackets, so on an English deployment
+        ``action_label_fr`` is ``"[Customer Comment]"`` -- not ``None`` -- and
+        reading it directly yields the placeholder. A bracketed *suffix* on
+        otherwise distinct text (``"Commentaire [Public]"``) is real content and
+        is kept.
+
+        A plain property, not a serialized field, so it never recurses through
+        ``model_dump`` and never appears in ``classify_fields``. ``None`` when no
+        ``ACTION_LABEL_*`` column is populated, and also in the pathological case
+        where every one of them is a bracketed placeholder; a caller that must
+        always render something supplies its own fallback, as
+        :meth:`~easyvista_python_client.TicketContext.to_markdown` does with the
+        literal ``"Action"``. For a different language order call
+        :func:`~easyvista_python_client.localized_label` on
+        ``model_dump(by_alias=True)`` directly.
+        """
+        return localized_label(self.model_dump(by_alias=True), "ACTION_LABEL")
 
 
 class PostAction(EasyvistaWriteModel):

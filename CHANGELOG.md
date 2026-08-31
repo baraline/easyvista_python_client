@@ -11,6 +11,19 @@ a deprecation policy will follow the 1.0 release.
 
 ### Added
 
+- `languages=` on every label resolver — `resolve_reference`,
+  `localized_label`, `EasyvistaModel.reference`, `TicketContext.to_markdown`,
+  `aggregate_tickets`, `ticket_statistics` and `get_department_context` — so a
+  deployment whose primary language is not English reorders the scan instead of
+  forking. Defaults to the new `DEFAULT_LANGUAGE_ORDER`, which is the order the
+  package already used.
+- `DEFAULT_LANGUAGE_ORDER` and `localized_label` are now exported from the
+  package root. `localized_label` was documented but not importable.
+- `Action.label` — the best populated `ACTION_LABEL_<lang>` column, skipping
+  untranslated `[placeholder]` values, mirroring `Department.name`. Prefer it
+  over `action_label_fr`: on a single-language instance the *other* language
+  columns echo the primary text in brackets, so on an English deployment
+  `action_label_fr` is `"[Customer Comment]"` rather than `None`.
 - `client.send(method, path, *, params=, json=, headers=)` on both clients — the
   supported route to any `api_root`-relative path this package does not wrap.
   An instance advertises around a hundred paths in its own OpenAPI document and
@@ -40,8 +53,33 @@ a deprecation policy will follow the 1.0 release.
   request.
 - `RequestSpec.headers`, for a single request needing a content type other than
   the client-level `application/json`.
+- `references.label_from_record` — the best human label anywhere in a
+  reference-table row, matched by **suffix**. A reference table does not name
+  its label column after the table: `groups` returns `GROUP_EN`, `locations`
+  returns `LOCATION_FR`, `catalog-requests` returns `TITLE_EN` and `slas`
+  returns `NAME_FR`. `resolve_reference` deliberately does not route through
+  it — its own scan is bracket-tolerant, and sharing would be a behaviour
+  change rather than a refactor.
+
 ### Changed
 
+- **A `[bracketed]` untranslated label no longer wins over a real sibling
+  translation.** `references._nested_label` scanned `_EN`/`_FR`/`_PATH` and
+  accepted any non-empty string, while `localized_label` fifty lines below
+  already knew six language columns and already rejected placeholders — two
+  incompatible policies in one module. They are now one. Affects
+  `TicketContext.to_markdown`'s Status/Department/Location/Catalog rows,
+  `TicketStatistics.breakdowns` keys, and `record.reference(name).label`. On a
+  single-language instance this only ever improves the value: the string
+  rendered before was a bracketed echo of the text now returned. It can never
+  *delete* output — a record whose every language column is a placeholder still
+  yields what it always yielded. A caller keying a dashboard on the exact old
+  string sees that key change.
+- A usable non-English/non-French language column now beats `_PATH`, which was
+  previously the third and last rung.
+- `easyvista_python_client._fields._label` is removed (private, unexported). Its
+  one caller now resolves labels through `references`, so the package has one
+  placeholder rule and one language order rather than three.
 - `EasyvistaConfig.verify_ssl` accepts a CA-bundle path or an `ssl.SSLContext`
   as well as a bool, matching what `httpx` has always accepted. A corporate
   private CA no longer reads as though disabling verification were the only

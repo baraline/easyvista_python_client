@@ -185,3 +185,45 @@ def test_created_until_excludes_newer_records():
         tickets, dimensions=(), created_until="2025-06-15T12:00:00+00:00"
     )
     assert stats.total == 1  # I2 is newer than created_until -> excluded
+
+
+# --- label language reaches the aggregator -----------------------------------
+
+
+def _localized_ticket() -> Request:
+    return Request.model_validate(
+        {
+            "RFC_NUMBER": "I1",
+            "STATUS": {"STATUS_EN": "[Open]", "STATUS_FR": "Ouvert"},
+        }
+    )
+
+
+def test_breakdown_skips_a_bracketed_placeholder_label():
+    # A bucket key is user-facing: an untranslated echo must not become one
+    # while a real sibling translation sits beside it.
+    stats = aggregate_tickets([_localized_ticket()], dimensions=("STATUS",))
+    assert stats.breakdowns["STATUS"] == {"Ouvert": 1}
+
+
+def test_languages_argument_reorders_breakdown_keys():
+    # Proves the tolerant second pass reaches the aggregator too: asking only
+    # for English leaves the placeholder as the single candidate, and it is kept
+    # rather than collapsing the bucket onto the raw id.
+    stats = aggregate_tickets(
+        [_localized_ticket()], dimensions=("STATUS",), languages=("_EN",)
+    )
+    assert stats.breakdowns["STATUS"] == {"[Open]": 1}
+
+
+def test_aggregate_tickets_leaves_truncation_unset():
+    """The pure function stays page-unaware.
+
+    It has no page, no envelope and no cap, so it cannot know whether a fetch
+    truncated or how large the population was. The client's
+    ``ticket_statistics`` stamps both after the fetch it performed; moving that
+    computation in here would require handing this function a client.
+    """
+    stats = aggregate_tickets([_ticket(RFC_NUMBER="I1")], dimensions=())
+    assert stats.truncated is False
+    assert stats.population_total is None

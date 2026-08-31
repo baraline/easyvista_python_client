@@ -51,6 +51,7 @@ from easyvista_python_client.models.employee import (
 )
 from easyvista_python_client.models.request import PostRequest, Request, RequestUpdate
 from easyvista_python_client.pagination import SearchResult
+from easyvista_python_client.references import DEFAULT_LANGUAGE_ORDER
 from easyvista_python_client.reporting import (
     DEFAULT_DIMENSIONS,
     TicketStatistics,
@@ -266,6 +267,7 @@ class EasyvistaClient:
         created_since: datetime | str | None = None,
         created_until: datetime | str | None = None,
         max_records: int | None = 100,
+        languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
     ) -> TicketStatistics:
         """Aggregate matching tickets into a total plus per-dimension breakdowns.
 
@@ -295,6 +297,7 @@ class EasyvistaClient:
             dimensions=dims,
             created_since=created_since,
             created_until=created_until,
+            languages=languages,
         )
 
     def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
@@ -1079,6 +1082,7 @@ class EasyvistaClient:
         *,
         recent_tickets: int = 10,
         dimensions: Sequence[str] | None = None,
+        languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
         include_statistics: bool = True,
         include_assets: bool = True,
         resolve_manager: bool = True,
@@ -1164,7 +1168,9 @@ class EasyvistaClient:
                 return None
             try:
                 return self.ticket_statistics(
-                    search=search, dimensions=dimensions
+                    search=search,
+                    dimensions=dimensions,
+                    languages=languages,
                 )
             except (EasyvistaAuthError, EasyvistaNotFound):
                 return None

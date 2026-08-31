@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from ..field_model import FieldClassification, classify
-from ..references import Reference, resolve_reference
+from ..references import DEFAULT_LANGUAGE_ORDER, Reference, resolve_reference
 from ..timestamps import parse_ev_datetime
 
 
@@ -92,10 +93,18 @@ class EasyvistaModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    def reference(self, name: str) -> Reference:
+    def reference(
+        self, name: str, *, languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER
+    ) -> Reference:
         """Resolve a reference attribute (``STATUS``, ``URGENCY``, custom ``e_*``…)
-        to a normalized :class:`~easyvista_python_client.references.Reference`."""
-        return resolve_reference(self.model_dump(by_alias=True), name)
+        to a normalized :class:`~easyvista_python_client.references.Reference`.
+
+        ``languages`` orders the language columns tried for the human label
+        (default: :data:`~easyvista_python_client.DEFAULT_LANGUAGE_ORDER`).
+        """
+        return resolve_reference(
+            self.model_dump(by_alias=True), name, languages=languages
+        )
 
     def classify_fields(self) -> FieldClassification:
         """Partition this record's fields into official / custom (``e_*``) /

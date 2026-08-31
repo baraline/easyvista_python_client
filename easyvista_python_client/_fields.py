@@ -1,10 +1,12 @@
-"""Shared helpers for extracting human labels from EasyVista field objects.
+"""Shared helper for extracting plain text from EasyVista field values.
 
-EasyVista nests label+href objects (``STATUS``, ``DEPARTMENT``, ``CATALOG_REQUEST``,
-``URGENCY``, ``IMPACT``). The Markdown renderer (:mod:`context`) needs to pick the
-human label and never an href, so the logic lives here once. (:mod:`reporting`
-aggregates the same nested objects but does **not** route through this module --
-it goes through :func:`~easyvista_python_client.references.resolve_reference`.)
+Human *labels* -- the nested ``STATUS`` / ``DEPARTMENT`` / ``ACTION_TYPE``
+objects and the ``*_EN`` / ``*_FR`` / … language columns -- are resolved in
+:mod:`~easyvista_python_client.references` alone
+(:func:`~easyvista_python_client.references.resolve_reference` and
+:func:`~easyvista_python_client.localized_label`), so the package has one
+placeholder rule and one language order rather than three. This module is left
+with :func:`_text`, the scalar-to-string extractor.
 
 Its consumer reads a ``model_dump(by_alias=True)`` dict, so a timestamp column
 (``LAST_UPDATE``, ``CREATION_DATE_UT``, …) arrives here as a ``datetime`` since
@@ -46,11 +48,3 @@ def _text(value: Any) -> str:
     return ""
 
 
-def _label(obj: Any, keys: tuple[str, ...]) -> str:
-    """First non-empty string among ``keys`` of a nested object; never an href."""
-    if isinstance(obj, dict):
-        for key in keys:
-            value = obj.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return ""

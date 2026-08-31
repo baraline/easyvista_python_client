@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from easyvista_python_client._fields import _label, _text
+from easyvista_python_client._fields import _text
 
 
 def test_text_strips_strings_and_ignores_non_strings():
@@ -22,12 +22,3 @@ def test_text_renders_a_naive_datetime_via_isoformat_fallback():
     value = datetime(2026, 8, 17, 15, 40, 41)
     assert _text(value) == "2026-08-17T15:40:41"
 
-
-def test_label_prefers_first_non_empty_key_and_drops_href():
-    obj = {"STATUS_EN": "", "STATUS_FR": "En cours", "HREF": "http://x/api/v1"}
-    assert _label(obj, ("STATUS_EN", "STATUS_FR")) == "En cours"
-
-
-def test_label_returns_empty_for_non_dict_or_missing_keys():
-    assert _label(None, ("A",)) == ""
-    assert _label({"B": "x"}, ("A",)) == ""

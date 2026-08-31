@@ -264,3 +264,55 @@ def test_a_populated_default_memo_still_wins_over_memos() -> None:
     assert md.count("## Description") == 1
     assert "## Comment" not in md
     assert md.count("the printer is offline") == 1
+
+
+# --- label language, and the headings that deliberately do not follow it ------
+
+
+def test_to_markdown_action_heading_prefers_a_translated_action_type_name():
+    # The nested ACTION_TYPE's NAME_<lang> columns are the first rung, and the
+    # bracketed English echo must lose to the real French text.
+    action = Action.model_validate(
+        {
+            "ACTION_ID": 1,
+            "ACTION_TYPE": {"NAME_EN": "[Prise d'appel]", "NAME_FR": "Prise d'appel"},
+        }
+    )
+    md = TicketContext(_ticket(), None, None, [action], []).to_markdown()
+    assert "### Prise d'appel" in md
+    # Asking for French directly reaches the same column.
+    md_fr = TicketContext(_ticket(), None, None, [action], []).to_markdown(
+        languages=("_FR",)
+    )
+    assert "### Prise d'appel" in md_fr
+
+
+def test_to_markdown_action_heading_falls_back_to_any_action_label_column():
+    # Second rung. Before this, only ACTION_LABEL_FR was read, so an English
+    # instance produced the literal "### Action" here.
+    action = Action.model_validate({"ACTION_ID": 1, "ACTION_LABEL_EN": "Call intake"})
+    md = TicketContext(_ticket(), None, None, [action], []).to_markdown()
+    assert "### Call intake" in md
+
+
+def test_to_markdown_language_order_changes_labels_but_not_headings():
+    # Pins the deliberate split: the CONTENT follows `languages`, the FRAME is
+    # this method's output contract. to_markdown is an LLM/RAG-facing export and
+    # a chunker splits on "## " -- making the frame vary per deployment would
+    # turn a stable contract into a per-instance one, and fail silently.
+    ticket = Request.model_validate(
+        {
+            "RFC_NUMBER": "I1",
+            "STATUS": {"STATUS_EN": "Open", "STATUS_FR": "En cours"},
+        }
+    )
+    context = TicketContext(ticket, None, None, [], [Document(FILENAME="a.txt")])
+    assert "| Status | Open |" in context.to_markdown()
+    md_fr = context.to_markdown(languages=("_FR",))
+    assert "| Status | En cours |" in md_fr
+    # The frame is identical in both.
+    for md in (context.to_markdown(), md_fr):
+        assert "| Field | Value |" in md
+        assert "## Attachments" in md
+
+

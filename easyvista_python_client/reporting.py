@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from .models.request import Request
-from .references import resolve_reference
+from .references import DEFAULT_LANGUAGE_ORDER, resolve_reference
 from .timestamps import parse_ev_datetime
 
 # Kept as a module-level alias so the eight existing tests in
@@ -38,15 +38,33 @@ class TicketStatistics:
     ``total`` is the number of tickets aggregated (after any date window).
     ``breakdowns`` maps each requested dimension name to ``{label: count}``; for
     every dimension ``sum(breakdowns[dim].values()) == total``.
+
+    ``truncated`` is ``True`` when the fetch stopped because it hit its record
+    cap, so ``total`` describes a sample and not the population. It is a local
+    fact -- "the cap was reached" -- and over-reports by exactly one case: a
+    population whose size equals the cap. ``population_total`` resolves that
+    case: it is the server's reported total for the search, read off the first
+    page, and it is counted BEFORE any client-side ``created_since`` /
+    ``created_until`` window, so it is not comparable with ``total`` when a
+    window is set. It is ``None`` when no total was reported.
+
+    :func:`aggregate_tickets` is pure and offline: it has no page, no envelope
+    and no cap, so it always leaves these two at their defaults. The client's
+    ``ticket_statistics`` stamps them from the fetch it performed. Do not move
+    that computation in here.
     """
 
     total: int
     breakdowns: dict[str, dict[str, int]]
+    truncated: bool = False
+    population_total: int | None = None
 
 
-def _dimension_value(data: dict[str, Any], name: str) -> str:
+def _dimension_value(
+    data: dict[str, Any], name: str, languages: Sequence[str]
+) -> str:
     """Group key for one ticket on one dimension: label, else id, else unknown."""
-    return resolve_reference(data, name).display or _UNKNOWN
+    return resolve_reference(data, name, languages=languages).display or _UNKNOWN
 
 
 def fields_for_references(
@@ -84,6 +102,7 @@ def aggregate_tickets(
     dimensions: Sequence[str] = DEFAULT_DIMENSIONS,
     created_since: datetime | str | None = None,
     created_until: datetime | str | None = None,
+    languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
 ) -> TicketStatistics:
     """Aggregate tickets into a total plus per-dimension breakdowns.
 
@@ -105,6 +124,12 @@ def aggregate_tickets(
     refuse an offset-less time outright
     (:func:`~easyvista_python_client.ev_since_filter`); making the two agree is a
     behaviour change and a candidate follow-up.
+
+    ``languages`` orders the language columns tried when turning each
+    dimension's nested reference object into a bucket key (default:
+    :data:`~easyvista_python_client.DEFAULT_LANGUAGE_ORDER`). It affects the
+    keys of ``breakdowns`` only, never ``total``: a dimension that resolves to
+    no label still buckets by its id, and then by ``"(unknown)"``.
 
     The "unparseable" half of that per-ticket guard is unreachable for a
     ``Request`` built the normal way: ``Request.model_validate`` itself now
@@ -132,7 +157,7 @@ def aggregate_tickets(
                 continue
         total += 1
         for dim in dimensions:
-            key = _dimension_value(data, dim)
+            key = _dimension_value(data, dim, languages)
             counts = breakdowns[dim]
             counts[key] = counts.get(key, 0) + 1
     return TicketStatistics(total=total, breakdowns=breakdowns)

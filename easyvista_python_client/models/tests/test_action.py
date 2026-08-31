@@ -291,3 +291,58 @@ def test_post_task_omits_unset_optional_fields():
     body = PostTask(action_type_id=94, group_id=3).to_api()
     for absent in ("elapsed_time", "time_cost", "end_date_ut", "comment"):
         assert absent not in body
+
+
+def test_action_label_property_returns_the_real_text_on_an_english_instance():
+    # Why the property exists. On a single-language instance the OTHER language
+    # columns echo the primary text wrapped in brackets, so reading the one
+    # named column yields the placeholder rather than None -- asserted on both
+    # attributes so the difference is visible.
+    action = Action.model_validate(
+        {"ACTION_LABEL_EN": "Customer Comment", "ACTION_LABEL_FR": "[Customer Comment]"}
+    )
+    assert action.action_label_fr == "[Customer Comment]"
+    assert action.label == "Customer Comment"
+
+
+def test_action_label_keeps_a_bracketed_suffix_which_is_real_content():
+    # A label wrapped ENTIRELY in brackets is an untranslated placeholder; a
+    # bracketed SUFFIX on otherwise distinct text is a genuine marker and must
+    # survive. Conflating the two once deleted a true finding.
+    action = Action.model_validate({"ACTION_LABEL_FR": "Commentaire [Public]"})
+    assert action.label == "Commentaire [Public]"
+
+
+def test_action_label_on_a_non_french_instance_skips_the_bracketed_echo():
+    """The exact behaviour the guide's `label` prose claims.
+
+    On an English deployment ``action_label_fr`` is not ``None`` -- it holds
+    the default-language text wrapped in brackets, ``'[Customer Comment]'`` --
+    so reading that column directly gives bracket noise rather than an absence,
+    which is the failure that is easy to miss.
+    """
+    action = Action.model_validate(
+        {
+            "ACTION_ID": 1,
+            "ACTION_LABEL_FR": "[Customer Comment]",
+            "ACTION_LABEL_EN": "Customer Comment",
+        }
+    )
+    assert action.label == "Customer Comment"
+    assert action.action_label_fr == "[Customer Comment]"  # the trap
+
+
+def test_action_label_is_none_when_no_label_column_is_populated():
+    assert Action.model_validate({"ACTION_ID": 1}).label is None
+    # And in the pathological case where every column is a placeholder: the
+    # caller supplies its own last-resort text.
+    assert Action.model_validate({"ACTION_LABEL_FR": "[X]"}).label is None
+
+
+# --- PostAction gains PostTask's guard, on the same tier-1 sentence ----------
+#
+# `docs/vendor-api-reference.md` quotes the vendor's create-an-ACTION page as
+# "Required: action_type_id, and one of group_id / group_mail / group_name" --
+# so this is if anything better evidence here than on the task route. Before
+# this, `PostAction()` constructed fine and shipped `{"action": {}}`, drawing an
+# HTTP 590 that named no field at all.

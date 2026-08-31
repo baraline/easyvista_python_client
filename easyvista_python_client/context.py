@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from ._fields import _label, _text
+from ._fields import _text
 from ._html import html_to_text
 from .models.action import Action
 from .models.document import Document
 from .models.request import Request
+from .references import DEFAULT_LANGUAGE_ORDER, localized_label
+
+#: Default rows of ``TicketContext.to_markdown``'s field table, as
+#: ``(label, field_name)`` pairs. Extend rather than retype:
+#: ``fields=[*DEFAULT_MARKDOWN_FIELDS, ("SLA", "SLA_ID")]``.
+DEFAULT_MARKDOWN_FIELDS: tuple[tuple[str, str], ...] = (
+    ("Status", "STATUS"),
+    ("Department", "DEPARTMENT"),
+    ("Location", "LOCATION"),
+    ("Catalog", "CATALOG_REQUEST"),
+    ("Created", "CREATION_DATE_UT"),
+    ("Updated", "LAST_UPDATE"),
+)
 
 
 def _cell(value: str) -> str:
@@ -49,7 +63,11 @@ class TicketContext:
     documents: list[Document]
     memos: dict[str, str | None] = field(default_factory=dict)
 
-    def to_markdown(self) -> str:
+    def to_markdown(
+        self,
+        *,
+        languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
+    ) -> str:
         """Render an href-free Markdown document for this ticket.
 
         Headings name the *role* a block plays, not the field it came from:
@@ -60,6 +78,16 @@ class TicketContext:
         single non-empty one becomes the body, several each get a heading
         derived from the field name asked for -- so a deployment whose body
         memo is neither ``description`` nor ``comment`` still exports one.
+
+        ``languages`` orders the language columns tried when resolving every
+        human label -- the table's Status/Department/Location/Catalog values and
+        each action's heading (default:
+        :data:`~easyvista_python_client.DEFAULT_LANGUAGE_ORDER`). It changes the
+        *content* only: the structural headings (``## Description``,
+        ``## Actions``, ``## Attachments``, the ``| Field | Value |`` table) are
+        fixed English and are part of this method's output contract, so a RAG
+        chunker splitting on ``##`` headings behaves the same against every
+        deployment.
         """
         data = self.ticket.model_dump(by_alias=True)
         rfc = self.ticket.rfc_number or "(unknown)"
@@ -67,14 +95,15 @@ class TicketContext:
         lines: list[str] = [f"# Ticket {rfc}" + (f" — {title}" if title else ""), ""]
 
         rows: list[tuple[str, str]] = []
-        for label, value in (
-            ("Status", self.ticket.reference("STATUS").display),
-            ("Department", self.ticket.reference("DEPARTMENT").display),
-            ("Location", self.ticket.reference("LOCATION").display),
-            ("Catalog", self.ticket.reference("CATALOG_REQUEST").display),
-            ("Created", _text(data.get("CREATION_DATE_UT"))),
-            ("Updated", _text(data.get("LAST_UPDATE"))),
-        ):
+        # One extraction for every row, where the two date rows used to take a
+        # separate `_text(data.get(...))` path. Equivalent, not a behaviour
+        # change: `resolve_reference` renders a datetime through
+        # `format_ev_datetime`, which is byte-identical to what `_text`
+        # produced for these columns, naive-datetime fallback included. It is a
+        # strict superset for anything else -- an int-valued column now renders
+        # instead of yielding "".
+        for label, column in DEFAULT_MARKDOWN_FIELDS:
+            value = self.ticket.reference(column, languages=languages).display
             if value:
                 rows.append((label, value))
         if rows:
@@ -140,12 +169,25 @@ class TicketContext:
             lines.extend(["## Actions", ""])
             for action in self.actions:
                 adata = action.model_dump(by_alias=True)
-                type_label = _label(adata.get("ACTION_TYPE"), ("NAME_EN", "NAME_FR"))
-                type_label = (
-                    type_label or _text(adata.get("ACTION_LABEL_FR")) or "Action"
+                # The nested ACTION_TYPE's own NAME_<lang> columns first, then
+                # the record's ACTION_LABEL_<lang> columns, then a literal. Both
+                # rungs honour `languages`, and both reject a fully bracketed
+                # untranslated echo -- reading one named column would return the
+                # placeholder on any instance whose primary language is not that
+                # column's.
+                nested_type = adata.get("ACTION_TYPE")
+                type_label = localized_label(
+                    nested_type if isinstance(nested_type, dict) else {},
+                    "NAME",
+                    languages=languages,
+                )
+                heading_label = (
+                    type_label
+                    or localized_label(adata, "ACTION_LABEL", languages=languages)
+                    or "Action"
                 )
                 author = _text(adata.get("DONE_BY"))
-                heading = type_label + (f" — {author}" if author else "")
+                heading = heading_label + (f" — {author}" if author else "")
                 lines.append(f"### {heading}")
                 # DESCRIPTION carries the note text once get_ticket_context has
                 # resolved it; COMMENT is a separate field that never does

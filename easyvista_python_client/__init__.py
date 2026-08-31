@@ -34,11 +34,12 @@ from .models.document import Document
 from .models.employee import Employee, EmployeeUpdate, PostEmployee
 from .models.request import PostRequest, Request, RequestUpdate
 from .pagination import SearchResult
-from .references import Reference
+from .references import DEFAULT_LANGUAGE_ORDER, Reference, localized_label
 from .reporting import TicketStatistics, aggregate_tickets
 from .timestamps import format_ev_datetime, parse_ev_datetime
 
 __all__ = [
+    "DEFAULT_LANGUAGE_ORDER",
     "DEFAULT_USER_AGENT",
     "Action",
     "ActionUpdate",
@@ -83,5 +84,6 @@ __all__ = [
     "ev_starts_with_filter",
     "format_ev_datetime",
     "is_safe_ev_value",
+    "localized_label",
     "parse_ev_datetime",
 ]
