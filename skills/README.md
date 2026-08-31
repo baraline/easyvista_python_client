@@ -16,7 +16,7 @@ installed wheel, which carries only the `easyvista_python_client` package.
 | `easyvista-client-setup` | Build and configure an authenticated client | `EasyvistaConfig`, `EasyvistaClient`, `AsyncEasyvistaClient` |
 | `easyvista-search-syntax` | Write or debug any `search=` expression, including a date/time window | `ev_equals_filter`, `ev_in_filter`, `ev_contains_filter`, `ev_since_filter`, and 4 more filter builders |
 | `easyvista-ticket-workflow` | Create, read, search, update or close tickets, or read instance-specific columns off any record | `PostRequest`, `Request`, `RequestUpdate`, `SearchResult`, `Reference`, `FieldClassification` |
-| `easyvista-ticket-actions` | Read or write a ticket's action log | `PostAction`, `Action`, `ActionUpdate`, `resolve_memo` |
+| `easyvista-ticket-actions` | Post a comment (task), or read and write a ticket's action log | `PostTask`, `create_task`, `PostAction`, `Action`, `ActionUpdate`, `resolve_memo` |
 | `easyvista-document-workflow` | Attach, list, download, stream or delete ticket files | `Document`, `add_document`, `download_document`, `stream_document`, `delete_document` |
 | `easyvista-asset-workflow` | Create, fetch, search or iterate assets | `PostAsset`, `Asset` |
 | `easyvista-directory` | Resolve or provision departments and employees | `Department`, `Employee`, `find_departments` |

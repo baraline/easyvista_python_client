@@ -106,8 +106,11 @@ def build_close_ticket(
     (https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md), not
     a workaround for the ``PUT|PATCH requests/{rfc_number}/close`` path that
     also appears in an instance's OpenAPI. Every field below is tier 1, and
-    every one is **optional**: omitting ``status_guid`` closes to the instance's
-    default *Closed* meta-status, and omitting ``end_date`` stamps now.
+    every one is **optional**: omitting ``end_date`` stamps now, and omitting
+    ``status_guid`` simply leaves the key out of the body. **Where the ticket
+    then lands is not established here** -- the behaviour is not recorded in
+    ``docs/vendor-api-reference.md`` and no live test exercises the omitted
+    form (open item O-CLOSE-DEFAULT).
 
     ``catalog_guid`` requalifies the ticket as it closes -- the vendor notes it
     is needed only for that. ``end_date`` takes the instance's own date format,

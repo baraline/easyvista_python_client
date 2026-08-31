@@ -288,9 +288,12 @@ class ActionUpdate(EasyvistaWriteModel):
 
     ``PUT actions/{id}`` is live-verified (2026-08-17): writing the action's
     ``DESCRIPTION`` memo really changed it, confirmed by re-reading it rather
-    than by trusting HTTP 200. The **nested**
-    ``PUT requests/{rfc}/actions/{id}`` returns 403, as does
-    ``DELETE actions/{id}`` — an action can be edited but not deleted.
+    than by trusting HTTP 200. There is no **nested**
+    ``requests/{rfc}/actions/{id}`` route at all, and no DELETE verb on the
+    top-level one -- the instance OpenAPI document read 2026-08-27 declares
+    only GET, PUT and PATCH there. So an action can be edited but not deleted,
+    and the 403 an earlier note recorded against both is what this API answers
+    for an absent route as well as a denied one.
 
     ``description`` and ``comment`` are the action's two independent text
     channels, the same pair :class:`PostAction` writes on create -- both were

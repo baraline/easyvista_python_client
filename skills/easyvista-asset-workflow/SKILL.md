@@ -112,9 +112,11 @@ with EasyvistaClient.from_env() as client:
 from easyvista_python_client import EasyvistaClient, ev_contains_filter
 
 with EasyvistaClient.from_env() as client:
-    # A bare '~' is exact match, just like ':' -- ev_contains_filter adds the
-    # explicit wildcard a partial-tag search needs: ASSET_TAG~"*LAPTOP*".
-    # The value must carry none of * % _ [ -- "LAPTOP_01" raises ValueError.
+    # On the instance this package was characterized against, a bare '~' is
+    # exact match, just like ':' -- ev_contains_filter appends the explicit
+    # wildcard a partial-tag search needs there: ASSET_TAG~"*LAPTOP*". The
+    # vendor documents '~' as plain Contains; pass wildcard=None on such a
+    # deployment. The value must carry no '_' or '[' -- "LAPTOP_01" raises.
     found = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
     print(found.total_record_count)
 ```
@@ -123,25 +125,33 @@ with EasyvistaClient.from_env() as client:
 
 - `catalog_id` is required by EasyVista and is an `int`; `get_asset` takes a
   `str` id. The asymmetry is real.
-- `ASSET_TAG~"LAPTOP"` (a bare value, no wildcard) is **exact match**,
-  identical to `ASSET_TAG:"LAPTOP"` — `~` degenerates to equality without an
-  explicit wildcard. For a partial-tag search use `ev_contains_filter` /
-  `ev_starts_with_filter`, which add the wildcard for you:
-  `ev_contains_filter("ASSET_TAG", "LAPTOP")` builds `ASSET_TAG~"*LAPTOP*"`
-  (verified live
-  `integration_tests/test_live_search_syntax.py::test_tilde_without_a_wildcard_is_exact_on_asset_tag`;
-  see `easyvista-search-syntax` for the full grammar).
-- **An asset tag containing `_` or `[` cannot go through the pattern builders.**
-  `*` and `%` are not the only metacharacters under `~`: `_` matches any single
-  character and `[` opens a character class (measured live), and there is no
-  escape — a backslash is compared literally. So `ev_contains_filter` /
-  `ev_starts_with_filter` raise `ValueError` for a value containing any of
-  `* % _ [`, and `_` is pervasive in asset tags: `ev_contains_filter("ASSET_TAG",
-  "LAPTOP_01")` raises rather than also matching `LAPTOP-01` and `LAPTOP001` with
-  HTTP 200 and no hint. For an **exact** match on such a tag use
-  `ev_equals_filter("ASSET_TAG", "LAPTOP_01")` — `:` does not expand a wildcard.
-  To pattern-match around one, filter server-side on a wider condition and
-  compare exactly in Python.
+- `ASSET_TAG~"LAPTOP"` (a bare value, no wildcard) is **exact match** on the
+  instance this package was characterized against, identical to
+  `ASSET_TAG:"LAPTOP"` — `~` degenerates to equality without an explicit
+  wildcard there (verified live
+  `integration_tests/test_live_search_syntax.py::test_tilde_without_a_wildcard_is_exact_on_asset_tag`).
+  The vendor documents `~` as plain **Contains** and names no wildcard, so a
+  conformant deployment behaves the other way. For a partial-tag search use
+  `ev_contains_filter` / `ev_starts_with_filter`, which append `*` by default:
+  `ev_contains_filter("ASSET_TAG", "LAPTOP")` builds `ASSET_TAG~"*LAPTOP*"`.
+  On a deployment that compares `*` literally that default returns **zero rows
+  with HTTP 200 and no hint** — pass `wildcard=None` there, or `wildcard="%"`
+  for a LIKE-style backend. See `easyvista-search-syntax` for the full grammar
+  and for how to tell which reading your deployment follows.
+- **An asset tag containing `_` or `[` cannot go through the pattern builders,
+  at any `wildcard=` setting.** `*` and `%` are not the only metacharacters
+  under `~`, and these two belong to the operator rather than to the wildcard
+  the builders append: `_` matches any single character and `[` opens a
+  character class (measured live 2026-08-18 with a *wildcard-free* pattern),
+  and there is no escape — a backslash is compared literally. So
+  `ev_contains_filter` / `ev_starts_with_filter` raise `ValueError` for `_` or
+  `[` in the value even with `wildcard=None`, and additionally for `*` or `%`
+  while a wildcard is being appended. `_` is pervasive in asset tags:
+  `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` raises rather than also
+  matching `LAPTOP-01` and `LAPTOP001` with HTTP 200 and no hint. For an
+  **exact** match on such a tag use `ev_equals_filter("ASSET_TAG",
+  "LAPTOP_01")` — `:` does not expand a wildcard. To pattern-match around one,
+  filter server-side on a wider condition and compare exactly in Python.
 - The `Asset` model declares only `asset_id`, `asset_tag`, `serial_number`,
   `status_id` and `href`; everything else the instance returns is preserved
   by `extra="allow"` and reachable through `classify_fields()`. `reference()`

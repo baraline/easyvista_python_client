@@ -77,8 +77,17 @@ def build_search_actions(
 ) -> tuple[RequestSpec, Callable[[Any], SearchResult[Action]]]:
     """One page of a ticket's actions, envelope included.
 
-    Filters the TOP-LEVEL ``/actions`` resource by request number; the nested
-    ``requests/{rfc}/actions`` path is rejected as "Unauthorized Method". The
+    Filters the TOP-LEVEL ``/actions`` resource by request number, because
+    there is no nested list route to prefer. In the instance OpenAPI document
+    (``GET {api_root}/swagger``, read 2026-08-27 -- authoritative for that
+    deployment's routes) ``requests/{rfc_number}/actions`` declares **POST
+    only**, while the list and item operations live on ``/actions`` and
+    ``/actions/{id}``. That is a topology fact, not a permission verdict, and
+    the difference matters: an unknown path on this API answers **403**, not
+    404 (measured live; date not recorded), so a 403 alone can never say
+    whether a route is denied or simply absent. An earlier note here read the
+    nested path's rejection as "Unauthorized Method" and inferred a profile
+    restriction; the route does not exist. The
     filter is re-applied on every page. A blank or unsafe ``rfc_number`` raises:
     ``,`` is a live combinator, so a raw value could list another ticket's
     actions.
@@ -138,9 +147,11 @@ def build_get_action(
     The item-level record is far richer than the list endpoint's: the note text
     a caller passed as ``PostAction.description`` comes back through a
     ``DESCRIPTION`` Memo sub-resource that ``list_actions`` does not return at
-    all (verified live). Uses the **top-level** ``actions/{id}`` path — the
-    nested ``requests/{rfc}/actions/{id}`` is rejected with HTTP 403, the same
-    way the nested list path is.
+    all (verified live). Uses the **top-level** ``actions/{id}`` path because
+    it is the only one: the instance OpenAPI document read 2026-08-27 declares
+    no ``requests/{rfc}/actions/{id}`` route at all. See
+    :func:`build_search_actions` for why the HTTP 403 an earlier note recorded
+    against that path was never evidence of a permission restriction.
     """
     return build_get(ACTIONS, action_id, context=context)
 
@@ -153,7 +164,10 @@ def build_update_action(
 ) -> tuple[RequestSpec, Callable[[Any], Action]]:
     """Edit one action, via the TOP-LEVEL ``actions/{id}`` path.
 
-    The nested ``requests/{rfc}/actions/{id}`` form is rejected with HTTP 403,
-    the same way the nested list and item paths are (verified live).
+    ``PUT`` and ``PATCH`` are declared on ``actions/{id}`` and nowhere else:
+    the instance OpenAPI document read 2026-08-27 has no nested
+    ``requests/{rfc}/actions/{id}`` route to send them to. See
+    :func:`build_search_actions` for why the HTTP 403 an earlier note recorded
+    against that path did not distinguish a denied route from an absent one.
     """
     return build_update(ACTIONS, action_id, payload, context=context)

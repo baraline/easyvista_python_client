@@ -78,6 +78,37 @@ Required: `action_type_id`, and one of `group_id` / `group_mail` /
 `max_intervention_date_ut`, `parent_action_id`, `action_type_guid` (2023.4+).
 Action status is set to "In progress" automatically.
 
+`PostAction` declares `action_type_id`, `action_type_name`, `action_type_guid`,
+`group_id`, `group_name`, `group_mail`, `parent_action_id`, `description` and
+`comment`, and enforces the required rule above at construction. The `contact_*`
+/ `done_by_*` / date fields are deliberately **not** declared — nothing in this
+package exercises them and `extra_payload` reaches them today.
+
+## Create a task — `POST /requests/{rfc_number}/tasks`
+
+**The vendor page has NOT been transcribed here.** It exists
+(<https://docs.easyvista.com/docs/rest-api-create-a-task-for-an-incident-request.md>,
+cited in `PostTask`'s docstring) but nobody has read its field table into this
+file, so `PostTask`'s eleven declared fields cannot be diffed against tier 1
+from inside the repository. That is a gap, not a finding.
+
+What the instance's own OpenAPI declares for this route — **tier 3,
+illustrative only** (read 2026-08-31): `action_type_id` (string), `group_mail`,
+`Elapsed_Time`, `time_cost`, `contractual_cost`, `description`,
+`creation_date_ut`, `start_date_ut`, `end_date_ut`, `available_field_1`,
+`available_field_6`, with `required: ["action_type_id", "group_mail"]`. Three
+notes on reading that: it is the only body schema in this instance's spec that
+declares a non-empty `required`, which is corroboration for `PostTask`'s guard
+and not proof of it; it omits `group_id`, `group_name` and `comment`, which
+`PostTask` declares and which an example-derived schema would omit anyway; and
+it lists `available_field_1`/`_6`, which `PostTask` does not declare and which
+`extra_payload` reaches.
+
+Also worth recording without acting on it: the instance's `POST /assets` schema
+(tier 3) titles its array `asset` while its own example uses `assets`, which is
+what this package sends and what works. That is an inconsistency inside one
+spec; the descriptor is not changed on it.
+
 ## Query grammar (tier 1)
 
 Source: <https://docs.easyvista.com/xwiki/bin/view/Documentation/Integration/WebService%20REST/REST%20API%20-%20See%20a%20list%20of%20incidents-requests/>
@@ -90,7 +121,7 @@ Source: <https://docs.easyvista.com/xwiki/bin/view/Documentation/Integration/Web
 | `sort` | `field1[+asc\|+desc],field2[+asc\|+desc]` |
 | `fields` | Comma-separated projection |
 | `search` | Field-based filter |
-| `~` / `!~` / `!` | Contains / not-contains / not-equals (Oxygen 1.7+). Counter-evidence, tier 4 — measured live 2026-08-17: `~` behaves as a *pattern* operator and needs an explicit `*`, so `FIELD~"value"` degenerates to an exact match and quietly returns the wrong rows. `ev_contains_filter` supplies the wildcards; see its docstring in `easyvista_python_client/filters.py`. |
+| `~` / `!~` / `!` | Contains / not-contains / not-equals (Oxygen 1.7+). Counter-evidence, tier 4 — measured live 2026-08-17: `~` behaves as a *pattern* operator and needs an explicit `*`, so `FIELD~"value"` degenerates to an exact match and quietly returns the wrong rows. `ev_contains_filter` supplies the wildcards by default; on a deployment that follows the tier-1 reading and compares `*` literally, that default returns zero rows with HTTP 200 — pass `wildcard=None` (or `wildcard="%"`). Neither failure is visible in the response. See its docstring in `easyvista_python_client/filters.py`. |
 | `is_null` / `is_not_null` | Oxygen 2.1.2+ |
 | `formatDate` | Oxygen 1.7+ |
 
@@ -101,6 +132,33 @@ Dotted sub-field access works in both `sort` and `search`
 tokens exist (`search=field:last_week`). Neither is exposed by this package.
 
 Envelope: `HREF`, `record_count`, `total_record_count`, `records`, `@next`.
+
+## Route topology (tier 2) — `GET {api_root}/swagger`, read 2026-08-27
+
+**A 403 does not discriminate.** This API answers 403 for a path that does not
+exist as well as for one a profile denies (measured; date not recorded). Every
+"blocked" conclusion drawn from a status code alone is therefore unsound; the
+spec's `paths` is what settles whether a route exists.
+
+| Path | Verbs | Note |
+| --- | --- | --- |
+| `/requests/{rfc_number}/actions` | POST | create-only; no nested list, item or update |
+| `/actions` | GET | the only action list |
+| `/actions/{id}` | GET, PATCH, PUT | the only action item; **no DELETE** |
+| `/requests/{RFC_NUMBER}/documents` | GET, POST | |
+| `/requests/{RFC_NUMBER}/documents/{id}` | GET, DELETE | what this package sends by default |
+| `/documents/{id}` | GET, DELETE | marked `deprecated`; opt in with `document_delete_path_style="top_level"` |
+| `/departments/{id}/{comment}` | GET | `{comment}` is a memo-field *selector*, not a literal |
+
+Reference tables that exist: `/status`, `/urgency` and `/urgency/{id}`
+(**singular**; `/urgencies` is not declared), `/catalog-requests`,
+`/catalog-requests-paths`, `/groups` (GET, POST), `/locations`, `/slas`,
+`/domains`, `/suppliers`, `/departments`, `/employees`.
+
+No route is declared for action-types, impact, severity, origin or priority:
+those values are discoverable only by sampling records that carry them.
+
+The package wraps roughly 10 of the spec's 100 paths.
 
 ## Routes present in the spec, not implemented here (tier 2)
 
@@ -121,10 +179,24 @@ Read from `GET {api_root}/swagger`, 2026-08-27.
   selector**, documented in the spec's own parameter description as "Memo
   field type, could be comment, description". Same shape on
   `GET /actions/{id}/{comment}`.
-* `GET /status`, `GET /urgency`, `GET /locations`, `GET /groups`,
-  `GET /problems`, `GET /configuration-items`, `GET /questionnaires`,
-  `GET /slas`, `GET /suppliers`, `GET /domains`, `POST /tokens`,
-  and the external-table routes `GET|POST /{E_Your_Table}`.
+* `GET /problems`, `GET /configuration-items`, `GET /questionnaires`,
+  `POST /tokens`, and the external-table routes `GET|POST /{E_Your_Table}`.
+  These have no typed wrapper; `send()` and `list_reference_table(path)` reach
+  every read-only one of them.
+* The reference tables — `GET /status`, `/urgency`, `/locations`, `/groups`,
+  `/slas`, `/suppliers`, `/domains`, `/catalog-requests` — are now reachable
+  through `list_reference_table(path)` and `discover(name)`, which map each
+  name to the route this deployment declares.
+
+### `GET /catalog-requests` response columns — **tier 3, illustrative only**
+
+`CODE`, `SD_CATALOG_ID`, `TITLE_EN`, `CATALOG_REQUEST_PATH`, plus nested
+`MANAGER` and nested `SLA`. `CODE` is what `PostRequest.catalog_code` accepts
+and `SD_CATALOG_ID` is what reads back as `Request.sd_catalog_id`. **There is
+no `CATALOG_GUID` column** in the schema and none was observed live, so a
+catalog GUID cannot be discovered from this route — build with `catalog_code`.
+The vendor documents `catalog_guid` as the *preferred* identifier (tier 1) and
+`close_ticket` accepts one; you simply cannot read one back.
 
 ## Open items
 
@@ -136,3 +208,17 @@ Read from `GET {api_root}/swagger`, 2026-08-27.
 * **O-CLOSE** — should the close route move to `PUT /requests/{rfc}/close`?
 * **O-URGPATH** — the vendor documents `GET /urgencies`; the instance spec
   declares `GET /urgency`. Both return 200 live. Which is canonical is unknown.
+* **O-CLOSE-DEFAULT** — `close_ticket` omits `status_GUID` from the body when
+  the caller omits it, and two docstrings previously stated that this closes
+  the ticket to the instance's default *Closed* meta-status, attributing it to
+  the vendor close page. **That sentence is not recorded anywhere in this file
+  and the behaviour is not exercised by the live suite** — every `close_ticket`
+  call in `integration_tests/` passes an explicit `status_guid`. Both
+  docstrings now hedge. Until someone either re-reads the vendor page and adds
+  the row here, or measures the omitted form live and dates it, the
+  documentation must not assert it.
+* **O-TASKDOC** — transcribe the vendor's create-a-task field table into the
+  section above, so `PostTask` can be diffed against tier 1. Until then
+  `action_type_guid` is declared on `PostAction` (tier 1, 2023.4+) and **not**
+  on `PostTask`, and `PostTask`'s guard accepts the key without the model
+  asserting the field exists on that route.

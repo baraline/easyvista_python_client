@@ -39,16 +39,23 @@ from easyvista_python_client import (
 # `account` is the instance id in the API root (https://host/api/v1/12345), not a username.
 config = EasyvistaConfig(server="https://my.easyvista.com", account="12345", token="...")
 with EasyvistaClient(config) as client:
-    # catalog_code, the *_id values and the close status_guid are instance-specific.
+    # catalog_code, the *_id values and the close status_guid are
+    # instance-specific -- `client.describe_instance()` finds them for you.
+    # `external_reference` is your own marker, and it is what lets you
+    # reconcile a create that failed: see the note below this block.
     ticket = client.create_ticket(
         PostRequest(
             catalog_code="INC_STANDARD",
             title="Printer down",
             description="The 3rd-floor printer is offline",
-            origin=7,
+            # The vendor documents `origin` as a channel NAME, not an id --
+            # the one create field with a portable form. An int is also
+            # accepted (measured on one instance) and passes through as sent.
+            origin="Phone",
             department_id=9,
             urgency_id=8,
             impact_id=28,
+            external_reference="MYAPP-0001",  # your own marker; set it always
         )
     )
     fetched = client.get_ticket(ticket.rfc_number)
@@ -59,7 +66,10 @@ with EasyvistaClient(config) as client:
     for t in client.iter_tickets(search=open_status, page_size=100, max_records=1000):
         ...  # async: `async for t in client.iter_tickets(...)`
 
-    # close it with your instance's "closed" status GUID
+    # close it with your instance's "closed" status GUID. Every argument is
+    # optional -- `client.close_ticket(ticket.rfc_number)` sends the close with
+    # no status of its own, but where that lands the ticket is not established
+    # by this package; see the user guide before relying on it.
     client.close_ticket(
         ticket.rfc_number,
         status_guid="{00000000-0000-0000-0000-000000000000}",
@@ -96,10 +106,13 @@ with EasyvistaClient(EasyvistaConfig.from_env()) as client:
     tag_filter = ev_equals_filter("ASSET_TAG", "LAPTOP-001")
     found = client.search_assets(search=tag_filter, max_rows=50)
 
-    # `~` needs an explicit wildcard to mean "contains" -- a bare value is exact
-    # match, identical to `:`. ev_contains_filter adds the wildcard for you, and
-    # raises ValueError if the value itself carries one of * % _ [ (all four are
-    # metacharacters to `~`, with no escape). For an exact match on a tag like
+    # On the instance this package was characterized against, `~` needs an
+    # explicit wildcard to mean "contains" -- a bare value is exact match,
+    # identical to `:`. ev_contains_filter appends it for you; the vendor
+    # documents `~` as plain Contains, so pass wildcard=None if that is your
+    # deployment. It raises ValueError if the value carries `_` or `[` (both
+    # are metacharacters to `~` itself, with no escape) or `*`/`%` while a
+    # wildcard is being appended. For an exact match on a tag like
     # "LAPTOP_01", use ev_equals_filter: `:` does not expand a wildcard.
     partial = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
 

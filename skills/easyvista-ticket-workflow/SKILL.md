@@ -55,9 +55,12 @@ deployment needs before you build a payload for it.
 
 ## Procedure
 
-1. Discover the ids (above). Never hardcode an id copied from another
-   instance — catalog codes, status/urgency/impact ids and group ids are all
-   instance-specific.
+1. Discover the ids. One call does it: `client.describe_instance()`, or
+   `client.discover("CATALOG_REQUEST")` / `discover("URGENCY")` /
+   `discover("IMPACT")` for one name at a time — see
+   `easyvista-instance-discovery`. Never hardcode an id copied from another
+   instance: catalog codes, status/urgency/impact ids and group ids are all
+   instance-specific, and adjacent numbers can mean opposite things.
 2. Build a `PostRequest`. The subject is the only vendor-required part, given
    either as `catalog_guid` — the vendor documents the **guid** as the
    preferred identifier — or as `catalog_code`; a body with neither is refused
@@ -100,7 +103,7 @@ with EasyvistaClient.from_env() as client:
         PostRequest(
             catalog_code="YOUR_CATALOG_CODE",
             title="Printer offline on the third floor",
-            origin=1,
+            origin="Phone",  # a channel NAME, not an id -- see below
             department_id=1,
             urgency_id=1,
             impact_id=1,
@@ -111,9 +114,14 @@ with EasyvistaClient.from_env() as client:
     print(ticket.rfc_number)
 ```
 
-Every numeric id above is a placeholder — `origin=1`, `department_id=1`,
-`urgency_id=1` and `impact_id=1` are not guaranteed to mean anything on your
-instance. Use the ids the discovery block printed for it instead.
+`department_id=1`, `urgency_id=1` and `impact_id=1` above are **placeholders**
+and are not guaranteed to mean anything on your instance — use the ids
+`client.describe_instance()` or the discovery block printed for it.
+
+`origin` is not an id at all: the vendor documents it as a channel **name**
+(`"Phone"`, `"Email"`), which makes it the one create field with a portable,
+human-readable form. An int id is also accepted (measured on one instance) and
+passes through unchanged.
 
 ```python
 from easyvista_python_client import EasyvistaClient, RequestUpdate

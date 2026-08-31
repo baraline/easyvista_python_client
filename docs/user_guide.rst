@@ -8,9 +8,15 @@ equivalents, which mirror every method name.
 .. note::
 
    Values such as the server host, ``account``, ``catalog_code``, the close ``status_guid``,
-   ``group_id``, ``action_type_id``, ``origin``, ``department_id``, ``urgency_id`` and
+   ``group_id``, ``action_type_id``, ``department_id``, ``urgency_id`` and
    ``impact_id`` are **instance-specific**. The values below are illustrative; replace them with
-   the ones from your EasyVista instance.
+   the ones from your EasyVista instance —
+   :meth:`~easyvista_python_client.EasyvistaClient.describe_instance` finds them
+   in one call.
+
+   ``origin`` is the exception: the vendor documents it as a string naming the
+   channel (``"Phone"``, ``"Email"``), so it is the one create field with a
+   portable, human-readable form and needs no discovery.
 
 Creating a client
 ------------------
@@ -73,6 +79,115 @@ variables, so credentials stay out of source. It reads, in order: ``EASYVISTA_UR
        search = ev_equals_filter("STATUS_ID", 3)
        results = client.search_tickets(search=search, max_rows=50)
 
+.. _first-steps:
+
+First steps on your instance
+----------------------------
+
+Almost every value a write needs — the catalog, the status GUID, the action
+type ids, the group ids — is configured on your EasyVista deployment and is not
+portable from anyone else's. This section is the order to discover them in.
+Steps 1 to 6 are reads and create nothing.
+
+The short version is one call:
+
+.. code-block:: python
+
+   from easyvista_python_client import EasyvistaClient
+
+   with EasyvistaClient.from_env() as client:
+       profile = client.describe_instance()
+       print(profile.version, len(profile.spec_paths))
+
+       # Read the gaps FIRST. A total outage looks exactly like a bare
+       # instance except that every gap is named here.
+       for gap, reason in profile.unavailable.items():
+           print("gap:", gap, reason)
+
+       for status in profile.references["STATUS"]:
+           # .guid is what close_ticket and set_status address a status by.
+           print(status.id, status.label, status.guid)
+
+That is :meth:`~easyvista_python_client.EasyvistaClient.describe_instance`; see
+the ``easyvista-instance-discovery`` skill for the whole surface. The long
+version, and what it is doing under the covers:
+
+1. **Prove the connection** and get one real record.
+2. **Read the ids off it.** ``reference(name)`` for id + label,
+   ``classify_fields()`` for the instance's own ``e_*`` columns and its
+   href-only memo links.
+3. **Find a catalog you can create against** — see
+   `Finding your catalog_code or catalog_guid`_. This is the step that most
+   often needs an administrator.
+4. **Find the action type ids**, and confirm which means "internal" with that
+   administrator; the ids are discoverable, the meaning is not.
+5. **Find the close status GUID.** It is a sub-key of the nested ``STATUS``
+   object and is not searchable.
+6. **Pin what you found, in your own configuration.**
+7. **Do the first write on a throwaway, then re-read.**
+
+Keep the reads in steps 1–2 **unprojected**. Passing ``fields=`` narrows a
+record to the columns you name and drops the nested ``STATUS`` /
+``DEPARTMENT`` / ``CATALOG_REQUEST`` objects that carry the labels and the GUID
+(measured on one instance; it may not generalise). Projection is worth reaching
+for later, when you know which columns you want — the default search projection
+returns ``TITLE`` empty, for instance, so a listing wants
+``fields=["RFC_NUMBER", "TITLE"]``.
+
+.. code-block:: python
+
+   from easyvista_python_client import EasyvistaClient
+
+   with EasyvistaClient.from_env() as client:
+       # 1. Prove the connection, and get one real record.
+       probe = client.search_tickets(max_rows=1)
+       sample = client.get_ticket(probe.records[0].rfc_number)
+
+       # 2. The ids this instance uses, with their human labels.
+       for name in ("STATUS", "DEPARTMENT", "URGENCY", "IMPACT", "CATALOG_REQUEST"):
+           ref = sample.reference(name)
+           print(name, "->", ref.id, ref.display)
+
+       buckets = sample.classify_fields()
+       print("instance columns:", sorted(buckets.custom))
+       print("memo links:", sorted(buckets.links))
+
+       # 5. The close GUID -- a sub-key of the nested STATUS object, present
+       #    only on an unprojected read. Read it off a ticket already in the
+       #    state you want to reach.
+       status = (sample.model_extra or {}).get("STATUS") or {}
+       print("status:", status.get("STATUS_ID"), status.get("STATUS_GUID"))
+
+.. warning::
+
+   ``reference("CATALOG_REQUEST").id`` is the catalog's ``SD_CATALOG_ID``, and
+   :class:`~easyvista_python_client.PostRequest` accepts ``catalog_guid`` or
+   ``catalog_code`` and **no id field at all**. Step 2 tells you which catalog
+   a ticket used; it does not give you a value you can send. See
+   `Finding your catalog_code or catalog_guid`_.
+
+   **Never infer "closed" from a status id.** They are per-instance: on the
+   verified instance ``8`` is *Clôturé* and ``12`` is *En cours* — adjacent
+   numbers, opposite meanings. ``end_date_ut`` is the portable signal: empty on
+   an open ticket, stamped on a closed one.
+
+Step 6 — **pin what you found in your own configuration.** This package holds
+no registry of instance values and never will: they belong to your deployment,
+not to the library. Pass them the way you pass any other application setting,
+preferring, in order, a method or constructor keyword, a field on your own
+configuration object, a module constant a caller can override, and an
+environment variable only as a last resort.
+:meth:`~easyvista_python_client.EasyvistaConfig.from_env` is a convenience for
+credentials in a script, not a configuration mechanism for a library you have
+installed into an application.
+
+Step 7 — **do the first write against a throwaway ticket, and re-read it.** Set
+``external_reference`` on the create: a rejected create may still have created
+the row, and that marker survives the failed insert and is searchable, so it is
+what lets you reconcile instead of retrying and duplicating. And re-read after
+every write: this API answers HTTP 200 and drops fields in silence, so a 200 is
+not a receipt.
+
 .. _sync-vs-async:
 
 Synchronous vs asynchronous
@@ -134,12 +249,17 @@ every catalog tried on one instance, which makes it a safe default rather than a
    ticket = client.create_ticket(
        PostRequest(
            # Or catalog_guid="{...}", the vendor's preferred subject identifier.
-           # Note GET /catalog-requests is 403 on a restricted profile, so an
-           # instance may give you no way to read a catalog GUID.
+           # GET /catalog-requests is 403 on a restricted profile -- that is a
+           # grant to ask for, not a limit. See "Finding your catalog" below.
            catalog_code="INC_STANDARD",   # instance-specific catalog
            title="Printer down",
            description="The 3rd-floor printer is offline",
-           origin=7,
+           # The vendor documents `origin` as a STRING naming the channel
+           # ("Phone", "Email") -- the one create field with a portable,
+           # human-readable form, so it needs no per-instance discovery. An
+           # int id is also accepted (measured on one instance; it may not
+           # generalise) and passes through unchanged if you prefer one.
+           origin="Phone",
            department_id=9,               # instance-specific; see "Departments and employees"
            urgency_id=8,                  # instance-specific placeholder -- see the note below
            impact_id=28,                  # instance-specific placeholder -- see the note below
@@ -150,13 +270,70 @@ every catalog tried on one instance, which makes it a safe default rather than a
 
 .. note::
 
-   ``origin``, ``department_id``, ``urgency_id`` and ``impact_id`` are ids, and what each id
+   ``department_id``, ``urgency_id`` and ``impact_id`` are ids, and what each id
    *means* is per-instance configuration: nothing above is a portable legend, and an id copied
    from this page is not guaranteed to name anything on your deployment. Read yours off a ticket
    that already carries the value you want — ``ticket.reference("URGENCY")`` and
    ``ticket.reference("IMPACT")`` yield the id, plus the human label when the instance projects
    one and ``None`` when it does not (``.display`` falls back to the id) — or ask your EasyVista
    administrator.
+
+Finding your catalog_code or catalog_guid
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The subject is the one part of a create the vendor documents as required, and
+it is the one field you cannot read off a ticket you already have.
+``ticket.reference("CATALOG_REQUEST")`` resolves to the catalog's
+``SD_CATALOG_ID`` and its title — useful for display, useless for a create,
+because :class:`~easyvista_python_client.PostRequest` accepts ``catalog_guid``
+and ``catalog_code`` and **no id field at all**. Reading a ticket tells you
+*which* catalog it used; it does not give you a value you can send.
+
+:meth:`~easyvista_python_client.EasyvistaClient.discover` reads the catalog
+table for you and puts the code where you need it:
+
+.. code-block:: python
+
+   for catalog in client.discover("CATALOG_REQUEST"):
+       # .code is what PostRequest(catalog_code=...) takes.
+       print(catalog.code, catalog.label, catalog.path)
+
+Three routes carry the catalog, and all three are declared in the instance's
+own OpenAPI (read from ``GET {api_root}/swagger``, 2026-08-27, EasyVista 2025.3
+— authoritative for that deployment): ``GET /catalog-requests`` (the list, which
+``discover`` uses), ``GET /catalog-requests-paths`` (the same table addressed by
+catalog path) and ``GET /catalog-requests/{catalog_id}`` (the item).
+
+On the restricted profile this package was verified against, all three answer
+**403** (measured on one instance; it may not generalise). That is a profile
+denial, not a missing route — the route is declared in that same deployment's
+spec. **If you cannot read your catalogs, ask your EasyVista administrator to
+authorize the REST profile for ``catalog-requests``**; it is a grant, not a
+limitation of the API. ``discover`` degrades to sampling meanwhile, which
+returns only the catalogs already used by a ticket you can see; and
+``describe_instance()`` records the denial in ``.unavailable`` rather than
+returning a silently empty list.
+
+.. note::
+
+   **``catalog_guid`` is not discoverable at all.** No route returns one — the
+   ``/catalog-requests`` response schema declares ``CODE``, ``SD_CATALOG_ID``,
+   ``TITLE_EN`` and ``CATALOG_REQUEST_PATH``, and no ``CATALOG_GUID``. The
+   vendor documents ``catalog_guid`` as the *preferred* identifier and
+   ``close_ticket`` accepts one; you simply cannot read one back, so build with
+   ``catalog_code``. Those column names come from the instance's OpenAPI
+   *response schemas*, which are example-derived and illustrative only (see
+   ``docs/vendor-api-reference.md``) — a different deployment may name them
+   otherwise.
+
+   ``SD_CATALOG_PATH_EN`` is a top-level column *of the catalog-requests-paths
+   table*, so it filters there. The similarly named ``SD_CATALOG_PATH`` on a
+   **ticket** is a denormalized display column and is silently ignored as a
+   search condition.
+
+With no route access at all, the remaining option is to ask the administrator
+for the code or GUID of each catalog you must create against, and pin those in
+your configuration the way you pin any other instance-specific value.
 
 Create several tickets in one call with :meth:`~easyvista_python_client.EasyvistaClient.create_tickets`:
 
@@ -183,6 +360,25 @@ Fetch, update, and close a ticket by its RFC number:
        delete_actions=1,
        comment="Resolved",
    )
+
+   # Every argument is optional -- this sends the close with no status of its
+   # own, letting the instance decide where the ticket lands.
+   client.close_ticket(ticket.rfc_number)
+
+   # Verify by re-reading, not by the return value: end_date_ut is empty on an
+   # open ticket and stamped on a closed one, and is more portable than any
+   # status id (on the verified instance 8 is "Clôturé" and 12 is "En cours").
+   assert client.get_ticket(ticket.rfc_number).end_date_ut is not None
+
+.. warning::
+
+   Where a ticket lands when ``status_guid`` is omitted is **not established by
+   this package**. The client simply omits the key; what the server does with a
+   status-less ``closed`` body has never been measured against a live instance
+   here, and the behaviour is not recorded in ``docs/vendor-api-reference.md``.
+   Try it on a throwaway ticket and re-read before you build on it. Passing
+   your instance's closed ``status_guid`` explicitly is the form this package's
+   live suite actually exercises.
 
 .. note::
 
@@ -306,6 +502,8 @@ the text sent.
        comment="Internal working note.",
    )
 
+.. _tasks-vs-actions:
+
 Tasks vs. actions: use a task for a comment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -376,51 +574,91 @@ history.
 
    **Neither text channel is inherently private.** The item-level action record
    carries 88 columns and none of them is a public/private boolean, so the API
-   enforces no visibility distinction and there is no flag to set or read.
-   Visibility is a property of the action **type**: on the verified instance
+   enforces no visibility distinction and there is no flag to set or read
+   (measured on one instance, 2026-08-28 — it may not generalise).
+
+   Visibility is a property of the action **type**. On the verified instance
    type 94 is ``Commentaire [Public]`` / ``Customer Comment`` and type 95 is
-   ``Note Interne [Privé]`` / ``Internal Note``. Those ids are per-deployment
-   and not portable — but they are discoverable, because every action record
-   carries its ``ACTION_TYPE_ID`` beside translated ``ACTION_LABEL_*`` columns
-   even though ``GET action-types`` answers 403.
+   ``Note Interne [Privé]`` / ``Internal Note`` (measured on one instance,
+   2026-08-28). Those ids are per-deployment: yours will differ.
 
-``action_type_id`` is the only per-action discriminator the API exposes. If your
-deployment separates internal notes from customer-facing ones, it will do so
-with distinct action types — but that is a property of your deployment, not of
-EasyVista's API, and the API cannot tell you which is which:
+**There is no reference table, and the ids are still discoverable.** Both
+halves matter, and an earlier revision of this guide asserted the first and
+then denied the second a dozen lines later:
 
-* ``GET action-types`` answers **403** on a standard profile, so the type table
-  cannot be enumerated.
-* Nothing on an action record states what its type *means*.
-* There is no naming convention to pattern-match. In particular, brackets in
-  ``ACTION_LABEL_*`` mark an **untranslated** label — on a single-language
-  instance the unpopulated language columns echo the default-language text
-  wrapped in ``[...]`` — and carry no visibility meaning. See
-  :func:`~easyvista_python_client.references.localized_label`, which skips them.
-
-So: **ask your EasyVista administrator which action type ids your instance
-uses**, pin them in your own configuration, and pass the one you want:
+* The instance's own OpenAPI declares **no** ``action-types`` route at all
+  (read from ``GET {api_root}/swagger``, 2026-08-27, EasyVista 2025.3 —
+  authoritative for that deployment). ``GET action-types`` answers **403**, but
+  on this API a forbidden path and an unknown one both answer 403, so that
+  response never told you which it was. There is nothing to enumerate and
+  nothing for an administrator to unblock here.
+* Every action record nevertheless carries its own ``ACTION_TYPE_ID`` beside
+  translated ``ACTION_LABEL_*`` columns, so the types an instance actually uses
+  are recoverable from the data:
 
 .. code-block:: python
 
-   INTERNAL_NOTE_TYPE_ID = 20  # ask your EasyVista administrator -- not discoverable
+   for found in client.discover("ACTION_TYPE"):
+       print(found.id, found.label, found.count)
 
-   client.create_action(
-       ticket.rfc_number,
-       PostAction(action_type_id=INTERNAL_NOTE_TYPE_ID, description="Internal note"),
-   )
-
-To see which types a ticket already uses — useful when reconciling what the
-administrator tells you against the data:
-
-.. code-block:: python
+That is :meth:`~easyvista_python_client.EasyvistaClient.discover`, which samples
+records for you; ``client.describe_instance()`` does every reference at once.
+Sampling by hand is the same thing spelled out::
 
    for action in client.iter_actions(ticket.rfc_number):
-       action_type = action.reference("ACTION_TYPE")
-       print(action_type.id, action_type.display)
+       print(action.action_type_id, action.label, action.done_by_id)
 
-Note that most of what comes back will be workflow-generated steps rather than
-human notes; those carry an empty ``DONE_BY_ID``.
+Most of what comes back is workflow-generated steps rather than human notes;
+those carry an empty ``DONE_BY_ID``.
+
+.. note::
+
+   **Two bracket conventions appear in ``ACTION_LABEL_*`` and they mean
+   opposite things.**
+
+   * A label wrapped **entirely** in brackets, echoing another language's text
+     (``ACTION_LABEL_EN='[Analyse et résolution]'``), is an *untranslated
+     placeholder*: on a single-language instance the unpopulated language
+     columns echo the default-language text in brackets. It carries no
+     visibility meaning, and
+     :func:`~easyvista_python_client.localized_label` discards it.
+   * A bracketed **suffix** on otherwise distinct text, with genuine
+     translations in the sibling columns — ``ACTION_LABEL_FR='Commentaire
+     [Public]'`` beside ``ACTION_LABEL_EN='Customer Comment'`` — is a real
+     marker, written by whoever configured the instance.
+
+   The test is whether the siblings are real translations or brackets, not
+   whether brackets are present. Conflating the two once deleted a true finding
+   from this documentation.
+
+   A marker is still a **convention on one deployment**, not an API feature.
+   Treat it as a strong hint while matching ids to meanings, and confirm the
+   mapping with whoever administers the instance before relying on it for
+   anything that must not leak.
+
+So: discover the ids, confirm them with your EasyVista administrator, pin them
+in your own configuration — a module constant, a settings field, whatever your
+application already uses — and pass the one you want. For a comment, pass it to
+``create_task`` rather than ``create_action``; see :ref:`tasks-vs-actions` for
+why.
+
+.. code-block:: python
+
+   from easyvista_python_client import PostTask
+
+   # Read off THIS instance and confirmed with its administrator. 94/95 are
+   # what the verified instance uses; they are not portable.
+   PUBLIC_COMMENT_TYPE_ID = 94
+   INTERNAL_NOTE_TYPE_ID = 95
+
+   client.create_task(
+       ticket.rfc_number,
+       PostTask(
+           action_type_id=INTERNAL_NOTE_TYPE_ID,
+           group_id=3,                     # instance-specific
+           description="Internal note",
+       ),
+   )
 
 Assets
 ------
@@ -1078,7 +1316,7 @@ Create a ticket, add a comment, close it, and read it back:
 
 .. code-block:: python
 
-   from easyvista_python_client import EasyvistaClient, PostAction, PostRequest
+   from easyvista_python_client import EasyvistaClient, PostRequest, PostTask
 
    with EasyvistaClient.from_env() as client:
        ticket = client.create_ticket(
@@ -1086,15 +1324,23 @@ Create a ticket, add a comment, close it, and read it back:
                catalog_code="INC_STANDARD",
                title="VPN drops",
                description="Daily VPN drops at 11:00",
-               origin=7,
+               # The vendor documents `origin` as a STRING naming the channel
+               # ("Phone", "Email") -- the one create field with a portable,
+               # human-readable form. An int id is also accepted (measured on
+               # one instance) and passes through unchanged.
+               origin="Phone",
                department_id=9,
                urgency_id=7,
                impact_id=21,
+               external_reference="MYAPP-0002",  # your marker; set it always
            )
        )
-       client.create_action(
+       # A COMMENT is a task, not an action: a task is born already ended, so
+       # its text shows in the ticket history. An action is born open, and an
+       # open action renders as a pending row with its text NOT shown.
+       client.create_task(
            ticket.rfc_number,
-           PostAction(action_type_id=94, group_id=3, description="Investigating"),
+           PostTask(action_type_id=94, group_id=3, description="Investigating"),
        )
        client.close_ticket(
            ticket.rfc_number,

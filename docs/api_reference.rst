@@ -97,7 +97,24 @@ References
 
 .. autoclass:: easyvista_python_client.references.Reference
 
-.. autofunction:: easyvista_python_client.references.localized_label
+.. autodata:: easyvista_python_client.DEFAULT_LANGUAGE_ORDER
+
+.. autofunction:: easyvista_python_client.localized_label
+
+.. autofunction:: easyvista_python_client.references.label_from_record
+
+Instance discovery
+------------------
+
+.. autoclass:: easyvista_python_client.DiscoveredReference
+
+.. autoclass:: easyvista_python_client.InstanceProfile
+
+.. autoclass:: easyvista_python_client.ReferenceSource
+
+.. autoclass:: easyvista_python_client.GenericRecord
+
+.. autodata:: easyvista_python_client.DEFAULT_DISCOVERY_NAMES
 
 Every read model exposes ``.reference(name)`` returning a :class:`~easyvista_python_client.references.Reference`
 for any field, including custom ``e_*`` fields.

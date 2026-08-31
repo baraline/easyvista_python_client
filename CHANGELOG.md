@@ -215,6 +215,15 @@ a deprecation policy will follow the 1.0 release.
   hold at least one dict, so a scalar list under an envelope name
   (`{"REQUESTS": ["a", "b"]}`) falls through to the bare-record reading instead
   of silently returning `[]`.
+- Corrected several docstrings that read an HTTP 403 as a permission verdict.
+  This API answers 403 for a path that does not exist as well as for one a
+  profile denies, so the status code alone never distinguished them. There is
+  no nested `requests/{rfc}/actions/{id}` route and no DELETE verb on
+  `actions/{id}` — those are topology facts from the instance's own OpenAPI
+  document, not restrictions. The conclusions were right; the reasons were not.
+  A route table now records them in `docs/vendor-api-reference.md`.
+
+
 - **A `[bracketed]` untranslated label no longer wins over a real sibling
   translation.** `references._nested_label` scanned `_EN`/`_FR`/`_PATH` and
   accepted any non-empty string, while `localized_label` fifty lines below
@@ -245,6 +254,49 @@ a deprecation policy will follow the 1.0 release.
   mapping field is non-empty; `__eq__` still compares every field.
 
 ### Fixed
+
+- **The action-type documentation contradicted itself.** The user guide and the
+  actions skill each stated the visibility rule correctly and then retracted it
+  a dozen lines later ("there is no naming convention to pattern-match", "they
+  carry no visibility meaning"), and both printed `INTERNAL_NOTE_TYPE_ID = 20`
+  — a number that appears in no test, probe or fixture and predates the
+  measurement that established 94/95. The `20` is deleted rather than replaced
+  with another invented one. The corrected text distinguishes the two halves
+  that are both true: the instance's OpenAPI declares **no `action-types` route
+  at all**, so there is nothing to enumerate and nothing for an administrator
+  to unblock — and every action record still carries `ACTION_TYPE_ID` beside
+  translated `ACTION_LABEL_*` columns, so the ids are recoverable from the
+  data. `discover("ACTION_TYPE")` now does that sampling.
+- **The actions skill taught `create_action` for comments.** Its front matter,
+  Procedure and first worked example all reached for the verb that creates an
+  action *open* — a pending row whose text the UI does not display — while the
+  skill's own headline said to use `create_task`. A Procedure is executed
+  verbatim by an agent, so this was the highest-value correction in the set.
+  The guide's end-to-end example was labelled "add a comment" and called
+  `create_action` too.
+- **Nothing documented how to obtain the one mandatory create field.** A new
+  guide subsection covers `catalog_code` / `catalog_guid`, including the trap
+  that `reference("CATALOG_REQUEST").id` resolves to `SD_CATALOG_ID`, which
+  `PostRequest` accepts under no name at all. A 403 on `/catalog-requests` is
+  now reported as a **grant to ask for** rather than an impossibility: the
+  route is declared in that same deployment's spec.
+- `origin` is taught as the channel **name** the vendor documents (`"Phone"`),
+  not as an id. It is the one create field with a portable, human-readable
+  form; the int that was measured accepted stays in a parenthetical, and every
+  live-hitting caller keeps it.
+- A new **"First steps on your instance"** section is now section 2 of the user
+  guide rather than section 20 of 23, and gives the order to discover a
+  deployment's values in — a reader needs it before they write anything.
+- `close_ticket`'s "omitting `status_guid` closes to the instance's default
+  *Closed* meta-status" is **retracted to an open question** in the guide and
+  in both docstrings that carried it. It is not recorded in
+  `docs/vendor-api-reference.md` and no live test exercises the omitted form —
+  every one passes an explicit `status_guid`. Recorded as O-CLOSE-DEFAULT.
+- `models/action.py` held the last copy of the retracted bracket rule ("the
+  brackets carry no other meaning"). A new test pins the half that nothing
+  guarded: a bracketed **suffix** on distinct text survives `localized_label`,
+  where a wholly-bracketed placeholder is discarded.
+
 
 - **The `create_action`, `create_task` and `close_ticket` parsers now name
   their envelope.** All three called `extract_records(data)` with no envelope

@@ -499,9 +499,13 @@ class AsyncEasyvistaClient:
 
         Sends ``PUT requests/{rfc}`` with a ``closed`` wrapper --
         https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md.
-        Every argument is optional: with no ``status_guid`` the ticket goes to
-        the instance's default *Closed* meta-status, and with no ``end_date``
-        the server stamps now.
+        Every argument is optional. With no ``end_date`` the server stamps now.
+        With no ``status_guid`` this client sends no status of its own -- but
+        **where the ticket then lands is not established here**: the behaviour
+        is not recorded in ``docs/vendor-api-reference.md`` and no live test
+        exercises the omitted form, every one of them passing an explicit
+        ``status_guid``. Try it on a throwaway ticket and re-read before
+        relying on it (open item O-CLOSE-DEFAULT).
 
         **Verify the close by re-reading the status, not by the return value.**
         A status id is per-instance configuration and nothing about it is
@@ -711,9 +715,12 @@ class AsyncEasyvistaClient:
         """Edit an existing action's note text.
 
         Live-verified 2026-08-17 by re-reading the memo afterwards, not by the
-        status code. Note that an action can be edited but **not deleted** —
-        ``DELETE actions/{id}`` is refused with HTTP 403 — so there is
-        deliberately no ``delete_action``.
+        status code. Note that an action can be edited but **not deleted**: the
+        instance OpenAPI document (``GET {api_root}/swagger``, read 2026-08-27)
+        declares only GET, PUT and PATCH on ``actions/{id}``, no DELETE, so
+        there is deliberately no ``delete_action``. The 403 an earlier note
+        recorded for that verb is what this API answers for an absent route as
+        well as a denied one, so it did not distinguish them.
 
         The returned :class:`Action` is the API's own echo and is **not
         verified**: the PUT's response body has never been captured, and if it

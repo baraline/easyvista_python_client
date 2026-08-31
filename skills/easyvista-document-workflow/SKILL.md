@@ -18,8 +18,8 @@ metadata:
 Documents are attachments on a ticket. Five methods: `add_document(rfc,
 filename=, content=)`, `list_documents(rfc)`, `download_document(document)`,
 `stream_document(document, chunk_size=)` and `delete_document(rfc,
-document_id)`. All are ticket-scoped — there is no standalone document
-resource on this client.
+document_id, path_style=)`. Add, list and download are ticket-scoped; delete
+can address the document by its id alone — see the gotcha below.
 
 ## Procedure
 
@@ -33,7 +33,8 @@ resource on this client.
    inputs and same URL resolution as `download_document`; the file never has
    to exist in memory whole.
 5. Write the bytes yourself; the client does not touch the filesystem.
-6. Remove an attachment with `delete_document(rfc, document.document_id)`. It
+6. Remove an attachment with `delete_document(rfc, document.document_id)`, or
+   pass the `Document` itself and let the client read the id off it. It
    returns nothing (the API answers with an empty body) — re-list to confirm.
 
 ## The Document model
@@ -107,9 +108,19 @@ from easyvista_python_client import EasyvistaClient
 with EasyvistaClient.from_env() as client:
     rfc = "YOUR_RFC_NUMBER"
     documents = client.list_documents(rfc)
-    # DELETE requests/{rfc}/documents/{document_id} -- nested on the ticket,
-    # like every other document operation. Returns nothing on success.
-    client.delete_document(rfc, documents[0].document_id)
+    # DELETE requests/{rfc}/documents/{document_id} -- the default route.
+    # Returns nothing on success. The Document itself is accepted too.
+    client.delete_document(rfc, documents[0])
+```
+
+On a deployment that grants the other route instead, the document is addressed
+by its id alone and the RFC is unused:
+
+```python
+from easyvista_python_client import EasyvistaClient
+
+with EasyvistaClient.from_env() as client:
+    client.delete_document(None, "YOUR_DOCUMENT_ID", path_style="top_level")
 ```
 
 ## Gotchas
@@ -160,8 +171,20 @@ with EasyvistaClient.from_env() as client:
   paths reuse the same error mapping and the same retry policy as the JSON one.
 - `filename` is derived, not always sent by the API. Fall back to a literal
   name before writing to disk.
-- `delete_document(rfc, document_id)` is **ticket-scoped**: it calls the
-  nested `DELETE requests/{rfc}/documents/{document_id}`. Both identifiers
-  must be non-blank — a blank one would silently address the collection
-  rather than one item, which `delete_document` refuses with `ValueError`
-  before sending anything.
+- `delete_document(rfc, document_id)` sends the **nested** `DELETE
+  requests/{rfc}/documents/{document_id}` by default. A second route,
+  `DELETE documents/{id}`, also exists on this API; the verified instance
+  denied it with 403, which is why `"nested"` is the default. Pass
+  `path_style="top_level"` (or set
+  `EasyvistaConfig(document_delete_path_style="top_level")`) on a deployment
+  that grants the other one — there `rfc_number` is unused, so pass `None`.
+  `document_id` must be non-blank in either style: a blank one would address
+  the collection rather than one item, which `delete_document` refuses with
+  `ValueError` before sending anything. You may pass the `Document` itself
+  instead of its id.
+- **A 403 on this API does not mean "denied".** It is also what an unknown
+  path answers, so a 403 alone never distinguishes a route a profile blocks
+  from one that does not exist. Both delete routes are declared in the
+  instance's own OpenAPI document, so the 403 measured against the top-level
+  one was a real denial — but that had to be established from the spec, not
+  from the status code.

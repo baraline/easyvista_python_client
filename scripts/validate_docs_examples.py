@@ -268,7 +268,7 @@ def run_offline(r: Results) -> None:
             catalog_code="SAMPLE_CATALOG",
             title="Printer down",
             description="The 3rd-floor printer is offline",
-            origin=7,
+            origin="Phone",
             department_id=9,
             urgency_id=8,
             impact_id=28,
