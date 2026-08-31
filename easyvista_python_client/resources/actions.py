@@ -33,8 +33,12 @@ def build_create_action(
     spec = RequestSpec("POST", f"requests/{rfc_number}/actions", json=payload.to_api())
 
     def parse(data: Any) -> Action:
-        records = extract_records(data)
-        return Action.model_validate(records[0] if records else data)
+        # The envelope key is passed explicitly: a deployment echoing the
+        # created record under an ``actions`` wrapper would otherwise hand
+        # ``model_validate`` the wrapper itself, and ``extra="allow"`` accepts
+        # it silently with every declared field ``None``.
+        records = extract_records(data, ACTIONS.envelope_key)
+        return Action.model_validate(records[0] if records else data, context=context)
 
     return spec, parse
 
@@ -56,8 +60,9 @@ def build_create_task(
     spec = RequestSpec("POST", f"requests/{rfc_number}/tasks", json=payload.to_api())
 
     def parse(data: Any) -> Action:
-        records = extract_records(data)
-        return Action.model_validate(records[0] if records else data)
+        # Same envelope reasoning as build_create_action's parser.
+        records = extract_records(data, ACTIONS.envelope_key)
+        return Action.model_validate(records[0] if records else data, context=context)
 
     return spec, parse
 

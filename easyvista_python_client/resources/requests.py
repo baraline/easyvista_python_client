@@ -130,8 +130,13 @@ def build_close_ticket(
     spec = RequestSpec("PUT", f"requests/{rfc_number}", json={"closed": closed})
 
     def parse(data: Any) -> Request:
-        records = extract_records(data)
-        return Request.model_validate(records[0] if records else data)
+        # Explicit rather than relying on ``"requests"`` happening to sit in
+        # ``extract_records``' hardcoded fallback tuple, which belongs to no
+        # resource in particular.
+        records = extract_records(data, REQUESTS.envelope_key)
+        return Request.model_validate(
+            records[0] if records else data, context=context
+        )
 
     return spec, parse
 

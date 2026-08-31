@@ -12,16 +12,25 @@ from collections.abc import Callable
 from typing import Any
 
 from .._transport import RequestSpec
+from ..config import (
+    DEFAULT_DOCUMENT_DELETE_PATH_STYLE,
+    DOCUMENT_DELETE_PATH_STYLES,
+    DocumentDeletePathStyle,
+)
 from ..models.document import Document
 from ..pagination import extract_records
 
 
 def _document_records(data: Any) -> list[dict[str, Any]]:
-    """Find the list of document dicts in a list response.
+    """Find the list of document dicts in a document response.
 
-    The live list wraps items under a capital-D ``Documents`` key (verified live),
-    which the generic ``extract_records`` (lowercase ``documents``/``records``) does
-    not match; check any case-insensitive ``documents`` key first, then fall back.
+    The live list wraps items under a capital-D ``Documents`` key (measured
+    2026-08-17 on one instance; may not generalise), which the generic
+    ``extract_records`` also now matches. This stays a separate helper for a
+    different reason: it checks a ``documents`` key *before* ``records``, the
+    priority the live list shape was verified against, and ``extract_records``
+    keeps ``records`` first. Both the list parser and the create parser go
+    through it, so one response shape has one reading.
     """
     if isinstance(data, dict):
         for key, value in data.items():
@@ -101,23 +110,47 @@ def build_list_documents(
     )
 
 
-def build_delete_document(rfc_number: str, document_id: str) -> RequestSpec:
-    """Delete one attachment, via the per-ticket NESTED path.
+def build_delete_document(
+    rfc_number: str | None,
+    document_id: str | int,
+    *,
+    path_style: DocumentDeletePathStyle = DEFAULT_DOCUMENT_DELETE_PATH_STYLE,
+) -> RequestSpec:
+    """Delete one attachment, by either of the two routes that exist for it.
 
-    ``DELETE requests/{rfc}/documents/{document_id}`` is live-verified
-    (2026-08-17): the document count went 5 → 4 and the target was absent from a
-    re-listing. The top-level ``DELETE documents/{id}`` returns HTTP 403.
+    The instance OpenAPI document read 2026-08-27 declares DELETE on **both**
+    ``requests/{RFC_NUMBER}/documents/{id}`` and ``documents/{id}``, marking
+    only the latter ``deprecated``. So the HTTP 403 measured against the
+    top-level form on the verified instance (2026-08-17, one instance, may not
+    generalise) was a profile denial, not a missing route -- this API answers
+    403 for an unknown path as well as for a denied one, so the status code
+    alone never said which.
 
-    Both identifiers are required and must be non-blank: a blank ``document_id``
-    would address the collection rather than an item, which is a very different
+    ``path_style="nested"`` (the default, and the form verified live 2026-08-17:
+    the document count went 5 -> 4 and the target was absent from a re-listing)
+    needs both identifiers non-blank. ``path_style="top_level"`` addresses the
+    document by id alone and ignores ``rfc_number`` entirely, which may be
+    ``None``. ``document_id`` must be non-blank either way: a blank one
+    addresses the collection rather than an item, which is a very different
     request to send by accident.
     """
-    rfc = str(rfc_number).strip()
-    if not rfc:
-        raise ValueError("rfc_number is required to delete a document")
+    if path_style not in DOCUMENT_DELETE_PATH_STYLES:
+        raise ValueError(
+            "path_style must be one of "
+            f"{DOCUMENT_DELETE_PATH_STYLES!r}, got {path_style!r}"
+        )
     doc = str(document_id).strip()
     if not doc:
         raise ValueError("document_id is required to delete a document")
+    if path_style == "top_level":
+        return RequestSpec("DELETE", f"documents/{doc}")
+    rfc = str(rfc_number or "").strip()
+    if not rfc:
+        raise ValueError(
+            "rfc_number is required to delete a document with the 'nested' "
+            "path style; pass path_style='top_level' to address the document "
+            "by its id alone"
+        )
     return RequestSpec("DELETE", f"requests/{rfc}/documents/{doc}")
 
 

@@ -20,7 +20,7 @@ from easyvista_python_client._async._transport import (
     Transport,
 )
 from easyvista_python_client._transport import RequestSpec
-from easyvista_python_client.config import EasyvistaConfig
+from easyvista_python_client.config import DocumentDeletePathStyle, EasyvistaConfig
 from easyvista_python_client.context import TicketContext
 from easyvista_python_client.directory import (
     RECENT_TICKETS_SORT,
@@ -738,15 +738,44 @@ class AsyncEasyvistaClient:
         )
         return parse(await self._transport.send(spec))
 
-    async def delete_document(self, rfc_number: str, document_id: str) -> None:
+    async def delete_document(
+        self,
+        rfc_number: str | None,
+        document_id: str | int | Document,
+        *,
+        path_style: DocumentDeletePathStyle | None = None,
+    ) -> None:
         """Remove an attachment from a ticket.
 
-        ``document_id`` is the ``DOCUMENT_ID`` from :meth:`list_documents`.
-        Live-verified 2026-08-17 by re-listing the ticket's documents
-        afterwards. Returns nothing: the API answers with an empty body.
+        ``document_id`` is the ``DOCUMENT_ID`` from :meth:`list_documents`, or
+        the :class:`Document` itself, whose ``DOCUMENT_ID`` is read off it -- a
+        record carrying none raises ``ValueError`` rather than sending a request
+        that would address the collection. Returns nothing: the API answers with
+        an empty body, so re-list to confirm.
+
+        Two routes exist for this. The instance OpenAPI document read 2026-08-27
+        declares DELETE on both ``requests/{rfc}/documents/{id}`` and
+        ``documents/{id}``, marking only the second ``deprecated``, so which one
+        works is a profile question rather than a routing one. ``path_style``
+        picks one for this call and defaults to
+        :attr:`EasyvistaConfig.document_delete_path_style`, itself ``"nested"``
+        -- the form verified live 2026-08-17 by re-listing the ticket's
+        documents afterwards, on one instance, which may not generalise. Under
+        ``"top_level"`` the id addresses the record on its own and
+        ``rfc_number`` is unused: pass ``None``.
         """
+        if isinstance(document_id, Document):
+            if not document_id.document_id:
+                raise ValueError(
+                    "this Document carries no DOCUMENT_ID; pass the id directly"
+                )
+            document_id = document_id.document_id
+        if path_style is None:
+            path_style = self.config.document_delete_path_style
         await self._transport.send(
-            documents_res.build_delete_document(rfc_number, document_id)
+            documents_res.build_delete_document(
+                rfc_number, document_id, path_style=path_style
+            )
         )
 
     async def download_document(self, document: Document | str) -> bytes:

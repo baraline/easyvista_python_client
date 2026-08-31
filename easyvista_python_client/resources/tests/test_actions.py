@@ -4,6 +4,7 @@ from easyvista_python_client.models.action import (
     Action,
     ActionUpdate,
     PostAction,
+    PostTask,
 )
 from easyvista_python_client.resources import actions as a
 from easyvista_python_client.resources.actions import (
@@ -173,3 +174,31 @@ def test_build_search_actions_refuses_an_unsafe_or_blank_rfc(rfc):
     """The guard is shared with ``build_list_actions``."""
     with pytest.raises(ValueError):
         a.build_search_actions(rfc)
+
+
+# --- the create parsers name their envelope ---------------------------------
+#
+# Both passed `extract_records(data)` with no envelope key. A deployment
+# echoing the created record under an `actions` wrapper handed
+# `model_validate` the wrapper itself, and `extra="allow"` accepted it
+# silently -- so the assert below is on `action_id`, not on the type: the old
+# code returned a perfectly well-formed `Action` with every field `None`.
+
+
+def test_build_create_action_unwraps_an_actions_envelope():
+    _, parser = a.build_create_action(
+        "I1", PostAction(action_type_id=94, group_id=3)
+    )
+    assert parser({"actions": [{"ACTION_ID": 9}]}).action_id == 9
+
+
+def test_build_create_action_unwraps_a_capital_a_actions_envelope():
+    _, parser = a.build_create_action(
+        "I1", PostAction(action_type_id=94, group_id=3)
+    )
+    assert parser({"Actions": [{"ACTION_ID": 9}]}).action_id == 9
+
+
+def test_build_create_task_unwraps_an_actions_envelope():
+    _, parser = a.build_create_task("I1", PostTask(action_type_id=94, group_id=3))
+    assert parser({"actions": [{"ACTION_ID": 9}]}).action_id == 9

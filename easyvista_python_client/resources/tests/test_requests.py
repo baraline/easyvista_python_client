@@ -190,3 +190,19 @@ def test_build_get_ticket_forwards_a_fields_projection():
     spec, _ = r.build_get_ticket("I1", fields=["RFC_NUMBER", "TITLE"])
     assert spec.params == {"fields": "RFC_NUMBER,TITLE"}
 
+
+def test_build_close_ticket_unwraps_a_requests_envelope():
+    """Green before and after -- it pins the accident.
+
+    This parser passed no envelope key and worked only because ``"requests"``
+    happens to sit in ``extract_records``' hardcoded fallback tuple, a list
+    that belongs to no resource in particular. The key is now explicit.
+    """
+    _, parser = r.build_close_ticket("I1")
+    assert parser({"requests": [{"RFC_NUMBER": "I1"}]}).rfc_number == "I1"
+
+
+def test_build_close_ticket_unwraps_a_capital_r_requests_envelope():
+    """Red before the case-insensitive match."""
+    _, parser = r.build_close_ticket("I1")
+    assert parser({"Requests": [{"RFC_NUMBER": "I1"}]}).rfc_number == "I1"

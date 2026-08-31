@@ -325,6 +325,62 @@ def test_delete_document_sends_a_delete_to_the_nested_path(config):
 
 
 @respx.mock
+def test_delete_document_top_level_path_style_addresses_the_document_by_id(
+    config,
+):
+    """Both routes are declared in the instance's own OpenAPI document.
+
+    Only the top-level one is marked ``deprecated`` there, so which one works
+    is a profile question rather than a routing one. ``rfc_number`` has no slot
+    in this route, hence ``None``.
+    """
+    route = respx.delete(f"{ROOT}/documents/12345_abcdef").mock(
+        return_value=httpx.Response(200)
+    )
+    with EasyvistaClient(config) as client:
+        client.delete_document(None, "12345_abcdef", path_style="top_level")
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_delete_document_takes_its_path_style_from_the_config(config):
+    """The keyword defaults to the config field, so a deployment sets it once."""
+    route = respx.delete(f"{ROOT}/documents/12345_abcdef").mock(
+        return_value=httpx.Response(200)
+    )
+    top_level = dataclasses.replace(config, document_delete_path_style="top_level")
+    with EasyvistaClient(top_level) as client:
+        client.delete_document(None, "12345_abcdef")
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_delete_document_accepts_a_document_record(config):
+    """The id is read off the record, so a caller need not unpack it."""
+    route = respx.delete(f"{ROOT}/requests/I240101_0001/documents/12345_abcdef").mock(
+        return_value=httpx.Response(200)
+    )
+    document = Document.model_validate({"DOCUMENT_ID": "12345_abcdef"})
+    with EasyvistaClient(config) as client:
+        client.delete_document("I240101_0001", document)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_delete_document_rejects_a_document_without_an_id(config):
+    """A record carrying no DOCUMENT_ID would address the collection."""
+    route = respx.delete(f"{ROOT}/requests/I240101_0001/documents/").mock(
+        return_value=httpx.Response(200)
+    )
+    document = Document.model_validate({"DOCUMENT": "report.pdf"})
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="DOCUMENT_ID"):
+            client.delete_document("I240101_0001", document)
+    assert route.call_count == 0
+
+
+@respx.mock
+@respx.mock
 def test_download_document_fetches_the_ddl_href(config):
     route = respx.get("https://ev.test/dl/7").mock(
         return_value=httpx.Response(200, content=b"\x89PNG\r\n\x1a\n binary")

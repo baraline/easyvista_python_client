@@ -191,3 +191,21 @@ def test_dataclasses_replace_composes_with_from_env(monkeypatch):
     assert cfg.token == "tok123"
 
 
+# --- the two attachment-delete routes ----------------------------------------
+
+
+def test_document_delete_path_style_defaults_to_nested():
+    """The form verified live 2026-08-17, where the top-level one answered 403."""
+    cfg = EasyvistaConfig(server="https://ev.test", account="acme", token="t")
+    assert cfg.document_delete_path_style == "nested"
+
+
+def test_document_delete_path_style_rejects_an_unknown_value():
+    """A typo surfaces at config build, not at the first delete."""
+    with pytest.raises(ValueError, match="document_delete_path_style"):
+        EasyvistaConfig(
+            server="https://ev.test",
+            account="acme",
+            token="t",
+            document_delete_path_style="nested_v2",
+        )

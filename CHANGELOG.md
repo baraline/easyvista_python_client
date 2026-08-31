@@ -83,6 +83,13 @@ a deprecation policy will follow the 1.0 release.
   column poisons the whole record. Note the verified instance's own OpenAPI
   declares `fields` on `GET /requests` but not on `GET /requests/{rfc_number}`
   (tier 2), so the item route may ignore it.
+- `EasyvistaConfig.document_delete_path_style` and
+  `delete_document(..., path_style=)`. The instance's own OpenAPI declares
+  DELETE on **both** `requests/{rfc}/documents/{id}` and `documents/{id}`,
+  marking only the second `deprecated` — so the 403 measured against the
+  top-level form was a profile denial, not a missing route. The default
+  `"nested"` is unchanged. `delete_document` also accepts a `Document` in place
+  of its id, and `rfc_number` may be `None` under `"top_level"`.
 - `references.label_from_record` — the best human label anywhere in a
   reference-table row, matched by **suffix**. A reference table does not name
   its label column after the table: `groups` returns `GROUP_EN`, `locations`
@@ -124,6 +131,14 @@ a deprecation policy will follow the 1.0 release.
   `extra_payload`, instead of pydantic's bare "Extra inputs are not permitted".
   The message stops short of promising the write will work: on this API an
   exclusion is usually a measured misbehaviour, and a 200 is not a receipt.
+- **Envelope matching is now case-insensitive**, over the same fixed candidate
+  list and in the same priority order — never a scan of whatever keys the
+  payload carries. Envelope casing is not stable across deployments: the
+  verified instance answers a capital-D `Documents` where its own OpenAPI
+  examples spell every envelope lowercase. A matched list must also be empty or
+  hold at least one dict, so a scalar list under an envelope name
+  (`{"REQUESTS": ["a", "b"]}`) falls through to the bare-record reading instead
+  of silently returning `[]`.
 - **A `[bracketed]` untranslated label no longer wins over a real sibling
   translation.** `references._nested_label` scanned `_EN`/`_FR`/`_PATH` and
   accepted any non-empty string, while `localized_label` fifty lines below
@@ -152,6 +167,21 @@ a deprecation policy will follow the 1.0 release.
 - `EasyvistaConfig.__hash__` covers the scalar identity fields only. The hash
   the dataclass would generate spans every field and raises `TypeError` once a
   mapping field is non-empty; `__eq__` still compares every field.
+
+### Fixed
+
+- **The `create_action`, `create_task` and `close_ticket` parsers now name
+  their envelope.** All three called `extract_records(data)` with no envelope
+  key, so a deployment echoing the created record under an `actions` wrapper
+  handed `model_validate` the wrapper itself — and `extra="allow"` accepted it
+  silently, yielding a well-formed record with every declared field `None`.
+  `close_ticket` worked only because `"requests"` happened to sit in a
+  hardcoded fallback list belonging to no resource in particular.
+- **The `add_document` parser read its response by a different rule than
+  `list_documents`.** It used the case-sensitive `extract_records` while the
+  list parser was already case-insensitive — for the same resource on the same
+  instance, the one known to answer a capital-D `Documents`. A create echoed
+  that way produced an all-`None` `Document` built from the wrapper.
 
 ### Removed
 

@@ -7,9 +7,23 @@ import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from ._version import __version__ as _package_version
+
+DocumentDeletePathStyle = Literal["nested", "top_level"]
+
+#: The two routes an EasyVista deployment may expose for deleting a ticket
+#: attachment. Both are declared in the instance OpenAPI document read
+#: 2026-08-27 (authoritative for that deployment's routes):
+#: ``DELETE requests/{RFC_NUMBER}/documents/{id}`` and ``DELETE documents/{id}``,
+#: the latter marked ``deprecated`` there. Exposed as a module constant so a
+#: caller can validate a value without importing a private name.
+DOCUMENT_DELETE_PATH_STYLES: tuple[DocumentDeletePathStyle, ...] = (
+    "nested",
+    "top_level",
+)
+DEFAULT_DOCUMENT_DELETE_PATH_STYLE: DocumentDeletePathStyle = "nested"
 
 #: ``User-Agent`` sent when :attr:`EasyvistaConfig.user_agent` is unset.
 #:
@@ -55,6 +69,16 @@ class EasyvistaConfig:
     ``server`` is the bare instance host, e.g. ``"https://my.easyvista.com"``. A
     trailing slash is stripped; do not append the ``/api/...`` path, which
     :attr:`api_root` builds from ``api_version`` and ``account``.
+
+    ``document_delete_path_style`` selects which of the two attachment-delete
+    routes :meth:`delete_document` sends. Both are declared in the instance
+    OpenAPI document read 2026-08-27 -- ``DELETE requests/{rfc}/documents/{id}``
+    and ``DELETE documents/{id}``, the latter marked ``deprecated`` there -- so
+    which one a deployment actually grants is a profile question, not a routing
+    one. The default ``"nested"`` is the form verified live 2026-08-17 on one
+    instance, where the top-level form answered 403; that measurement may not
+    generalise. Set ``"top_level"`` on a deployment that grants the top-level
+    route instead, or when only a document id is in hand.
 
     Several settings exist so a deployment that differs from the verified one
     needs no fork. None is a vendor-documented knob; they are client-side
@@ -106,6 +130,9 @@ class EasyvistaConfig:
     verify_ssl: bool | str | ssl.SSLContext = True
     default_max_rows: int = 100
     api_version: str = "v1"
+    document_delete_path_style: DocumentDeletePathStyle = (
+        DEFAULT_DOCUMENT_DELETE_PATH_STYLE
+    )
     extra_headers: Mapping[str, str] = field(default_factory=dict, repr=False)
     user_agent: str | None = None
     default_params: Mapping[str, Any] = field(default_factory=dict)
@@ -131,6 +158,12 @@ class EasyvistaConfig:
             raise ValueError(
                 "An EasyVista credential is required: pass token=... or "
                 "login=... and password=..."
+            )
+        if self.document_delete_path_style not in DOCUMENT_DELETE_PATH_STYLES:
+            raise ValueError(
+                "document_delete_path_style must be one of "
+                f"{DOCUMENT_DELETE_PATH_STYLES!r}, got "
+                f"{self.document_delete_path_style!r}"
             )
         reject_authorization(self.extra_headers, "EasyvistaConfig.extra_headers")
         # Copy, then freeze. A frozen dataclass holding a live dict is not

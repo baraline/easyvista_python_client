@@ -100,3 +100,53 @@ def test_delete_document_requires_both_identifiers():
         build_delete_document("", "12345_abcdef")
     with pytest.raises(ValueError, match="document_id"):
         build_delete_document("I240101_0001", "")
+
+
+# --- two routes exist for the delete; a 403 never said which ----------------
+#
+# The instance OpenAPI document read 2026-08-27 declares DELETE on BOTH
+# `requests/{rfc}/documents/{id}` and `documents/{id}`, marking only the
+# latter `deprecated`. So the 403 measured against the top-level form was a
+# profile denial, not a missing route -- this API answers 403 for an unknown
+# path as well as a denied one.
+
+
+def test_build_delete_document_top_level_style():
+    spec = build_delete_document("I240101_0001", "12345_abcdef", path_style="top_level")
+    assert spec.method == "DELETE"
+    assert spec.path == "documents/12345_abcdef"
+
+
+def test_build_delete_document_top_level_ignores_a_missing_rfc_number():
+    """The top-level route has no slot for an RFC, so refusing a missing one
+    would be surprising and requiring one would defeat the point."""
+    spec = build_delete_document(None, "d1", path_style="top_level")
+    assert spec.path == "documents/d1"
+
+
+def test_build_delete_document_rejects_a_blank_document_id_in_either_style():
+    """``DELETE documents/`` addresses the collection just as
+    ``DELETE requests/{rfc}/documents/`` does."""
+    for style in ("nested", "top_level"):
+        with pytest.raises(ValueError, match="document_id"):
+            build_delete_document("I240101_0001", "  ", path_style=style)
+
+
+def test_build_delete_document_rejects_an_unknown_path_style():
+    with pytest.raises(ValueError, match="path_style"):
+        build_delete_document("I240101_0001", "d1", path_style="nested_v2")
+
+
+def test_build_add_document_unwraps_a_capital_d_documents_envelope():
+    """The create parser read the response by a different rule than the list.
+
+    ``_first_document`` used the case-SENSITIVE ``extract_records`` while
+    ``_document_records`` fifteen lines below was already case-insensitive --
+    for the same resource on the same instance, the one known to answer a
+    capital-D ``Documents``. A create echoed that way yielded an all-``None``
+    ``Document`` built from the wrapper.
+    """
+    _, parser = d.build_add_document("I1", filename="a.txt", content=b"x")
+    parsed = parser({"Documents": [{"DOCUMENT": "a.txt", "DOCUMENT_ID": "x1"}]})
+    assert parsed.filename == "a.txt"
+    assert parsed.document_id == "x1"
