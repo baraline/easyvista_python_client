@@ -13,7 +13,13 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from .common import EasyvistaModel, EasyvistaWriteModel, OptionalInt
+from .common import (
+    EasyvistaModel,
+    EasyvistaWriteModel,
+    OptionalDateTime,
+    OptionalInt,
+    _shipped_keys,
+)
 
 
 class Request(EasyvistaModel):
@@ -71,28 +77,40 @@ class Request(EasyvistaModel):
     recipient_id: OptionalInt = Field(default=None, alias="RECIPIENT_ID")
     owner_id: OptionalInt = Field(default=None, alias="OWNER_ID")
 
-    # timestamps and time limits — verified *returned*; their accepted write
-    # format is NOT verified (both a string and an int probe return HTTP 590),
-    # so no datetime parsing is claimed here. See spec open item O-590-DATE.
+    # timestamps — ISO 8601 with an EXPLICIT UTC OFFSET and millisecond
+    # precision, verified live 2026-08-17 against our own UTC clock, so these
+    # parse to aware datetimes. Their accepted WRITE format is still NOT
+    # verified (both a string and an int probe return HTTP 590), which is why
+    # no write model carries a datetime. An unset date is ``""``, handled by
+    # OptionalDateTime. Note ``_UT`` does NOT mean UTC-normalized: those columns
+    # carry the same local offset as LAST_UPDATE.
     #
     # These are the OFFICIAL time fields, portable across EasyVista
     # deployments. The instance-specific GTR/GTI family (``E_GTR_STATUS``,
     # ``E_GTI_UT``, ``E_DELAI_PEC``…) is deliberately NOT declared: it does not
     # exist on another deployment, so it belongs in the custom bucket of
     # :meth:`classify_fields`, reached by name at the call site.
-    submit_date_ut: str | None = Field(default=None, alias="SUBMIT_DATE_UT")
-    creation_date_ut: str | None = Field(default=None, alias="CREATION_DATE_UT")
-    max_resolution_date_ut: str | None = Field(
+    submit_date_ut: OptionalDateTime = Field(default=None, alias="SUBMIT_DATE_UT")
+    creation_date_ut: OptionalDateTime = Field(default=None, alias="CREATION_DATE_UT")
+    max_resolution_date_ut: OptionalDateTime = Field(
         default=None, alias="MAX_RESOLUTION_DATE_UT"
     )
-    expected_date_ut: str | None = Field(default=None, alias="EXPECTED_DATE_UT")
-    end_date_ut: str | None = Field(default=None, alias="END_DATE_UT")
-    last_update: str | None = Field(default=None, alias="LAST_UPDATE")
+    expected_date_ut: OptionalDateTime = Field(default=None, alias="EXPECTED_DATE_UT")
+    end_date_ut: OptionalDateTime = Field(default=None, alias="END_DATE_UT")
+    last_update: OptionalDateTime = Field(default=None, alias="LAST_UPDATE")
     sla_id: OptionalInt = Field(default=None, alias="SLA_ID")
-    # Verified live (2026-07-28 Phase 0 probe, U6) as a string on every ticket
-    # checked -- never an int -- so no int branch is declared here.
-    time_used_to_solve_request: str | None = Field(
-        default=None, alias="TIME_USED_TO_SOLVE_REQUEST"
+    # Type, tier 4: measured as a string on every ticket checked in one
+    # 2026-07-28 probe of one instance -- which is evidence about that instance
+    # on that day, not about the column. Nothing vendor-documents it. So the
+    # declaration accepts both forms and coerces neither
+    # (``union_mode="left_to_right"`` tries ``str`` first, and pydantic's
+    # ``str`` does not absorb an int). Declared ``str`` alone, a deployment
+    # returning ``3600`` failed the whole record -- and on a search, the whole
+    # page.
+    time_used_to_solve_request: str | int | None = Field(
+        default=None,
+        alias="TIME_USED_TO_SOLVE_REQUEST",
+        union_mode="left_to_right",
     )
 
     @model_validator(mode="after")
@@ -115,58 +133,267 @@ class Request(EasyvistaModel):
 class PostRequest(EasyvistaWriteModel):
     """Payload for creating a ticket.
 
-    Field set matches the documented create body (``docs/API_Info.md``),
-    verified against a live instance: a ticket needs at minimum ``catalog_code``
-    plus ``title`` (and typically ``origin`` / ``department_id``). The exact
-    mandatory fields are configured **per catalog on the EasyVista side**, so the
-    client cannot know them statically; a missing one is rejected server-side and
-    surfaces as :class:`EasyvistaValidationError` (HTTP 590, code 2013), not a
-    retried server error. ``custom_fields`` values are serialized with an ``e_``
+    **Vendor-required is one field: ``catalog_guid`` or ``catalog_code``** (tier
+    1). Everything else the vendor lists is optional.
+
+    That is not the whole story, and the gap between it and practice is
+    expensive. Measured on one instance (tier 4, 2026-08-18): the full
+    seven-field body -- catalog, origin, title, description, department_id,
+    urgency_id, impact_id -- creates successfully on every catalog tried, while
+    the same body minus the four ids creates on some catalogs and is rejected on
+    others. Two catalogs of one instance, identical remaining bytes, one
+    accepted and one refused.
+
+    The rejection is HTTP 590 / code 2013 carrying a **SQL parser error**
+    (``=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...``) that
+    names no field at all. It reads like a server defect. It is not: it is what
+    an under-specified create body looks like here.
+
+    Which fields a catalog can do without is configured per catalog on the
+    EasyVista side, so no client can know it statically. Sending the fuller body
+    is therefore the safer default in practice -- but it is a hedge against a
+    per-catalog configuration, not an API requirement, and an instance that
+    needs less is not misbehaving.
+
+    Ids may be sent as JSON numbers or as strings; both are accepted (tier 4:
+    measured on one instance, 2026-08-25). The documented examples quote them.
+
+    What follows is **this model's** accept-and-serialize rule for each id, not
+    a claim about what the API will take -- per the finding just above, it
+    takes either form. The declared types follow the vendor's documented column
+    types (tier 1, ``docs/vendor-api-reference.md``), so a caller holding a
+    value in the documented form never has to convert it:
+
+    * ``urgency_id`` and ``severity_id`` are typed ``int``: the vendor
+      documents both as **integer** (tier 1) and nothing measured contradicts
+      that, so a quoted value is coerced to a number on the way out.
+    * ``origin`` is ``int | str``. The vendor documents it as a **string**
+      (tier 1); an int was separately measured accepted on one instance (tier
+      4: measured on one instance; date not recorded). Whichever type is
+      passed serializes unchanged, with no coercion between them.
+    * ``department_id``, ``location_id`` and ``recipient_id`` are ``int | str``
+      for one shared reason: the vendor documents all three as **strings**
+      (tier 1). An int is what the measured seven-field create body above sent
+      for ``department_id`` (tier 4, 2026-08-18); nothing independently
+      confirms a string in any of the three, nor an int in ``location_id`` or
+      ``recipient_id``, so the wider type is a precaution rather than a tier-4
+      finding. Whichever type is passed serializes unchanged.
+    * ``impact_id`` is ``int | str`` and is the one exception to "serializes
+      unchanged". The vendor documents it as an **integer** (tier 1), so a
+      numeric string is coerced into that documented form -- ``"28"`` ships as
+      ``28`` -- via ``union_mode="left_to_right"``. The ``str`` branch stays so
+      that a caller with a non-numeric value is not rejected; such a value
+      passes through as written.
+
+    **A rejected create may still have created the ticket.** Measured: 12
+    attempts returned 3 ``RFC_NUMBER``s and afterwards all 12 tickets existed --
+    9 of 9 failures had written a row, with the ids they were missing left null
+    (tier 4: measured on one instance, 2026-08-25). So a 590 here means
+    *possibly created*, never *not created*: retrying duplicates, and the
+    caller never learns the id. Reconcile by ``external_reference`` rather than
+    trusting the error.
+
+    The recipient and requestor families each offer several ways to name the
+    same thing, and the vendor documents a priority order within each --
+    ``recipient`` id, then identification, then mail, then name; ``requestor``
+    has no id variant here, so identification, then mail, then name. The
+    department and location families are narrower: the vendor gives each only
+    an id-or-code choice (``department_id``/``department_code``,
+    ``location_id``/``location_code``), with no identification, mail or name
+    variant. Tier 1 for all of these fields: they are vendor-documented and are
+    **not** verified live by this package's test suite, so a deployment may
+    reject one the vendor lists.
+
+    ``submit_date`` is a string whose accepted format follows the employee's
+    location settings, so no ``datetime`` is accepted here -- this package has
+    never established a write format for an EasyVista date (both a string and
+    an int probe returned HTTP 590; tier 4: measured on one instance,
+    2026-07-16), which is why no write model carries one.
+
+    ``custom_fields`` values are serialized with an ``e_``
     prefix unless they already start with ``e_`` (see :class:`EasyvistaWriteModel`).
 
-    ``catalog_code`` is the only verified way to name a catalog here. An earlier
-    ``catalog_guid`` field was removed: it is absent from the documented create
-    body, and it cannot be verified on a profile where ``GET /catalog-requests``
-    returns 403 (no way to obtain a real catalog GUID).
+    ``catalog_guid`` and ``catalog_code`` both name the ticket's subject, and one
+    of them is required -- tier 1, and the vendor documents the **guid** as the
+    preferred form. An earlier version of this model dropped ``catalog_guid``
+    entirely on the grounds that it was "absent from the documented create
+    body"; the document consulted was a customer handover note rather than the
+    vendor specification, and the vendor documents it plainly. Note that
+    ``GET /catalog-requests`` is 403 on a restricted profile, so an instance may
+    give you no way to *read* a catalog GUID even though the create accepts one.
 
     ``description`` supplied at create time was **not** readable back through
-    either Memo on the verified instance -- neither ``DESCRIPTION`` nor
-    ``COMMENT``. To set body text you can read again, follow the create with
+    either Memo on the verified instance (tier 4: measured on one instance,
+    2026-07-28) -- neither ``DESCRIPTION`` nor ``COMMENT``. To set body text
+    you can read again, follow the create with
     ``update_ticket(rfc, RequestUpdate(description=...))``.
+
+    ``workflow_start`` is a boolean and is sent even when ``False``, so a
+    caller disabling the workflow is not silently overridden -- that part is
+    real and unchanged. Its provenance is not like the fields above, though:
+    it does **not** appear anywhere in the vendor's own create-body
+    documentation. It is declared only in the instance's own OpenAPI schema
+    for ``POST /requests`` -- "Optional. If true, starts the workflow for the
+    created incident." -- which makes it **tier 3, illustrative only**: that
+    schema is example-derived, not a normative contract (see
+    ``docs/vendor-api-reference.md``). Treat it as unverified until tested
+    against the deployment you use it on.
     """
 
+    catalog_guid: str | None = None
     catalog_code: str | None = None
+    # Asset and configuration-item selectors, each family in the vendor's
+    # documented priority order (tier 1, docs/vendor-api-reference.md).
+    #
+    # The wire spellings have NO underscore -- ``assetid``, ``assettag``.
+    # ``to_api()`` serializes by ATTRIBUTE NAME (``model_dump()`` without
+    # ``by_alias``), so an alias would never reach the body and renaming these
+    # to ``asset_id``/``asset_tag`` would ship a key the vendor does not
+    # document. The documented case-insensitivity is not underscore-
+    # insensitivity.
+    #
+    # The vendor types all six as **string**. ``assetid`` and ``ci_id`` are
+    # widened to ``int | str`` for the same reason ``recipient_id`` is: a caller
+    # holding ``Asset.asset_id`` holds an int. Whichever type is passed
+    # serializes unchanged, with no coercion between them. Tier 1, and NOT
+    # verified live by this package's suite -- a deployment may reject one the
+    # vendor lists.
+    assetid: int | str | None = None
+    assettag: str | None = None
+    asset_name: str | None = None
+    ci_id: int | str | None = None
+    ci_asset_tag: str | None = None
+    ci_name: str | None = None
     title: str | None = None
     description: str | None = None
-    origin: int | None = None
-    department_id: int | None = None
+    origin: int | str | None = None
+    department_id: int | str | None = None
+    department_code: str | None = None
+    location_id: int | str | None = None
+    location_code: str | None = None
     urgency_id: int | None = None
-    impact_id: int | None = None
+    impact_id: int | str | None = Field(default=None, union_mode="left_to_right")
     severity_id: int | None = None
-    recipient_id: int | None = None
+    recipient_id: int | str | None = None
     recipient_mail: str | None = None
+    recipient_name: str | None = None
+    recipient_identification: str | None = None
+    requestor_identification: str | None = None
+    requestor_mail: str | None = None
+    requestor_name: str | None = None
+    parentrequest: str | None = None
+    phone: str | None = None
+    submit_date: str | None = None
+    workflow_start: bool | None = None
     external_reference: str | None = None
+
+    @model_validator(mode="after")
+    def _require_a_catalog_identifier(self) -> PostRequest:
+        """Refuse a create body with no subject.
+
+        Tier 1: the vendor documents ``catalog_guid`` OR ``catalog_code`` as the
+        only required part of a create body. Sent without either, the server
+        answers HTTP 590 with a SQL parser error naming no field at all, which
+        is easy to misread as a server defect -- so this is refused here, where
+        the message can say what is missing.
+
+        The check reads the body ``to_api()`` will actually send, not the
+        attributes declared on this model, so
+        ``extra_payload={"CATALOG_GUID": ...}`` satisfies it. That is not a
+        courtesy: ``extra_payload`` is the documented route past a declared
+        field, and a guard that could not see it would refuse bodies the API
+        accepts. Deriving from ``to_api()`` also means the check cannot drift
+        from that method's documented case-insensitive merge rule.
+        """
+        if not _shipped_keys(self) & {"catalog_guid", "catalog_code"}:
+            raise ValueError(
+                "a create body needs a subject: pass catalog_guid (preferred) "
+                "or catalog_code, on the model or through extra_payload"
+            )
+        return self
 
 
 class RequestUpdate(EasyvistaWriteModel):
     """Payload for updating a ticket via PUT.
 
-    ``docs/API_Info.md`` documents only the create, comment and close bodies, so
-    the update body is not vendor-documented. Every field here is one verified
-    accepted against a live instance -- ``title`` by the Phase 0 probe and by
-    ``integration_tests/test_live_ticket_identity.py``. Nothing is added
-    speculatively: an unaccepted field would silently no-op or raise HTTP 590.
+    The vendor documents only the create, comment and close bodies
+    (``docs/vendor-api-reference.md``), so the update body is not
+    vendor-documented. Every field here is one verified accepted against a
+    live instance **by re-reading the ticket afterwards**, not by trusting
+    HTTP 200 (tier 4: measured on one instance across several sessions; date
+    not recorded) — that distinction matters on this API, where a write can
+    return 200 and change nothing.
 
     ``description`` writes the ticket's **COMMENT** Memo, not ``DESCRIPTION`` --
-    verified live. EasyVista models ``COMMENT`` as the request's justification
-    and ``DESCRIPTION`` as a separate Memo; which one a deployment actually
-    populates is a per-instance configuration choice. On the instance this
-    client was verified against, ``DESCRIPTION`` is empty on every ticket and
-    ``COMMENT`` carries the body text. Read it back with
-    ``resolve_memo("requests/{rfc}/comment")``, or take
-    ``TicketContext.comment``, which resolves it for you.
+    verified live by reading the text back, and pinned by
+    ``integration_tests/test_live_ticket_metadata.py``.
+
+    EasyVista models ``COMMENT`` as the request's justification and
+    ``DESCRIPTION`` as a separate Memo. Which one a deployment populates is a
+    per-instance configuration choice, and it is **not** reliably detectable at
+    runtime. A pooled 77-row sample of one instance across four different
+    orderings found ``COMMENT`` populated on 57 rows, ``DESCRIPTION`` on 27,
+    *both* on 24 and neither on 17 -- and the proportions flipped depending on
+    which slice was sampled, so a majority vote over a sample answers whichever
+    way the sort happened to fall (measured 2026-08-18). An earlier 15-ticket
+    sample that found ``DESCRIPTION`` empty everywhere was not representative;
+    do not rely on that being true of any instance. Treat the body memo as
+    operator configuration, not as something to infer.
+
+    Read ``COMMENT`` back with ``resolve_memo("requests/{rfc}/comment")``, or
+    take ``TicketContext.comment``, which resolves it for you.
+
+    **Deliberately absent** (verified 2026-08-17):
+
+    * ``status_id`` — there is **no flat status update on this API**. It was a
+      field here until 2026-08-25 and it never worked: sent alone the PUT is
+      rejected 590/2013, and sent beside any other field the PUT returns **200,
+      applies the other field, and drops the status in silence** (measured:
+      title updated, ``STATUS_ID`` unchanged). A write that reports success and
+      stores nothing is worse than one that fails, so the field is gone and
+      ``extra="forbid"`` now makes ``RequestUpdate(status_id=...)`` raise at
+      construction instead.
+
+      Set a status with :meth:`~easyvista_python_client.EasyvistaClient.set_status`,
+      which sends the documented ``{"closed": {"status_GUID": ...}}`` body. That
+      route reaches **every** status, not just terminal ones -- all six statuses
+      tried landed on exactly the one requested. It is addressed by
+      ``STATUS_GUID``, not by ``STATUS_ID``.
+    * ``severity_id`` -- rejected with HTTP 590 (code 2013). Tier 4: measured on
+      one instance, 2026-08-17.
+    * ``urgency_id`` -- ``URGENCY_ID`` raised HTTP 590 *and the value still
+      changed*, so the API's behaviour there is not one this model can express
+      honestly. Tier 4, measured 2026-08-17, and with counter-evidence: the
+      instance's own OpenAPI declares ``Urgency_ID`` on
+      ``PUT /requests/{rfc_number}`` as a **string**, while the probe that
+      measured the 590 sent an **int**. The exclusion may therefore be a type
+      mismatch of our own making rather than an API limit -- unresolved,
+      tracked as O-URG in ``docs/vendor-api-reference.md``. Note the
+      counter-evidence is tier 3 (a spec *schema*, which on this API is
+      example-derived and not normative), so it is a reason to test, not a
+      reason to assume.
+
+      Either way this is an **update**-path finding only: on the CREATE path
+      ``urgency_id`` is vendor-documented and lands cleanly (see
+      :class:`PostRequest`).
+    * a priority field — EasyVista derives priority from urgency x impact rather
+      than exposing a writable column.
+
+    To send ``status_id``, ``severity_id`` or ``urgency_id`` anyway on a
+    deployment where they work, use ``extra_payload`` -- and re-read the
+    ticket afterwards, because a 200 from this endpoint is not a receipt.
+    ``extra_payload`` does **not** help with priority: there is no writable
+    column for it to reach.
+
+    ``external_reference`` is capped at 50 characters: 50 accepted, 51 rejected
+    server-side (tier 4 -- bisected live on one instance, 2026-08-17). The cap
+    is enforced here so the round trip is saved; over-length is rejected rather
+    than truncated either way. A deployment with a wider column can bypass the
+    cap with ``extra_payload``.
     """
 
-    status_id: int | None = None
     title: str | None = None
     description: str | None = None
+    impact_id: int | None = None
+    owner_id: int | None = None
+    external_reference: str | None = Field(default=None, max_length=50)

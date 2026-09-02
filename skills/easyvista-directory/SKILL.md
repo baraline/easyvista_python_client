@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the departments and employees resources (writes are additionally profile-gated)."
 metadata:
   package: easyvista-python-client
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -24,14 +24,22 @@ skill for the rules; they are not repeated here.
 
 ## Resolving a department by name
 
-The main reason this skill exists. `find_departments(name, limit=None)` does
-the right thing in one call:
+The main reason this skill exists. `find_departments(name, limit=None,
+by="auto")` does the right thing in one call:
 
-- **Fast path:** an all-digit `name` matches `DEPARTMENT_ID` exactly;
-  otherwise `DEPARTMENT_CODE` exactly. A hit returns immediately.
+- **Fast path:** `by="auto"` matches `DEPARTMENT_CODE` exactly; for an
+  all-digit name it tries `DEPARTMENT_CODE` first and then `DEPARTMENT_ID`.
+  Code first is deliberate — a department whose code is all digits used to be
+  looked up as an id, returning a **different department with no error**. The
+  fallback costs one extra request only when the digits are an id and not a
+  code. Pin one column with `by="DEPARTMENT_ID"`, give your own order with a
+  list, or pass `by=[]` to skip the fast path.
 - **Fuzzy fallback:** scans every department client-side and matches `name`
   as a substring of any string field, normalized so
-  `"Acme Corp" == "ACME-CORP" == "acmecorp"`.
+  `"Acme Corp" == "ACME-CORP" == "acmecorp"` and accent-folded, so an
+  unaccented search term matches an accented label. That matters on any
+  instance whose department names are not plain ASCII — before it, a French
+  label was unreachable unless you typed the accents.
 - A name that cannot be expressed in the search grammar (it contains a `"`)
   skips the server fast path entirely and goes straight to the local scan,
   so it returns correct results rather than raising.
@@ -92,7 +100,7 @@ from easyvista_python_client import EasyvistaClient
 with EasyvistaClient.from_env() as client:
     note = client.get_department_comment(42)
     if note is None:
-        print("no note, or the profile cannot read it")
+        print("no note")  # a 403/404 raises instead of returning None -- see Gotchas
     else:
         print(repr(note))  # "" means the memo exists and is empty
 ```
@@ -136,7 +144,21 @@ with EasyvistaClient.from_env() as client:
 - `get_department_comment` returns `""` for an empty memo and `None` only
   when the memo is absent — but it propagates transport errors, so a
   403/404 raises rather than returning `None`. That distinction is
-  deliberate.
+  deliberate. Inside `get_department_context` the same read is wrapped and
+  degrades to `None` instead; the bundle never fails on one branch — and
+  records the swallow in `ctx.degraded` so you can tell "no note" from "the
+  note was forbidden".
+- **The department memo route selects a *column*, not a fixed path.** In the
+  instance's own OpenAPI document the last segment of
+  `GET departments/{id}/{comment}` is a path *parameter*, and the sibling
+  `GET requests/{rfc_number}/{comment}` describes it as "Memo field type,
+  could be comment, description". The default `"comment_department"` is only
+  the column the verified instance carries, so a deployment naming its
+  department memo differently passes its own:
+  `get_department_comment(id, memo_field="comment_service")`, or
+  `get_department_context(id, memo_fields=("comment_service",))` — a sequence
+  there, mirroring `get_ticket_context`, with every resolved memo landing in
+  `ctx.memos` and `ctx.note` being the first with text.
 - `find_departments`' fuzzy fallback scans **every** department. On a large
   instance it pages the whole table; pass `limit=` and prefer an exact code
   when you have one.

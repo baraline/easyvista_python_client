@@ -69,3 +69,143 @@ def test_repr_does_not_leak_secrets():
         server="https://ev.example.com", account="acme", login="u", password="PW123"
     )
     assert "PW123" not in repr(basic)
+
+
+# --- per-deployment adaptation settings --------------------------------------
+#
+# Five settings exist so a deployment differing from the verified one needs no
+# fork. Each defaults to the value the verified instance already sees, so these
+# first assertions are what keep "adding a knob" from changing anyone's wire.
+
+
+def test_adaptation_settings_default_to_todays_behaviour():
+    cfg = EasyvistaConfig(server="https://ev.example.com", account="acme", token="abc")
+    assert cfg.extra_headers == {}
+    assert cfg.default_params == {}
+    assert cfg.user_agent is None
+    assert cfg.additional_download_hosts == frozenset()
+    assert cfg.verify_ssl is True
+
+
+@pytest.mark.parametrize("key", ["Authorization", "authorization", "AUTHORIZATION"])
+def test_extra_headers_refuses_the_credential_in_any_casing(key):
+    # HTTP header names are case-insensitive, so the guard must be too: an
+    # Authorization key here would silently shadow config.token with a secret
+    # the client cannot see, redact from a repr, or rotate.
+    with pytest.raises(ValueError, match="must not set"):
+        EasyvistaConfig(
+            server="https://ev.example.com",
+            account="acme",
+            token="abc",
+            extra_headers={key: "Bearer other"},
+        )
+
+
+def test_mapping_settings_are_copied_and_read_only():
+    # A frozen dataclass holding a live dict is not frozen. Both directions
+    # matter: the caller's dict must not stay aliased, and the attribute must
+    # not be writable through the mapping.
+    headers = {"X-Api-Key": "k"}
+    params = {"formatDate": "iso"}
+    cfg = EasyvistaConfig(
+        server="https://ev.example.com",
+        account="acme",
+        token="abc",
+        extra_headers=headers,
+        default_params=params,
+    )
+    headers["X-Injected"] = "nope"
+    params["injected"] = "nope"
+    assert cfg.extra_headers == {"X-Api-Key": "k"}
+    assert cfg.default_params == {"formatDate": "iso"}
+    with pytest.raises(TypeError):
+        cfg.extra_headers["X"] = "y"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        cfg.default_params["x"] = "y"  # type: ignore[index]
+
+
+def test_config_stays_hashable_with_non_empty_mappings():
+    # The regression the explicit __hash__ exists for: the hash @dataclass would
+    # generate covers every field, and raises TypeError the moment a mapping
+    # field is non-empty.
+    cfg = EasyvistaConfig(
+        server="https://ev.example.com",
+        account="acme",
+        token="abc",
+        extra_headers={"X-Api-Key": "k"},
+        default_params={"formatDate": "iso"},
+    )
+    assert isinstance(hash(cfg), int)
+    assert len({cfg, cfg}) == 1
+    twin = EasyvistaConfig(
+        server="https://ev.example.com",
+        account="acme",
+        token="abc",
+        extra_headers={"X-Api-Key": "k"},
+        default_params={"formatDate": "iso"},
+    )
+    assert cfg == twin
+    assert hash(cfg) == hash(twin)
+
+
+def test_additional_download_hosts_are_normalised():
+    cfg = EasyvistaConfig(
+        server="https://ev.example.com",
+        account="acme",
+        token="abc",
+        additional_download_hosts={"CDN.Example.COM ", "  ", "cdn2.example.com"},
+    )
+    assert cfg.additional_download_hosts == frozenset(
+        {"cdn.example.com", "cdn2.example.com"}
+    )
+
+
+def test_repr_does_not_leak_a_secret_in_extra_headers():
+    # Headers are the canonical place for a SECOND secret -- an API gateway key,
+    # a proxy credential -- so they are redacted for the same reason token and
+    # password are.
+    cfg = EasyvistaConfig(
+        server="https://ev.example.com",
+        account="acme",
+        token="tok",
+        extra_headers={"X-Api-Key": "SECRET"},
+    )
+    assert "SECRET" not in repr(cfg)
+
+
+def test_dataclasses_replace_composes_with_from_env(monkeypatch):
+    # The documented idiom for adding adaptation settings to an env-built
+    # config: from_env deliberately reads none of them, so replace() is how the
+    # two compose. Nothing else pins it.
+    import dataclasses
+
+    monkeypatch.setenv("EASYVISTA_URL", "https://ev.example.com")
+    monkeypatch.setenv("EASYVISTA_ACCOUNT", "acme")
+    monkeypatch.setenv("EASYVISTA_TOKEN", "tok123")
+    monkeypatch.delenv("EASYVISTA_TOKEN_FILE", raising=False)
+    cfg = dataclasses.replace(
+        EasyvistaConfig.from_env(), extra_headers={"X-Api-Key": "k"}
+    )
+    assert cfg.api_root == "https://ev.example.com/api/v1/acme"
+    assert cfg.extra_headers == {"X-Api-Key": "k"}
+    assert cfg.token == "tok123"
+
+
+# --- the two attachment-delete routes ----------------------------------------
+
+
+def test_document_delete_path_style_defaults_to_nested():
+    """The form verified live 2026-08-17, where the top-level one answered 403."""
+    cfg = EasyvistaConfig(server="https://ev.test", account="acme", token="t")
+    assert cfg.document_delete_path_style == "nested"
+
+
+def test_document_delete_path_style_rejects_an_unknown_value():
+    """A typo surfaces at config build, not at the first delete."""
+    with pytest.raises(ValueError, match="document_delete_path_style"):
+        EasyvistaConfig(
+            server="https://ev.test",
+            account="acme",
+            token="t",
+            document_delete_path_style="nested_v2",
+        )

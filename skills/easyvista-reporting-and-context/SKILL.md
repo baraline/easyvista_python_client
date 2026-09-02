@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, and network access to an EasyVista Service Manager REST API."
 metadata:
   package: easyvista-python-client
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -22,14 +22,22 @@ one call, degrading around profile restrictions instead of failing.
 - `count_tickets(search=None)` — one cheap call. Sends `max_rows=1` and reads
   the envelope's `total_record_count`; fetches no records.
 - `ticket_statistics(search=..., dimensions=..., created_since=...,
-  created_until=..., max_records=100)` — fetches up to `max_records` matching
-  tickets and groups them. **The default cap is 100**; pass `max_records=None`
-  to aggregate all.
+  created_until=..., max_records=100, languages=...)` — fetches up to
+  `max_records` matching tickets and groups them. **The default cap is 100**;
+  pass `max_records=None` to aggregate all.
 - `aggregate_tickets(tickets, dimensions=..., created_since=...,
-  created_until=...)` — the same aggregation, pure and offline, over tickets
-  you already hold.
-- `TicketStatistics` carries `total` and `breakdowns` (`{dimension: {label:
-  count}}`). For every dimension, `sum(breakdowns[dim].values()) == total`.
+  created_until=..., languages=...)` — the same aggregation, pure and offline,
+  over tickets you already hold.
+- `languages=` orders the language columns tried when a dimension's nested
+  reference object becomes a bucket key (default `DEFAULT_LANGUAGE_ORDER`,
+  English first). Reorder it on a deployment whose primary language is not
+  English, or the breakdown keys come back as raw ids.
+- `TicketStatistics` carries `total`, `breakdowns` (`{dimension: {label:
+  count}}`), `truncated` and `population_total`. For every dimension,
+  `sum(breakdowns[dim].values()) == total`. `truncated` is True when the fetch
+  hit its record cap, so `total` describes a sample; `population_total` is the
+  server's own count for the search, read off the first page at no extra
+  request and counted **before** any client-side date window.
 - The default dimensions are `STATUS`, `DEPARTMENT`, `CATALOG_REQUEST`,
   `URGENCY` and `IMPACT`. Any field name works, including custom `e_*`
   columns. Pass them explicitly as a list — the default tuple is not part of
@@ -38,6 +46,12 @@ one call, degrading around profile restrictions instead of failing.
   `CREATION_DATE_UT`, accepting a `datetime` or an ISO-8601 string, applied
   client-side. A ticket with a missing or unparseable date is excluded when a
   bound is set. A malformed bound string raises `ValueError`.
+- An **offset-less** bound string is interpreted as **UTC**, not instance-local.
+  On a `+02:00` instance, `created_since="2026-01-01T00:00:00"` silently excludes
+  tickets created between 00:00 and 02:00 local on 1 January. Pass an aware
+  `datetime` or an offset-bearing string. (This client-side filter is
+  deliberately more permissive than `ev_since_filter`, which refuses an
+  offset-less time outright.)
 
 ## Context bundles
 
@@ -46,18 +60,42 @@ one call, degrading around profile restrictions instead of failing.
   resolves the href-only description/comment memos and lists actions and
   documents. Missing sub-resources (404) and profile-restricted lists (403)
   degrade to `None` / `[]` rather than failing the call. Actions in the bundle
-  come back pre-resolved to a string body; for the raw list/item record shapes
-  and how to find a just-created action's id (diff `list_actions` across the
-  call), see `easyvista-ticket-actions`.
-- `TicketContext.to_markdown()` renders an **href-free** Markdown document: an
+  come back pre-resolved to a string body: **`DESCRIPTION`, falling back to
+  `COMMENT` only when the description memo is empty** — the same rule the UI
+  applies, so an exported log matches the ticket on screen. (Resolving
+  `DESCRIPTION` alone used to drop the body of exactly the actions a human
+  *can* read.) For the raw list/item record shapes and how to find a
+  just-created action's id (diff `list_actions` across the call), see
+  `easyvista-ticket-actions`.
+- `get_ticket_context(rfc, memo_fields=("description", "comment"))` names which
+  Memo sub-resources to resolve. The two defaults are the ones EasyVista
+  populates out of the box, but which memo carries a ticket's body is
+  per-deployment configuration, so an instance using another one is reached by
+  naming it here. Every resolved memo lands in `TicketContext.memos`, keyed by
+  the name requested; `description` and `comment` additionally keep their own
+  attributes, and are `None` when not requested. Pass a tuple or list, never a
+  bare string — `str` satisfies `Sequence[str]` and would be iterated one
+  letter at a time, one request per character.
+- `TicketContext.to_markdown(fields=None, languages=...)` renders an
+  **href-free** Markdown
+  document: an
   `# Ticket <rfc>` heading, a field table, the body, `## Actions` and
-  `## Attachments`. Nothing in the output leaks an API URL.
-- `get_department_context(department_id, recent_tickets=10, dimensions=None,
-  include_statistics=True, include_assets=True, resolve_manager=True,
-  include_note=True)` → `DepartmentContext(department, employees, manager,
-  note, ticket_count, recent_tickets, ticket_statistics, assets)`. Only the
+  `## Attachments`. Nothing in the output leaks an API URL. Headings name the
+  role a block plays, not the field it came from: one populated memo is the
+  body under `## Description` whichever field carried it, two defaults keep
+  `## Description` / `## Comment`, and memos asked for through `memo_fields`
+  follow the same rule (several get a heading each, derived from the requested
+  name).
+- `get_department_context(department_id, recent_tickets=10,
+  recent_tickets_sort="RFC_NUMBER DESC", ticket_fields=..., employee_fields=None,
+  asset_fields=None, dimensions=None, statistics_max_records=100,
+  memo_fields=("comment_department",), include_statistics=True,
+  include_assets=True, resolve_manager=True, include_note=True)` →
+  `DepartmentContext(department, employees, manager, note, ticket_count,
+  recent_tickets, ticket_statistics, assets, memos, degraded)`. Only the
   department itself is guaranteed; each related part degrades to `[]` / `None`
-  / `0`. Resolve a human name or code to a `department_id` with
+  / `0` **and records itself in `ctx.degraded`**, so a swallowed 403 is no
+  longer indistinguishable from an empty result. Resolve a human name or code to a `department_id` with
   `find_departments` first, and read the department's own note independently
   with `get_department_comment` — see `easyvista-directory`.
 
@@ -148,10 +186,38 @@ with EasyvistaClient.from_env() as client:
 
 ## Gotchas
 
+- **`to_markdown`'s structural headings are fixed English by design.**
+  `languages=` changes the label *content* — the Status/Department/Location/
+  Catalog values and each action's heading — but never the frame: `##
+  Description`, `## Actions`, `## Attachments` and `| Field | Value |` are the
+  same on every deployment. That is deliberate: this export feeds LLM and RAG
+  pipelines, a chunker splits on `## `, and a heading that varied per instance
+  would break those silently. Localize the frame in your own code if a human is
+  the reader.
 - **`ticket_statistics` caps at 100 tickets by default.** When the cap
-  truncates, the result describes the fetched subset, not the population —
-  compare `stats.total` against `count_tickets(search=...)` and pass
-  `max_records=None` when they disagree.
+  truncates, the result describes the fetched subset, not the population — and
+  now says so: `stats.truncated` is True and `stats.population_total` carries
+  the server's own count for the search, at no extra request. Pass
+  `max_records=None` when the breakdown must describe the whole population.
+  Note `truncated` reports "the cap was reached", so it is True for a
+  population whose size is exactly the cap; compare it against
+  `population_total` when that distinction matters.
+- **`get_department_context`'s recent tickets are projected by default**, which
+  is what makes `.title` populated. It previously sent no `fields=`, and on the
+  verified instance the default list projection returns TITLE present but
+  **empty**, so every recent ticket's `.title` was `None` for every caller.
+  Projecting also narrows what else comes back: pass `ticket_fields=None` for
+  the old unprojected request, or your own list to widen it.
+- The statistics sample inside the bundle is capped at
+  `statistics_max_records=100` and is **unsorted** — it is not the department's
+  first hundred tickets by any ordering. `ticket_count` is the true total and
+  ignores that cap; `ticket_statistics.truncated` tells you the sample was one.
+- **`ctx.degraded` distinguishes "empty" from "forbidden".** Entries are
+  `"<branch>:<http-status>"` — split with `rsplit(":", 1)`, because a memo
+  branch is itself named `"memo:<field>"`. `to_markdown` renders
+  `_Not available (HTTP 403)._` for a refused actions or attachments section
+  rather than omitting it, so an export cannot read as "this ticket has no
+  attachments" when the list was actually refused.
 - A dimension whose label cannot be resolved groups under `"(unknown)"`; the
   breakdown still sums to `total`.
 - `get_ticket_context` resolves action bodies by default at **two extra
@@ -166,13 +232,20 @@ with EasyvistaClient.from_env() as client:
   the async surface lets siblings already in flight settle before the error
   propagates, so a failing call can issue more requests than the sync surface
   would.
-- `recent_tickets` ordering is best-effort: it depends on the server
-  honouring the descending-sort token `RECENT_TICKETS_SORT`, and that
-  dependency — like the assumption that an unknown `sort` falls back to the
-  default order rather than erroring — is not confirmed against a live
-  instance (open item O-DIR-1; `easyvista-search-syntax` hedges the same
-  claim). Until checked against your own instance, treat the ordering as
-  unconfirmed rather than guaranteed descending.
+- `recent_tickets` is genuinely sorted **by descending `RFC_NUMBER`**:
+  `RECENT_TICKETS_SORT` uses the space-separated descending token
+  (`RFC_NUMBER DESC`), which EasyVista honours — verified live 2026-08-17 by
+  `integration_tests/test_live_change_window.py` (closes open item O-DIR-1).
+  That is newest-first only where RFC numbers are issued monotonically. It is a
+  varchar (`I240101_0001`), so a descending *string* sort orders by the
+  request-type prefix first: on an instance issuing more than one prefix letter,
+  every `R…` ticket outranks every `I…` ticket regardless of date. What is
+  measured is the descending-ness, not the recency — sort a date column yourself
+  if you need a date guarantee.
+  A colon-separated token (`RFC_NUMBER:DESC`), `-RFC_NUMBER` and
+  `DESC(RFC_NUMBER)` are all silently ignored instead, falling back to the
+  server's default order with no error — that was the earlier, unconfirmed
+  form this constant used to rely on.
 - `TicketContext.to_markdown()` titles the body "Description" whichever memo
   carried it, and emits both headings only when both memos have text. Do not
   parse the heading to infer the source field — read `context.description` /

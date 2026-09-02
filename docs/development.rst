@@ -68,9 +68,29 @@ Integration tests
 calls a **real EasyVista instance** that you supply. It never runs in CI — CI runs
 ``pytest -m "not integration"``.
 
-Credentials resolve from ``EASYVISTA_TEST_URL`` / ``EASYVISTA_TEST_USER`` / ``EASYVISTA_TEST_TOKEN``,
-falling back to files under ``secrets/`` (both gitignored). With no credentials configured the suite
-**skips cleanly**, so a plain ``pytest`` on a fresh checkout is offline and green.
+Credentials resolve from an environment variable first, then a lowercase file under ``secrets/``
+(both gitignored)::
+
+    url     <- EASYVISTA_TEST_URL     | secrets/easyvista_test_url
+    account <- EASYVISTA_TEST_ACCOUNT | secrets/easyvista_test_account
+    token   <- EASYVISTA_TEST_TOKEN   | secrets/easyvista_test_token
+
+``EASYVISTA_TEST_TOKEN`` is the Bearer token, and the only credential that authenticates anything.
+``EASYVISTA_TEST_ACCOUNT`` is **not a login**: it is the instance identifier forming the
+``{account}`` path segment of ``https://host/api/{version}/{account}`` -- a number such as
+``50004`` -- and it feeds ``EasyvistaConfig.account``. It is read only when ``EASYVISTA_TEST_URL``
+is a bare host; a full API root already carries the account, and then the value is never consulted
+at all.
+
+.. note::
+
+   ``EASYVISTA_TEST_ACCOUNT`` was spelled ``EASYVISTA_TEST_USER`` (and ``secrets/easyvista_test_user``)
+   before 2026-08-25, which read as a username and never was one. The old name is now **refused with
+   an error naming its replacement**, not silently accepted, so a leftover copy cannot quietly
+   reintroduce the confusion.
+
+With no credentials configured the suite **skips cleanly**, so a plain ``pytest`` on a fresh checkout
+is offline and green.
 
 .. warning::
 

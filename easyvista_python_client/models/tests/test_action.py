@@ -1,4 +1,135 @@
-from easyvista_python_client.models.action import Action, PostAction
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from pydantic import ValidationError
+
+from easyvista_python_client.models.action import Action, PostAction, PostTask
+
+_CEST = timezone(timedelta(hours=2))
+
+# Trimmed from a real item-level GET (see the spec's Appendix A-2); values are
+# synthetic, the KEY NAMES are what this test pins.
+_ITEM_PAYLOAD = {
+    "ACTION_ID": "57483",
+    "ACTION_NUMBER": "0",
+    "ACTION_TYPE_ID": "20",
+    "CREATION_DATE_UT": "2026-08-17T15:40:36.000+02:00",
+    "LAST_UPDATE": "2026-08-17T15:40:37.653+02:00",
+    "DONE_BY_ID": "6117",
+    "GROUP_ID": "57",
+    "REQUEST_ID": "7743",
+    "STAGE_ID": "10",
+    "WORKFLOW_ID": "37",
+    "PARENT_ACTION_ID": "",
+    "DONE_BY": {"EMPLOYEE_ID": "6117", "LAST_NAME": "Doe"},
+    "DESCRIPTION": {"HREF": "https://ev.test/api/v1/12345/actions/57483/description"},
+}
+
+
+def test_item_level_action_exposes_timestamps_and_author():
+    """EV-R1: the fields a Comment model needs all exist on the item GET."""
+    action = Action.model_validate(_ITEM_PAYLOAD)
+    assert action.created_at == datetime(2026, 8, 17, 15, 40, 36, tzinfo=_CEST)
+    assert action.updated_at == datetime(2026, 8, 17, 15, 40, 37, 653000, tzinfo=_CEST)
+    assert action.done_by_id == 6117
+    assert action.action_type_id == 20
+    assert action.group_id == 57
+    assert action.request_id == 7743
+
+
+def test_workflow_context_is_declared_so_generated_actions_are_identifiable():
+    """A fresh ticket auto-spawns ~12 workflow actions; these tell them apart."""
+    action = Action.model_validate(_ITEM_PAYLOAD)
+    assert action.stage_id == 10
+    assert action.workflow_id == 37
+    assert action.parent_action_id is None  # "" sentinel -> None
+
+
+@pytest.mark.parametrize(
+    ("alias", "attr"),
+    [
+        ("DONE_BY_ID", "done_by_id"),
+        ("ACTION_TYPE_ID", "action_type_id"),
+        ("GROUP_ID", "group_id"),
+        ("REQUEST_ID", "request_id"),
+        ("ACTION_NUMBER", "action_number"),
+        ("STAGE_ID", "stage_id"),
+        ("WORKFLOW_ID", "workflow_id"),
+        ("PARENT_ACTION_ID", "parent_action_id"),
+    ],
+)
+def test_the_empty_string_sentinel_maps_to_none_on_every_new_int_field(alias, attr):
+    """Workflow-generated actions have an EMPTY DONE_BY_ID (measured live)."""
+    action = Action.model_validate({"ACTION_ID": "1", alias: ""})
+    assert getattr(action, attr) is None
+
+
+def test_absent_timestamps_are_none_not_an_error():
+    """The list projection omits both date fields entirely."""
+    action = Action.model_validate({"ACTION_ID": "1"})
+    assert action.created_at is None
+    assert action.updated_at is None
+
+
+def test_action_label_is_declared_not_left_in_model_extra():
+    """It rides the default list projection, and ``context.py`` reads it."""
+    action = Action.model_validate(
+        {"ACTION_ID": "1", "ACTION_LABEL_FR": "Analyse de Resolution"}
+    )
+    assert action.action_label_fr == "Analyse de Resolution"
+
+
+def test_a_whole_bracketed_label_echoing_another_language_is_a_placeholder():
+    """Brackets around the WHOLE label, echoing another column, mean "untranslated".
+
+    A single-language instance echoes the default-language text wrapped in
+    ``[...]`` on every other language column; ``localized_label`` discards them.
+    See the sibling test below for the bracket convention that DOES carry
+    meaning -- conflating the two once cost this package a true finding.
+    """
+    from easyvista_python_client.references import localized_label
+
+    item = {
+        "ACTION_ID": "1",
+        "ACTION_LABEL_FR": "Analyse de Resolution",
+        "ACTION_LABEL_EN": "[Analyse de Resolution]",
+    }
+    assert Action.model_validate(item).action_label_fr == "Analyse de Resolution"
+    assert localized_label(item, "ACTION_LABEL") == "Analyse de Resolution"
+
+
+def test_a_bracketed_suffix_beside_real_translations_is_a_visibility_marker():
+    """``Commentaire [Public]`` is a real marker, not a placeholder.
+
+    Measured live 2026-08-28: type 94's sibling columns carry genuine
+    translations (``Customer Comment``, ``Kommentar des Kunden``), so the
+    French label's ``[Public]`` suffix is content -- the opposite of the
+    placeholder above, where the whole label is bracketed and duplicates
+    another language.
+
+    ``_usable_label`` already draws this line correctly: it rejects only a
+    label that is *entirely* bracketed, so a bracketed SUFFIX survives. The
+    code was right; the prose that called every bracket a placeholder was not.
+    """
+    from easyvista_python_client.references import localized_label
+
+    item = {
+        "ACTION_ID": "1",
+        "ACTION_LABEL_FR": "Commentaire [Public]",
+        "ACTION_LABEL_EN": "Customer Comment",
+    }
+    assert Action.model_validate(item).action_label_fr == "Commentaire [Public]"
+    # _EN is preferred when populated, so the English translation wins here.
+    assert localized_label(item, "ACTION_LABEL") == "Customer Comment"
+    # The point: with only the French column, the marker is KEPT, not discarded
+    # the way a fully-bracketed placeholder would be.
+    fr_only = {"ACTION_ID": "1", "ACTION_LABEL_FR": "Note Interne [Prive]"}
+    assert localized_label(fr_only, "ACTION_LABEL") == "Note Interne [Prive]"
+
+
+def test_done_by_reference_resolves_through_the_shared_resolver():
+    action = Action.model_validate(_ITEM_PAYLOAD)
+    assert action.reference("DONE_BY").id == "6117"
 
 
 def test_action_reads_the_item_level_description_memo():
@@ -93,3 +224,187 @@ def test_post_action_serializes_description():
         "group_id": 3,
         "description": "hi",
     }
+
+
+def test_post_action_carries_both_text_channels():
+    """An action has two independent memos and a create can populate both.
+
+    Verified live 2026-08-28: a single create carrying ``description`` and
+    ``comment`` read back with exactly the text sent in each, addressable
+    separately at ``actions/{id}/description`` and ``actions/{id}/comment``.
+    ``comment`` was absent from this model until then, which made the second
+    channel unreachable at create time without ``extra_payload``.
+    """
+    assert PostAction(
+        action_type_id=94, group_id=3, description="public", comment="internal"
+    ).to_api() == {
+        "action_type_id": 94,
+        "group_id": 3,
+        "description": "public",
+        "comment": "internal",
+    }
+
+
+def test_post_action_omits_an_unset_comment():
+    """The new field must not widen the body every caller already sends."""
+    assert (
+        "comment"
+        not in PostAction(action_type_id=94, group_id=3, description="hi").to_api()
+    )
+
+
+def test_post_task_serializes_flat_for_the_tasks_endpoint():
+    """The task body is FLAT at the root; the action body is wrapped.
+
+    Verified live 2026-08-28 -- POST requests/{rfc}/tasks with this shape
+    returned 201 and a record already carrying END_DATE_UT.
+    """
+    assert PostTask(
+        action_type_id=95, group_id=3, description="internal note"
+    ).to_api() == {
+        "action_type_id": 95,
+        "group_id": 3,
+        "description": "internal note",
+    }
+
+
+def test_post_task_refuses_a_body_with_no_action_type():
+    """The type is mandatory AND carries the public/internal distinction."""
+    with pytest.raises(ValidationError, match="needs an action type"):
+        PostTask(group_id=3, description="orphan")
+
+
+def test_post_task_refuses_a_body_with_no_group():
+    """Omitting the group draws a 590 naming a field the caller never sent."""
+    with pytest.raises(ValidationError, match="needs an assigned group"):
+        PostTask(action_type_id=94, description="orphan")
+
+
+def test_post_task_accepts_any_of_the_three_group_spellings():
+    """group_id / group_name / group_mail are documented alternatives.
+
+    The instance OpenAPI's example shows only group_mail, which is what led an
+    earlier pass to believe a 403 on GET /groups made this endpoint unusable.
+    """
+    for kwargs in ({"group_id": 3}, {"group_name": "N1"}, {"group_mail": "a@b.fr"}):
+        assert PostTask(action_type_id=94, **kwargs).to_api()["action_type_id"] == 94
+
+
+def test_post_task_omits_unset_optional_fields():
+    """An unset elapsed_time is computed by EasyVista, not sent as null."""
+    body = PostTask(action_type_id=94, group_id=3).to_api()
+    for absent in ("elapsed_time", "time_cost", "end_date_ut", "comment"):
+        assert absent not in body
+
+
+def test_action_label_property_returns_the_real_text_on_an_english_instance():
+    # Why the property exists. On a single-language instance the OTHER language
+    # columns echo the primary text wrapped in brackets, so reading the one
+    # named column yields the placeholder rather than None -- asserted on both
+    # attributes so the difference is visible.
+    action = Action.model_validate(
+        {"ACTION_LABEL_EN": "Customer Comment", "ACTION_LABEL_FR": "[Customer Comment]"}
+    )
+    assert action.action_label_fr == "[Customer Comment]"
+    assert action.label == "Customer Comment"
+
+
+def test_action_label_keeps_a_bracketed_suffix_which_is_real_content():
+    # A label wrapped ENTIRELY in brackets is an untranslated placeholder; a
+    # bracketed SUFFIX on otherwise distinct text is a genuine marker and must
+    # survive. Conflating the two once deleted a true finding.
+    action = Action.model_validate({"ACTION_LABEL_FR": "Commentaire [Public]"})
+    assert action.label == "Commentaire [Public]"
+
+
+def test_action_label_on_a_non_french_instance_skips_the_bracketed_echo():
+    """The exact behaviour the guide's `label` prose claims.
+
+    On an English deployment ``action_label_fr`` is not ``None`` -- it holds
+    the default-language text wrapped in brackets, ``'[Customer Comment]'`` --
+    so reading that column directly gives bracket noise rather than an absence,
+    which is the failure that is easy to miss.
+    """
+    action = Action.model_validate(
+        {
+            "ACTION_ID": 1,
+            "ACTION_LABEL_FR": "[Customer Comment]",
+            "ACTION_LABEL_EN": "Customer Comment",
+        }
+    )
+    assert action.label == "Customer Comment"
+    assert action.action_label_fr == "[Customer Comment]"  # the trap
+
+
+def test_action_label_is_none_when_no_label_column_is_populated():
+    assert Action.model_validate({"ACTION_ID": 1}).label is None
+    # And in the pathological case where every column is a placeholder: the
+    # caller supplies its own last-resort text.
+    assert Action.model_validate({"ACTION_LABEL_FR": "[X]"}).label is None
+
+
+# --- PostAction gains PostTask's guard, on the same tier-1 sentence ----------
+#
+# `docs/vendor-api-reference.md` quotes the vendor's create-an-ACTION page as
+# "Required: action_type_id, and one of group_id / group_mail / group_name" --
+# so this is if anything better evidence here than on the task route. Before
+# this, `PostAction()` constructed fine and shipped `{"action": {}}`, drawing an
+# HTTP 590 that named no field at all.
+
+
+def test_post_action_requires_a_type_and_a_group():
+    with pytest.raises(ValidationError, match="needs an action type"):
+        PostAction(group_id=3, description="orphan")
+    with pytest.raises(ValidationError, match="needs an assigned group"):
+        PostAction(action_type_id=94, description="orphan")
+
+
+def test_post_action_accepts_a_string_type_id_like_post_task_does():
+    """The two models' id types diverged for no recorded reason.
+
+    ``int | None`` here against ``int | str | None`` on ``PostTask`` made a
+    non-numeric type or group id work through ``create_task`` and fail through
+    ``create_action`` -- an inconsistency inside the package with no evidence
+    behind it. The instance's own OpenAPI declares ``action_type_id`` on this
+    route as a *string* (tier 3, illustrative), which argues for accepting one,
+    not for coercing to one: whichever type is passed serializes unchanged.
+    """
+    body = PostAction(action_type_id="94", group_id="GRP-1").to_api()
+    assert body["action_type_id"] == "94"
+    assert body["group_id"] == "GRP-1"
+
+
+def test_post_action_ships_group_mail_and_parent_action_id_and_guid():
+    """Three tier-1 optional fields the model did not declare."""
+    body = PostAction(
+        action_type_guid="{TYPE}", group_mail="n1@example.invalid", parent_action_id=7
+    ).to_api()
+    assert body["action_type_guid"] == "{TYPE}"
+    assert body["group_mail"] == "n1@example.invalid"
+    assert body["parent_action_id"] == 7
+
+
+def test_extra_payload_satisfies_the_action_guards():
+    """A guard reading declared attributes would refuse a body the API accepts."""
+    payload = PostAction(
+        extra_payload={"action_type_id": 94, "group_mail": "n1@example.invalid"}
+    )
+    assert payload.to_api() == {
+        "action_type_id": 94,
+        "group_mail": "n1@example.invalid",
+    }
+
+
+def test_an_extra_payload_action_type_guid_satisfies_the_task_guard():
+    """``PostTask`` deliberately does NOT declare ``action_type_guid``.
+
+    On the action route the field is tier 1 (2023.4+) and the instance's own
+    OpenAPI declares it; on the TASK route neither holds -- the vendor's task
+    page has never been transcribed into this repo (O-TASKDOC) and the
+    instance's schema for that route lists eleven properties without it.
+    Declaring it would put the model's word behind a field nothing supports
+    there. So the guard accepts the key without the model asserting the field
+    exists, and ``extra_payload`` is how it arrives.
+    """
+    body = PostTask(group_id=3, extra_payload={"action_type_guid": "{TYPE}"}).to_api()
+    assert body["action_type_guid"] == "{TYPE}"

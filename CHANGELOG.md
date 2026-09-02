@@ -9,7 +9,296 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-02
+
+The first release since `0.1.0`. A `0.2.0` section was prepared and dated
+2026-08-18 but never tagged or uploaded, so that work had never reached anyone;
+it is merged into this release rather than left stranded, which is why this
+entry is large and its date is later than the work it describes.
+
+**Upgrading.** Five breaking changes, each replacing a silently wrong answer with
+a correct one or a refusal — every one is marked `**BREAKING**` in the sections
+below, with the reasoning:
+
+- `PostAction` now requires an action type and a group, refusing locally what the
+  API rejected with an HTTP 590 naming no field.
+- `RequestUpdate.status_id` is gone: there is no flat status update on this API,
+  and it returned 200 while dropping the status. Use `set_status`/`close_ticket`.
+- `get_department_context`'s recent tickets are now projected.
+- `find_departments` changed how an all-digit name and the fuzzy fallback
+  resolve.
+
+Read the `### Changed` and `### Removed` sections before upgrading; the rest of
+the release is additive.
+
 ### Added
+
+- `end_action(rfc_number, *, action_id=, end_date=, start_date=, elapsed_time=,
+  doneby_mail=)` on both clients — the step `create_action` leaves undone. An
+  action is born open and its text does not render in the ticket history until
+  it is ended, so without this the package could create an action a person
+  could not read, and the pre-release walkthrough had to reach into
+  `client._transport` to finish one. Wraps the vendor's
+  `PUT actions/{rfc_number}` / `end_action` route. Addressed by the **ticket**,
+  not the action: the id goes in the body, and `actions/{action_id}` answers
+  404 for this verb. `create_task` still needs none of it.
+  - **Ending a workflow action advances the workflow** (measured 2026-09-01,
+    2/2 tickets): the ticket moved *En cours* → *Résolu* and a new open action
+    appeared. A control showed ending a caller-created action changed neither
+    the status nor the action count. Omitting `action_id` ends *every* open
+    action, which on a ticket whose only open one is its workflow step means
+    resolving it.
+  - `elapsed_time` is **minutes**, is not derived from the two dates (omitted,
+    it stays empty), and is stored as sent even when it contradicts them (60
+    against a 15-minute window) — except when `start_date` equals `end_date`,
+    where it stores `0` whatever you send (3/3).
+  - Dates take the instance's own `DATE_FORMAT` and are passed through as
+    strings; ISO 8601 is refused with HTTP 590 "Invalid End Date" on the
+    verified instance. Send `start_date` explicitly — a derived one comes back
+    early by the instance's UTC offset.
+
+- `ev_contains_filter` / `ev_starts_with_filter` take a keyword-only
+  `wildcard: Literal["*", "%"] | None = "*"`. The vendor documents `~` as
+  plain **Contains** (tier 1); this package measured it live 2026-08-17 on one
+  instance as a *pattern* operator needing an explicit wildcard (tier 4, may
+  not generalise) and defaults to that reading. On a deployment that follows
+  the vendor's, the appended `*` is compared literally and the filter returns
+  **zero rows with HTTP 200 and no hint** — a silent narrowing, the mirror of
+  the silent widening the metacharacter guard already prevents. Pass
+  `wildcard=None` there, or `wildcard="%"` for a LIKE-style backend. The
+  default is unchanged, so output against the verified instance is identical.
+  `_` and `[` stay refused at every setting (they are metacharacters of `~`
+  itself, measured with a wildcard-free probe); `*` and `%` are now refused
+  only while a wildcard is being appended.
+- `languages=` on every label resolver — `resolve_reference`,
+  `localized_label`, `EasyvistaModel.reference`, `TicketContext.to_markdown`,
+  `aggregate_tickets`, `ticket_statistics` and `get_department_context` — so a
+  deployment whose primary language is not English reorders the scan instead of
+  forking. Defaults to the new `DEFAULT_LANGUAGE_ORDER`, which is the order the
+  package already used.
+- `DEFAULT_LANGUAGE_ORDER` and `localized_label` are now exported from the
+  package root. `localized_label` was documented but not importable.
+- `Action.label` — the best populated `ACTION_LABEL_<lang>` column, skipping
+  untranslated `[placeholder]` values, mirroring `Department.name`. Prefer it
+  over `action_label_fr`: on a single-language instance the *other* language
+  columns echo the primary text in brackets, so on an English deployment
+  `action_label_fr` is `"[Customer Comment]"` rather than `None`.
+- `client.send(method, path, *, params=, json=, headers=)` on both clients — the
+  supported route to any `api_root`-relative path this package does not wrap.
+  An instance advertises around a hundred paths in its own OpenAPI document and
+  this package wraps roughly ten of them; reference tables (`status`, `urgency`,
+  `groups`, `locations`, `slas`), the external-table route and whole families
+  such as `problems` and `known-errors` were previously unreachable without a
+  fork. It shares the retry policy and the error mapping with every typed
+  method, and returns the decoded JSON unchanged. An absolute URL is never
+  followed: `path` always joins to `api_root`, which is what keeps the
+  credential scoped to the configured instance.
+- `params=` on the fifteen get/search/iter methods, layered under the resource
+  builder's own parameters so a caller can add a query parameter (the vendor
+  lists `formatDate`) without being able to replace the ticket filter on
+  `list_actions` or the offset an `iter_*` sweep is stepping.
+- `EasyvistaConfig.extra_headers` — merged over every header sent to the
+  instance, for an API gateway's key or a tenant selector. An `Authorization`
+  key raises at construction, in any casing, rather than silently shadowing
+  `token`.
+- `EasyvistaConfig.user_agent` and `DEFAULT_USER_AGENT`.
+- `EasyvistaConfig.default_params` — query parameters on every JSON API
+  request, under any the call itself sets. Not applied to downloads.
+- `EasyvistaConfig.additional_download_hosts` — opt specific **https** hosts in
+  as attachment sources, for a deployment serving them from a CDN or vanity
+  hostname. A fetch from one carries no credential and no `extra_headers`: it
+  goes through a second, credential-free HTTP client, because the token is
+  attached to the instance client at client level and cannot be removed per
+  request.
+- `RequestSpec.headers`, for a single request needing a content type other than
+  the client-level `application/json`.
+- `PostRequest` gains the six tier-1 asset / configuration-item selectors:
+  `assetid`, `assettag`, `asset_name`, `ci_id`, `ci_asset_tag`, `ci_name`. The
+  wire spellings have no underscore, which is what the vendor documents — the
+  documented case-insensitivity is not underscore-insensitivity.
+- `PostAction` gains `action_type_guid`, `group_mail` and `parent_action_id`,
+  all tier-1 optional fields the model did not declare.
+- `EasyvistaConfig.datetime_input_formats` — extra `strptime` patterns tried
+  only after EasyVista's own ISO-8601 form fails. Empty by default. The read
+  models refuse a timestamp they cannot parse rather than guessing an instant,
+  and a search validates a whole page in one comprehension, so on a deployment
+  whose format differs one column fails every record on the page. Nothing is
+  guessed: an unlisted format still raises, and a pattern can never change how
+  a real EasyVista stamp parses because that is tried first.
+- `get_ticket(fields=...)` — a projection on the item route, for when one
+  column poisons the whole record. Note the verified instance's own OpenAPI
+  declares `fields` on `GET /requests` but not on `GET /requests/{rfc_number}`
+  (tier 2), so the item route may ignore it.
+- `EasyvistaConfig.document_delete_path_style` and
+  `delete_document(..., path_style=)`. The instance's own OpenAPI declares
+  DELETE on **both** `requests/{rfc}/documents/{id}` and `documents/{id}`,
+  marking only the second `deprecated` — so the 403 measured against the
+  top-level form was a profile denial, not a missing route. The default
+  `"nested"` is unchanged. `delete_document` also accepts a `Document` in place
+  of its id, and `rfc_number` may be `None` under `"top_level"`.
+- `get_department_comment(..., memo_field=)` and
+  `get_department_context(..., memo_fields=)`. The last segment of
+  `GET departments/{id}/{comment}` is a memo-field *selector* in the
+  instance's own spec, not a literal, so a deployment whose department memo
+  column is named differently is no longer locked out. `memo_fields` is a
+  sequence, mirroring `get_ticket_context`: every resolved memo lands in
+  `DepartmentContext.memos` and `note` is the first with text.
+- `get_department_context` gains `recent_tickets_sort`, `ticket_fields`,
+  `employee_fields`, `asset_fields` and `statistics_max_records`. Every value
+  it sampled with was a literal buried in a branch; each is now a keyword whose
+  default is what it sampled with before, `ticket_fields` excepted (see
+  Changed). `statistics_max_records` in particular was inherited silently from
+  `ticket_statistics`.
+- `find_departments(..., by=)` — the columns the server-side fast path tries,
+  in order. `"auto"` (the default), a single column name, an explicit sequence,
+  or `[]` to skip the fast path entirely.
+- `TicketStatistics.truncated` and `.population_total`, so a capped
+  aggregation says it sampled rather than counted. `population_total` is the
+  server's own count for the search, read off the first page at **no extra
+  request**; it is counted before any client-side date window, so it is not
+  comparable with `total` when one is set. `aggregate_tickets` is pure and
+  offline and leaves both at their defaults.
+- `DepartmentContext.degraded` and `TicketContext.degraded` — which branches
+  were swallowed, as `"<branch>:<http-status>"` entries. A 403 that degraded to
+  `[]` was previously indistinguishable from a genuinely empty result. Split
+  with `rsplit(":", 1)`: a memo branch is itself named `"memo:<field>"`.
+- `DepartmentContext.memos`, keyed by the field name requested.
+- `TicketContext.to_markdown(fields=)` and the exported
+  `DEFAULT_MARKDOWN_FIELDS` — the field table as `(label, column)` pairs.
+  Extend rather than retype: `fields=[*DEFAULT_MARKDOWN_FIELDS, ("SLA", "SLA_ID")]`.
+- **Instance discovery** — four methods that answer "what do I have to pass to
+  create a ticket *here*", so no id has to be hardcoded from another
+  deployment:
+  - `get_api_spec(path="swagger")` reads the instance's own OpenAPI. Note the
+    route answers **HTTP 201**, not 200: this client is unaffected, but code
+    written beside it that gates on `status_code == 200` skips the document in
+    silence.
+  - `list_reference_table(path, ...)` reads any list route into
+    `SearchResult[GenericRecord]`. A 403 **propagates** rather than becoming
+    `[]` — an empty table is a legitimate answer, and collapsing the two would
+    let a caller conclude the instance has no statuses.
+  - `discover(name, ...)` resolves one reference to the ids, labels, codes and
+    GUIDs in use. `STATUS` additionally gets its `STATUS_GUID` from a ticket
+    sample, which is the only place one is readable and the value `set_status`
+    and `close_ticket` actually address a status by.
+  - `describe_instance(...)` profiles the lot into an `InstanceProfile` and
+    **never raises for one part**: every gap is named in `.unavailable` with a
+    machine-readable first token (`denied`, `failed`, `no-route`, `empty`,
+    `truncated`).
+  `IMPACT`, `SEVERITY`, `ORIGIN` and `ACTION_TYPE` have no route in the spec at
+  all, so they are sampling-only by construction — what comes back is the ids
+  *in use*, and a sample count is never a population count.
+- `GenericRecord`, `DiscoveredReference`, `InstanceProfile`, `ReferenceSource`
+  and `DEFAULT_DISCOVERY_NAMES` are exported from the package root.
+  `GenericRecord` declares **no columns** on purpose: a reference table's
+  response schema is tier 3, and the verified instance's own `/status` schema
+  is visibly wrong (it describes an SLA-shaped object with no status id).
+- `references.label_from_record` — the best human label anywhere in a
+  reference-table row, matched by **suffix**. A reference table does not name
+  its label column after the table: `groups` returns `GROUP_EN`, `locations`
+  returns `LOCATION_FR`, `catalog-requests` returns `TITLE_EN` and `slas`
+  returns `NAME_FR`. `resolve_reference` deliberately does not route through
+  it — its own scan is bracket-tolerant, and sharing would be a behaviour
+  change rather than a refactor.
+
+
+- `EasyvistaClient.iter_actions` / `AsyncEasyvistaClient.iter_actions` page a
+  ticket's **whole** action log. `list_actions` returns one page and truncates a
+  longer log with no error — and because it discards the envelope's total,
+  nothing in the result reveals the truncation. That is not a corner case: a
+  freshly created ticket already carries about a dozen workflow-generated
+  actions before anyone has commented, so a ticket with real conversation on it
+  crosses a default cap easily, and the comments lost are the oldest ones.
+  `iter_actions` follows `@next` until the server runs out, takes the same
+  `fields=` projection, and re-applies the ticket filter on every page.
+  **Caveat:** unlike `iter_tickets`, the `offset`/`@next` contract has not been
+  measured on the `actions` endpoint specifically. If an instance ignores
+  `offset`, page two repeats page one and the sweep will not terminate — bound
+  it with `max_records` the first time you use it on a ticket whose action count
+  you do not know. `scripts/validate_docs_examples.py` now checks this against a
+  live instance when credentials resolve.
+- `Action.action_label_fr` (`ACTION_LABEL_FR`). Already returned on the default
+  list projection, it was reachable only through `model_extra` — undeclared, and
+  so named by no docstring, even though `context.py` already relied on it as the
+  Markdown heading fallback. Note the item-level record carries eleven language
+  columns; on a single-language instance the unpopulated ones echo the
+  default-language text wrapped in `[...]`. Prefer `localized_label` there.
+- `resources.actions.build_search_actions` — one page of a ticket's actions with
+  the envelope kept, so `@next` is visible to a pager. `build_list_actions` is
+  now a thin wrapper over it that drops the envelope; the unsafe/blank
+  `rfc_number` guard moved into the shared builder so neither entry point can
+  bypass it.
+- `EasyvistaClient.set_status` / `AsyncEasyvistaClient.set_status` set a ticket's
+  status, addressed by `STATUS_GUID`. This sends the documented
+  `{"closed": {"status_GUID": ...}}` body — the same request `close_ticket`
+  sends, under a name that matches what it does. Despite the wire name, the
+  envelope is **not** limited to closing: handed each of six different status
+  GUIDs in turn, a fresh ticket landed on exactly the status requested every
+  time, non-terminal ones included. Status GUIDs are per-instance configuration
+  and are not portable between deployments; read one off any ticket already in
+  that status (the nested `STATUS` object carries `STATUS_GUID`).
+- `PostRequest.catalog_guid`. The vendor documents it as the **preferred**
+  subject identifier; it had been removed on the authority of a customer
+  handover note that the package cited as the vendor specification. A create
+  body with neither `catalog_guid` nor `catalog_code` now raises locally
+  instead of drawing an HTTP 590 whose SQL parser error names no field.
+- Eleven vendor-documented create fields that `PostRequest` did not declare:
+  `location_id`, `location_code`, `department_code`, `recipient_name`,
+  `recipient_identification`, `requestor_identification`, `requestor_mail`,
+  `requestor_name`, `parentrequest`, `phone`, `submit_date`. Tier 1 —
+  vendor-documented, not verified live by this package.
+- `PostRequest.workflow_start`, a twelfth field reachable the same way but
+  **not** vendor-documented like the eleven above: its only source is the
+  instance's own OpenAPI schema for `POST /requests` ("Optional. If true,
+  starts the workflow for the created incident."), which makes it tier 3 —
+  illustrative only, example-derived, not a normative contract. Treat it as
+  unverified until tested against the deployment you use it on.
+- `extra_payload` on every write model: an un-prefixed passthrough merged last,
+  overriding declared fields and `custom_fields` alike. Every field these models
+  decline to declare rests on behaviour measured against a single instance;
+  `extra="forbid"` turned each of those measurements into a hard wall for every
+  other deployment, and `custom_fields` could not help because it only emits
+  `e_`-prefixed keys.
+- `get_ticket_context(..., memo_fields=...)` and `TicketContext.memos`. The API
+  models the memo name as a path segment, and the instance's own OpenAPI spec
+  documents it as a selector ("Memo field type, could be comment, description";
+  tier 2 — declared in the instance's OpenAPI `paths`, not vendor-documented),
+  so which memo carries a ticket's body is per-deployment configuration the
+  client was hardcoding. Default behaviour is unchanged. `TicketContext.description`
+  / `.comment` stay dataclass fields rather than becoming properties over
+  `memos`, a deliberate deviation to avoid breaking positional construction of
+  a public dataclass.
+- `docs/vendor-api-reference.md` — the vendor facts this package depends on,
+  each tagged with the evidence behind it, plus the routes present in the
+  instance's OpenAPI that the package does not implement.
+
+
+- `EasyvistaClient.stream_document` / `AsyncEasyvistaClient.stream_document`
+  yield an attachment's bytes in chunks (64 KiB by default, `chunk_size=` to
+  change it) instead of returning them whole. Motivation: a consumer mirroring
+  attachments had no choice but to buffer, because `download_document`
+  materialises the whole file before it returns anything. What this removes is
+  that download buffer and only that — one attachment's worth of memory, so a
+  32 MB file is held a chunk at a time instead of whole. The upload leg is
+  unaffected: `add_document` takes `content: bytes` and base64-encodes it, so a
+  mirror that re-uploads still materialises that payload in full (see below for
+  why no streaming upload is possible). Accepts exactly what `download_document`
+  accepts and resolves the URL identically, so the same-origin refusal, the
+  `follow_redirects` behaviour and the error mapping (a 403 is still
+  `EasyvistaAuthError`, a 590 is still not retried) are the same on both paths.
+  **Only the download direction streams, and that is the API's constraint:**
+  EasyVista takes an attachment as base64 inside a JSON body, so `add_document`
+  must materialise the whole payload before it can send anything — no streaming
+  upload is possible, and the asymmetry is not an oversight here.
+  **A mid-stream failure is not retried.** Opening the download is retried under
+  the usual policy, and the first chunk is fetched inside that retried unit so a
+  failure fetching it is still safe to restart; from that chunk onwards the
+  request is committed and a transport error raises `EasyvistaConnectionError`
+  rather than starting over, because starting over would re-deliver bytes the
+  caller already holds. Nothing resumes a partly consumed stream, so a caller
+  that must survive a mid-stream failure decides for itself whether to discard
+  what it collected and ask again; `download_document` retries the whole fetch
+  and stays the simpler choice for a file small enough to buffer.
 
 - Python 3.13 and 3.14 are now tested and declared supported (classifiers, and
   the CI/release matrices, now span 3.10--3.14). No code changed: the suite
@@ -31,6 +320,26 @@ a deprecation policy will follow the 1.0 release.
   code snippets against the real public API, so a rename fails CI.
 - Public `filters.py`: `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, and
   `is_safe_ev_value` for building EasyVista `search` expressions safely.
+- `ev_since_filter` / `ev_between_filter` — the interval grammar
+  (`FIELD:(a;b)`) that is the only server-side range filter this API honours.
+  EasyVista has no comparison operator (`>=`, `BETWEEN`, `[a TO b]`…): either
+  rendering is silently dropped or, if it keeps `FIELD:"value"` syntax while
+  embedding the operator in the value, raises HTTP 590 as a type mismatch.
+  Neither ever narrows a result, which is why these builders exist.
+- `ev_contains_filter` / `ev_starts_with_filter` — `~` with an explicit
+  wildcard (`*` or `%`; both work identically). A bare value under `~`
+  degenerates to exact match, which these builders avoid by construction.
+  A value containing any of `*`, `%`, `_` or `[` raises `ValueError`: all four
+  are metacharacters to `~` (`_` matches any single character, `[` opens a
+  character class — measured live: replacing one character of an RFC that
+  matched 1 row with `_`, or with `[0-9]`, matched 9), and no escape for them
+  exists (`\_` is compared literally). Refusing beats silently matching records
+  the caller did not ask for, which matters because `_` is pervasive in
+  EasyVista codes: `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` would
+  otherwise also match `LAPTOP-01` and `LAPTOP001`, with HTTP 200 and no hint.
+- `parse_ev_datetime` / `format_ev_datetime` (new `timestamps.py` module) —
+  parse an EasyVista timestamp to an aware `datetime` and render one back to
+  the literal the search grammar and the wire format both accept.
 - `Request` now declares fields that were previously reachable only as untyped
   `extra="allow"` data — each verified present on live single-ticket GETs:
   `title`, `request_id`, `external_reference`, `sd_catalog_id`, `urgency_id`,
@@ -39,15 +348,20 @@ a deprecation policy will follow the 1.0 release.
   and `last_update`.
 - `RequestUpdate.title` — a ticket's title can now be changed after creation
   (`PUT /requests/{rfc}`), not only set at create time.
+- `RequestUpdate` now also carries `impact_id`, `owner_id` and
+  `external_reference` (capped at 50 characters — bisected live: 50 is
+  accepted, 51 is rejected). `severity_id`, a writable priority field, and
+  `urgency_id` are deliberately still absent; see the `O-590-PARTIAL` note.
 - `EasyvistaClient.download_document` / `AsyncEasyvistaClient.download_document`
   fetch an attachment's bytes. An absolute download URL is followed only when
   its scheme and host match the configured `server`: every request carries the
   instance's Bearer token, so a URL naming another host is refused rather than
   followed.
 - `Request` now declares the official time-limit fields as typed attributes:
-  `creation_date_ut`, `max_resolution_date_ut`, `expected_date_ut`,
-  `end_date_ut`, `sla_id` and `time_used_to_solve_request`. As with the existing
-  timestamps, they are verified *returned* and no datetime parsing is claimed.
+  `creation_date_ut`, `max_resolution_date_ut`, `expected_date_ut` and
+  `end_date_ut` (timezone-aware `datetime`, parsed the same way as the other
+  timestamps below), plus `sla_id` (int) and `time_used_to_solve_request` (a
+  string on every ticket checked, never an int, so no int branch is declared).
   The instance-specific `E_GTR_*` / `E_GTI_*` family stays undeclared and
   reachable through `classify_fields().custom`.
 - `EasyvistaClient.get_action` / `AsyncEasyvistaClient.get_action` fetch a single
@@ -62,43 +376,242 @@ a deprecation policy will follow the 1.0 release.
   tail is an RFC number rather than an id. A created action's id is therefore not
   recoverable from its create response at all; diff `list_actions` across the
   create to identify it (verified live).
+- `list_actions(fields=...)` — project timestamps and author onto the list and
+  read a whole **page** of action metadata in one request instead of one item
+  fetch per action. Three silent footguns come with it: `"*"` is not a wildcard
+  (it reduces to `ACTION_ID` alone), a dotted path (`DESCRIPTION.HREF`) is
+  silently dropped, and `list_actions` returns **one page and does not
+  paginate** — a ticket with more actions than `config.default_max_rows` is
+  truncated with no error, and the call discards the envelope's total so the
+  caller cannot detect it. That is not a corner case: a freshly created ticket
+  already carries about twelve actions, most of them workflow-generated. The
+  same cap therefore truncates `get_ticket_context`'s action log and
+  `TicketContext.to_markdown()`'s rendering of it. `list_actions` now sends
+  `config.default_max_rows` explicitly, the way every sibling search does, so
+  the cap is the client's and can be raised; real pagination is a follow-up.
+- `Action` now declares its timestamps (`created_at`/`CREATION_DATE_UT`,
+  `updated_at`/`LAST_UPDATE`), author (`done_by_id`) and workflow context
+  (`action_type_id`, `group_id`, `request_id`, `action_number`, `stage_id`,
+  `workflow_id`, `parent_action_id`) — verified live 2026-08-17. Availability
+  on the LIST endpoint is not uniform across these; pass `fields=` to project
+  the ones a default list row omits. Note the naming diverges from the two
+  models already shipped: `Action.created_at`/`updated_at` alias the same wire
+  columns that `Request` and `Employee` expose as
+  `creation_date_ut`/`last_update`. The wire aliases are identical on all three,
+  so code spanning record types should reach the value through
+  `classify_fields()` / `.reference()` rather than a shared attribute name —
+  `getattr(record, "last_update")` raises `AttributeError` on an `Action`.
+- `update_action` and `delete_document`, with `ActionUpdate`. `PUT
+  actions/{id}` edits an action's note (verified live by re-reading it
+  afterwards, not by trusting HTTP 200); an action can be edited but not
+  deleted (`DELETE actions/{id}` is refused with HTTP 403). `DELETE
+  requests/{rfc}/documents/{document_id}` removes an attachment — the
+  top-level `DELETE documents/{id}` returns HTTP 403.
 - `get_ticket_context(..., resolve_action_bodies=True)` resolves each action's
   note text. Pass `False` to skip it — it costs two extra requests per action.
 
-### Removed
-
-- **Breaking:** `PostRequest.catalog_guid` and `Request.catalog_guid` are gone.
-  `CATALOG_GUID` is absent from every sampled live ticket (0/25 single-ticket
-  GETs), from the documented create body, and from the vendor field inventory —
-  it could never populate. `PostRequest(catalog_guid=...)` previously validated
-  and was sent to the API; it now raises (`extra="forbid"`) instead of being
-  silently accepted. Use `catalog_code` to name a catalog on create.
-
-### Fixed
-
-- `find_departments` and `list_actions` interpolated caller values into a `search` expression
-  unescaped. Because `,` is an EasyVista combinator, a crafted value could silently widen the
-  result set (verified live: a department lookup returned 2 records instead of 1). Both now
-  validate the value.
-- `TicketContext.to_markdown` rendered every action with an empty body. It read
-  the text from `Action.comment`, but `COMMENT` is a distinct field that never
-  carries it; the note supplied as `PostAction.description` comes back through
-  the action's `DESCRIPTION` Memo, which is reachable only via an item-level
-  `GET actions/{id}`. Verified against a live instance.
-- **Every mapped exception's message no longer interpolates the raw HTTP response
-  body.** For a body this client does not recognize (an nginx or WAF HTML page, a
-  plain-text 503, any unmodelled shape), the message previously ended with that
-  body's literal text — which then surfaced verbatim wherever the exception was
-  rendered (`str(exc)`, a traceback, a test runner's failure summary), regardless
-  of what the body actually contained. The message now reports only the byte
-  count. **Added:** `EasyvistaError.body` (`bytes | None`) carries the raw
-  response body, so the content dropped from the message is not lost — it is the
-  only way left to retrieve an unrecognized body. `.status_code`, `.ev_code` and
-  `.ev_message` are unaffected: a *recognized* EasyVista error body (one with a
-  parseable `error`/`error_code` shape) reads exactly as it did before.
-
 ### Changed
 
+- **BREAKING**: `PostAction` now requires an action type and a group, the same
+  way `PostTask` always has and on the same vendor sentence ("Required:
+  `action_type_id`, and one of `group_id` / `group_mail` / `group_name`").
+  `PostAction()` used to construct fine and ship `{"action": {}}`, drawing an
+  HTTP 590 that named no field; it now raises at construction with a message
+  that names what is missing. A body supplying either through `extra_payload`
+  satisfies the guard.
+- `PostAction.action_type_id` and `.group_id` widen from `int | None` to
+  `int | str | None`, matching `PostTask`. They had diverged for no recorded
+  reason, so a non-numeric id worked through `create_task` and failed through
+  `create_action`. Purely permissive.
+- `Asset.asset_id` and `.status_id` accept EasyVista's `""` sentinel
+  (`OptionalInt`), as every other read model already did. A CMDB row with an
+  unset `STATUS_ID` used to fail the whole page, and inside
+  `get_department_context` it failed the whole bundle.
+- `Request.time_used_to_solve_request` and `Document.document_id` widen to
+  non-coercing `str | int | None`. Both were typed from a single observation of
+  a single instance; an instance sending the other form failed the record, and
+  for documents that meant every attachment on the ticket.
+- `PostAsset.catalog_id` and `.status_id` accept `int | str`, coercing a
+  numeric string to the number the instance's own create example shows and
+  passing a non-numeric value through as written.
+- The required-field guards on `PostRequest`, `PostAction` and `PostTask` now
+  read the body `to_api()` will actually send rather than the declared
+  attributes, so a field supplied through `extra_payload` satisfies them.
+  Previously `PostRequest(extra_payload={"CATALOG_GUID": ...})` was refused
+  even though it ships exactly what the vendor documents as a complete create.
+- An unknown key on a write model now names itself and points at
+  `extra_payload`, instead of pydantic's bare "Extra inputs are not permitted".
+  The message stops short of promising the write will work: on this API an
+  exclusion is usually a measured misbehaviour, and a 200 is not a receipt.
+- **BREAKING**: `get_department_context`'s recent tickets are now **projected**
+  with `RECENT_TICKET_FIELDS`. The previous default sent no `fields=` at all,
+  and on the verified instance the unprojected list projection returns `TITLE`
+  present but **empty** (tier 4 — 400 tickets scanned, zero with a populated
+  title), so `recent_tickets[i].title` was `None` for every caller. Projecting
+  fixes that but narrows the rest: a caller reading a column outside the seven
+  — a custom `e_*`, `DEPARTMENT_ID`, `URGENCY_ID` — off a recent ticket loses
+  it. `ticket_fields=None` restores the exact previous request.
+- **BREAKING**: `find_departments` with an all-digit name now tries
+  `DEPARTMENT_CODE` before `DEPARTMENT_ID`. A department whose code is all
+  digits was previously looked up as an id, returning a **different department
+  with HTTP 200 and no hint** — that is the bug being fixed. Where no such code
+  exists the result is identical and one extra request is spent.
+  `by="DEPARTMENT_ID"` restores the old lookup exactly.
+- **BREAKING**: `find_departments`' fuzzy fallback now folds accents and
+  compatibility forms (NFKD + `casefold`), so it can return **more** departments
+  than before. It is strictly more permissive — no name that matched stops
+  matching — and it is what makes an unaccented search term reach an accented
+  label, which it could not do on an instance whose department names are French.
+- **Envelope matching is now case-insensitive**, over the same fixed candidate
+  list and in the same priority order — never a scan of whatever keys the
+  payload carries. Envelope casing is not stable across deployments: the
+  verified instance answers a capital-D `Documents` where its own OpenAPI
+  examples spell every envelope lowercase. A matched list must also be empty or
+  hold at least one dict, so a scalar list under an envelope name
+  (`{"REQUESTS": ["a", "b"]}`) falls through to the bare-record reading instead
+  of silently returning `[]`.
+- Corrected several docstrings that read an HTTP 403 as a permission verdict.
+  This API answers 403 for a path that does not exist as well as for one a
+  profile denies, so the status code alone never distinguished them. There is
+  no nested `requests/{rfc}/actions/{id}` route and no DELETE verb on
+  `actions/{id}` — those are topology facts from the instance's own OpenAPI
+  document, not restrictions. The conclusions were right; the reasons were not.
+  A route table now records them in `docs/vendor-api-reference.md`.
+
+
+- **A `[bracketed]` untranslated label no longer wins over a real sibling
+  translation.** `references._nested_label` scanned `_EN`/`_FR`/`_PATH` and
+  accepted any non-empty string, while `localized_label` fifty lines below
+  already knew six language columns and already rejected placeholders — two
+  incompatible policies in one module. They are now one. Affects
+  `TicketContext.to_markdown`'s Status/Department/Location/Catalog rows,
+  `TicketStatistics.breakdowns` keys, and `record.reference(name).label`. On a
+  single-language instance this only ever improves the value: the string
+  rendered before was a bracketed echo of the text now returned. It can never
+  *delete* output — a record whose every language column is a placeholder still
+  yields what it always yielded. A caller keying a dashboard on the exact old
+  string sees that key change.
+- A usable non-English/non-French language column now beats `_PATH`, which was
+  previously the third and last rung.
+- `easyvista_python_client._fields._label` is removed (private, unexported). Its
+  one caller now resolves labels through `references`, so the package has one
+  placeholder rule and one language order rather than three.
+- `EasyvistaConfig.verify_ssl` accepts a CA-bundle path or an `ssl.SSLContext`
+  as well as a bool, matching what `httpx` has always accepted. A corporate
+  private CA no longer reads as though disabling verification were the only
+  option. Runtime behaviour is unchanged; this widens the annotation.
+- Requests now carry `User-Agent: easyvista-python-client/{version}` instead of
+  the underlying HTTP library's default, so the integration can be identified in
+  an instance's access log and whitelisted by a WAF operator. This is the only
+  change to the wire.
+- `EasyvistaConfig.__hash__` covers the scalar identity fields only. The hash
+  the dataclass would generate spans every field and raises `TypeError` once a
+  mapping field is non-empty; `__eq__` still compares every field.
+
+
+- **The wire form changed for a caller who passes an id as a numeric string.**
+  Widening a `PostRequest` field from `int` to `int | str` is not purely
+  additive, and the entries above previously implied it was: pydantic's smart
+  union keeps the exact type match where the old `int` field coerced. So
+  `PostRequest(origin="7")` used to send `7` and now sends `"7"`, and the same
+  is true of `department_id` and `recipient_id`, widened in this release for
+  the same reason. The vendor documents all three columns as **strings**
+  (tier 1, `docs/vendor-api-reference.md`), so the string form is the
+  documented one and there is nothing to normalize towards. An id was measured
+  accepted in either form on one instance (tier 4, 2026-08-25), so on that
+  deployment this changes the bytes and not the outcome — but a deployment that
+  discriminates on JSON type would see a behaviour change. Pass an `int` to get
+  the old bytes.
+- **`PostRequest.impact_id` is the exception, and it coerces again.** It is
+  declared `Field(union_mode="left_to_right")` with `int` first, so
+  `impact_id="28"` reaches the wire as `28`. The vendor documents this column
+  as an **integer** (tier 1), which is the form worth normalizing towards; the
+  `str` branch exists so a caller who quotes the value is not rejected, not so
+  that the quoted form ships. A non-numeric string is still accepted and passes
+  through as written, so nothing previously accepted is refused now. (Between
+  the widening and this entry `impact_id="28"` did ship as `"28"`; both changes
+  fall in this same unreleased section, so no release carried it.)
+- **`extra_payload` overrides a declared field across letter case.** The vendor
+  documents the ticket *create* body's field names as case-insensitive (tier 1,
+  `docs/vendor-api-reference.md`); the other write bodies are assumed to match
+  it, which is the safe assumption in either direction here. Against that, the
+  exact-key merge broke the escape hatch's own promise: `PostRequest(urgency_id=8,
+  extra_payload={"URGENCY_ID": "4"})` put **both** spellings on the wire with
+  conflicting values and left the winner to the server. An `extra_payload` key
+  now replaces any declared or `custom_fields`-produced key it matches when
+  case is ignored, and `extra_payload`'s spelling and value are what ship. The
+  `ALL_CAPS` form is the likely one, not a corner case — it mirrors the read
+  side, which is where callers copy names from. This is a merge rule: a
+  collision is never an error.
+- **Live-test credential renamed** (contributor-facing; the published package is
+  unaffected). `EASYVISTA_TEST_USER` / `secrets/easyvista_test_user` are now
+  `EASYVISTA_TEST_ACCOUNT` / `secrets/easyvista_test_account`. The value never
+  was a login: it is the EasyVista **account**, the instance identifier that
+  forms the `{account}` path segment of `https://host/api/{version}/{account}`
+  (a number such as `50004`), and it feeds `EasyvistaConfig.account`.
+  Authentication is the Bearer token alone. The old name is **not** accepted as a
+  fallback — `integration_tests/`, `scripts/validate_docs_examples.py` and
+  `scripts/validate_live_content_fidelity.py` now abort with a message naming the
+  replacement if it is still configured, because silently honouring it would
+  preserve exactly the misreading the rename removes. Rename your local file;
+  `secrets/` is gitignored as a whole directory, so the new name stays ignored.
+  Note the value is consulted **only** when the URL is a bare host — a full API
+  root already carries the account, and most setups never read it at all.
+
+
+- **BREAKING:** Read-model timestamps are now timezone-aware `datetime`
+  instead of `str`: `Request.submit_date_ut`, `creation_date_ut`,
+  `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut`, `last_update`,
+  and `Employee.last_update`. EasyVista returns ISO 8601 with an explicit UTC
+  offset and millisecond precision (verified live 2026-08-17), so parsing is
+  no longer left to callers. An unset date (`""` on the wire) is `None`. Write
+  models are **unchanged** — the accepted write format for a date is still
+  unverified. Migration: drop your own parsing; to rebuild a search literal
+  use `format_ev_datetime(value)`, or pass the `datetime` straight to
+  `ev_since_filter`. One more consequence, easy to miss: a record dump is no
+  longer directly JSON-serialisable. `model_dump()` and `classify_fields()`
+  now yield `datetime` objects for these columns, so
+  `json.dumps(ticket.classify_fields().official)` raises
+  `TypeError: Object of type datetime is not JSON serializable` where it used to
+  work — pass `model_dump(mode="json")` on any path that caches, exports or logs
+  a record as JSON. `classify_fields()` takes **no arguments**, so `mode="json"`
+  cannot be applied to it: render its values with `format_ev_datetime` before
+  serialising, or re-key a JSON-mode dump by the bucket's keys
+  (`dumped = ticket.model_dump(mode="json", by_alias=True)`, then
+  `{k: dumped[k] for k in ticket.classify_fields().official}`).
+  **Scope note — the `0.1.0` boundary is ambiguous, read both.** Relative to
+  the `## [0.1.0] - 2026-07-15` release **commit** (`6df6a75`), only
+  `Employee.last_update` is a pre-existing field — the six `Request` fields
+  above were themselves first declared later, during this 0.2.0 cycle
+  (see `Added`), so under that reading only one field is retyped out
+  from under a shipped release. But the `0.1.0` **git tag** currently resolves
+  to a later commit (`3216a33`, 2026-08-04, 117 commits after the release
+  commit), at which all six `Request` fields and `Employee.last_update` were
+  already declared as `str | None`. Anyone who installed or pinned against the
+  `0.1.0` tag therefore sees **all seven** fields change type, not one — check
+  which commit your `0.1.0` actually resolves to before assuming the narrower
+  case.
+- **Documentation correction:** the `search` operator `~` was documented as
+  exact-match-only, identical to `:`. Measured live, `~` **is** a pattern
+  operator — it needs an explicit wildcard (`*` or `%`, both work identically)
+  to act as one: `~"*260817*"` matched 33 rows and `~"I26081*"` matched 32,
+  while `:"I26081*"` matched 0, because `:` never expands a wildcard. Without
+  one, `~` degenerates to exact match, which is exactly what the earlier
+  tests observed and over-generalised from. Examples implying substring
+  matching with a bare value (`ASSET_TAG~LAPTOP`) were wrong and have been
+  replaced with `ev_contains_filter("ASSET_TAG", "LAPTOP")` →
+  `ASSET_TAG~"*LAPTOP*"`. `*` and `%` are not the only metacharacters either:
+  under `~`, `_` matches any single character and `[` opens a character class
+  (both measured live). The unverified `!~` / `!` / `is_null` /
+  `is_not_null` operators are still not documented as fact.
+- **Documentation correction:** the README's and user guide's tutorial examples filtered with
+  `ev_equals_filter("STATUS_EN", "Open")`. `STATUS_EN` is a sub-key of the nested `STATUS`
+  object, not a top-level column, so EasyVista silently ignored the condition and every example
+  returned *all* tickets, not just open ones. This was a documentation defect, not a library bug
+  — the library does not special-case field names, so nothing in the shipped code was broken.
+  Replaced with `ev_equals_filter("STATUS_ID", 3)` throughout, and the user guide now documents
+  which returned fields are actually searchable and the third (HTTP 590 type-mismatch) search
+  outcome.
 - `AsyncEasyvistaClient.get_ticket_context` and `get_department_context` now issue their
   independent sub-requests **concurrently** instead of one after another. The async client
   previously awaited every call in sequence, so it was no faster than the synchronous one
@@ -125,22 +638,12 @@ a deprecation policy will follow the 1.0 release.
 - **Documentation of observed behaviour, not a code change:** a `description` supplied to
   `PostRequest` at create time is not readable back through either the `DESCRIPTION` or the
   `COMMENT` Memo on the verified instance. `RequestUpdate.description` writes the ticket's
-  `COMMENT` Memo, not `DESCRIPTION` — verified live (0/15 sampled tickets, portal-created
-  included, have a non-empty `DESCRIPTION`; 15/15 have a non-empty `COMMENT`). Read the body
+  `COMMENT` Memo, not `DESCRIPTION` — verified live by re-reading the memo after a write, not
+  by trusting HTTP 200. Nothing is claimed here about how often `DESCRIPTION` is populated on
+  an instance: an earlier reading of that (`0/15` sampled tickets) is explicitly withdrawn by
+  the DESCRIPTION-sampling correction under `Fixed` below. Read the body
   text back with `TicketContext.comment` (or `resolve_memo("requests/{rfc}/comment")`
   directly), not `Request.description`. Both fields stay as they are; nothing was renamed.
-- **Documentation correction:** the `search` operator `~` was documented as "contains". It is
-  **exact match**, identical to `:` — verified against a live instance. Examples implying
-  substring matching (`ASSET_TAG~LAPTOP`) were wrong and have been replaced. The unverified
-  `!~` / `!` / `is_null` / `is_not_null` operators are no longer documented as fact.
-- **Documentation correction:** the README's and user guide's tutorial examples filtered with
-  `ev_equals_filter("STATUS_EN", "Open")`. `STATUS_EN` is a sub-key of the nested `STATUS`
-  object, not a top-level column, so EasyVista silently ignored the condition and every example
-  returned *all* tickets, not just open ones. This was a documentation defect, not a library bug
-  — the library does not special-case field names, so nothing in the shipped code was broken.
-  Replaced with `ev_equals_filter("STATUS_ID", 3)` throughout, and the user guide now documents
-  which returned fields are actually searchable and the third (HTTP 590 type-mismatch) search
-  outcome.
 - `Request.status_id`, along with the model's other numeric identity/classification fields, now
   uses an `OptionalInt` type that tolerates the API's `""` for an absent numeric; `status_id`
   previously raised a validation error on that value.
@@ -163,6 +666,337 @@ a deprecation policy will follow the 1.0 release.
 - `EasyvistaClient.get_ticket_context` now lists documents before resolving
   action bodies, rather than after. The same requests are issued and the
   result is identical; only their order on the wire changed.
+
+### Removed
+
+- **BREAKING**: `RequestUpdate.status_id`. There is no flat status update on this
+  API and this field never worked. Sent alone the PUT is rejected 590/2013; sent
+  beside any other field the PUT returns **200, applies the other field, and
+  drops the status in silence** — measured on one ticket, title updated,
+  `STATUS_ID` unchanged. A write that reports success and stores nothing is worse
+  than one that fails, so the field is gone; `extra="forbid"` now makes
+  `RequestUpdate(status_id=...)` raise at construction. Use `set_status`.
+
+
+- **Breaking:** `PostRequest.catalog_guid` and `Request.catalog_guid` are gone.
+  `CATALOG_GUID` is absent from every sampled live ticket (0/25 single-ticket
+  GETs), from the documented create body, and from the vendor field inventory —
+  it could never populate. `PostRequest(catalog_guid=...)` previously validated
+  and was sent to the API; it now raises (`extra="forbid"`) instead of being
+  silently accepted. Use `catalog_code` to name a catalog on create.
+  **Update, recorded here rather than silently edited into the entry above:**
+  `PostRequest.catalog_guid` was restored in `[Unreleased]` — the vendor
+  documents it as the **preferred** subject identifier, and the removal above
+  rested on a customer handover note the package had cited as the vendor
+  specification, not on the vendor docs themselves. `Request.catalog_guid`
+  remains gone, correctly: `Request` is a read model, `CATALOG_GUID` was never
+  returned on any sampled ticket, and `test_request_has_no_catalog_guid_attribute`
+  now pins its absence.
+
+### Fixed
+
+- Two retractions in `PostAction`'s docstring, both measured 2026-09-02 by
+  re-reading the record after ending rather than trusting the write:
+  - It said ending **clears** `GROUP_ID` ("the record moves from
+    assigned-to-a-group to done-by-a-person"). It does not — the group survived
+    on an ended workflow action (57) and on an ended caller-created one (3, the
+    value passed at create).
+  - It said "**This package does not implement it**" of ending. It does now.
+- `STATUS_ID_ON_TERMINATE` is documented: it records the status the *ticket*
+  took when the action ended, and is empty while the action is open, so it
+  reports what happened rather than predicting it.
+
+
+- **`get_ticket_context` dropped the body of actions a reader can see.**
+  `_resolve_action_body` resolved only the `DESCRIPTION` memo, leaving
+  `COMMENT` an unresolved href dict — which made `TicketContext.to_markdown`'s
+  `isinstance(action.comment, str)` fallback unreachable on every item-level
+  record. The EasyVista UI renders one text field per action, `DESCRIPTION`
+  falling back to `COMMENT` when it is empty (measured in the UI 2026-09-01,
+  one instance, Service Manager 2025.3), so an action whose description was
+  empty exported as a heading with no body while the ticket on screen showed
+  the comment. `COMMENT` is now resolved under exactly that condition — one
+  extra request only when `DESCRIPTION` comes back empty, so a populated
+  description costs nothing.
+- **The docs taught an invisible write.** "Internal vs. customer-facing
+  comments" in the user guide, and the matching section of the actions skill,
+  presented `description` and `comment` as two *independent* channels and gave
+  as their worked example a `PostAction` putting the internal note in `comment`
+  beside a populated `description` — precisely the shadowed case, where the
+  text is stored, reads back through the API and is shown to nobody. Both now
+  state the shadowing rule and write human-facing text to `description`.
+  `comment` is not the private channel; visibility is the action type.
+- **Retracted: ending an action is not blocked.** `PostAction`, both clients'
+  `create_action`, the actions skill, the user guide and `CLAUDE.md` all said
+  `PUT actions/{rfc_number}` returned `590 Action not found` for every
+  documented form and read that as an instance or profile restriction to raise
+  with an administrator. Measured 2026-09-01: ending an **open** action
+  succeeds. The 590 is what the route answers when no open action matches —
+  replaying it against an already-ended one, for instance. The same measurement
+  fixed the surrounding details: `end_date` takes `dd/mm/yyyy hh:mm:ss` (ISO
+  8601 is refused `590 "Invalid End Date"`), `elapsed_time` is minutes, an
+  explicit `start_date` is stored faithfully while a derived one is early by
+  the instance's UTC offset, and the path segment is the RFC number — an
+  action id there answers 404.
+- **`create_action`'s refusals were attributed to the wrong cause.** The
+  docstring called creation "gated by the workflow's current stage". It is
+  parent resolution: the route needs exactly one **open** action on the ticket
+  (0 → `Parent action not found or incorrect`, 1 → succeeds, ≥2 → `Ambiguous
+  query : many parent actions found`), and an explicit `parent_action_id`
+  naming an open action works at any count. A status change ends the ticket's
+  open actions, which is why a body accepted earlier is refused later — the
+  stage is not itself the gate, and the error messages were literal all along.
+- **The action-type documentation contradicted itself.** The user guide and the
+  actions skill each stated the visibility rule correctly and then retracted it
+  a dozen lines later ("there is no naming convention to pattern-match", "they
+  carry no visibility meaning"), and both printed `INTERNAL_NOTE_TYPE_ID = 20`
+  — a number that appears in no test, probe or fixture and predates the
+  measurement that established 94/95. The `20` is deleted rather than replaced
+  with another invented one. The corrected text distinguishes the two halves
+  that are both true: the instance's OpenAPI declares **no `action-types` route
+  at all**, so there is nothing to enumerate and nothing for an administrator
+  to unblock — and every action record still carries `ACTION_TYPE_ID` beside
+  translated `ACTION_LABEL_*` columns, so the ids are recoverable from the
+  data. `discover("ACTION_TYPE")` now does that sampling.
+- **The actions skill taught `create_action` for comments.** Its front matter,
+  Procedure and first worked example all reached for the verb that creates an
+  action *open* — a pending row whose text the UI does not display — while the
+  skill's own headline said to use `create_task`. A Procedure is executed
+  verbatim by an agent, so this was the highest-value correction in the set.
+  The guide's end-to-end example was labelled "add a comment" and called
+  `create_action` too.
+- **Nothing documented how to obtain the one mandatory create field.** A new
+  guide subsection covers `catalog_code` / `catalog_guid`, including the trap
+  that `reference("CATALOG_REQUEST").id` resolves to `SD_CATALOG_ID`, which
+  `PostRequest` accepts under no name at all. A 403 on `/catalog-requests` is
+  now reported as a **grant to ask for** rather than an impossibility: the
+  route is declared in that same deployment's spec.
+- `origin` is taught as the channel **name** the vendor documents (`"Phone"`),
+  not as an id. It is the one create field with a portable, human-readable
+  form; the int that was measured accepted stays in a parenthetical, and every
+  live-hitting caller keeps it.
+- A new **"First steps on your instance"** section is now section 2 of the user
+  guide rather than section 20 of 23, and gives the order to discover a
+  deployment's values in — a reader needs it before they write anything.
+- `close_ticket`'s "omitting `status_guid` closes to the instance's default
+  *Closed* meta-status" is **retracted to an open question** in the guide and
+  in both docstrings that carried it. It is not recorded in
+  `docs/vendor-api-reference.md` and no live test exercises the omitted form —
+  every one passes an explicit `status_guid`. Recorded as O-CLOSE-DEFAULT.
+- `models/action.py` held the last copy of the retracted bracket rule ("the
+  brackets carry no other meaning"). A new test pins the half that nothing
+  guarded: a bracketed **suffix** on distinct text survives `localized_label`,
+  where a wholly-bracketed placeholder is discarded.
+
+
+- **The `create_action`, `create_task` and `close_ticket` parsers now name
+  their envelope.** All three called `extract_records(data)` with no envelope
+  key, so a deployment echoing the created record under an `actions` wrapper
+  handed `model_validate` the wrapper itself — and `extra="allow"` accepted it
+  silently, yielding a well-formed record with every declared field `None`.
+  `close_ticket` worked only because `"requests"` happened to sit in a
+  hardcoded fallback list belonging to no resource in particular.
+- **The `add_document` parser read its response by a different rule than
+  `list_documents`.** It used the case-sensitive `extract_records` while the
+  list parser was already case-insensitive — for the same resource on the same
+  instance, the one known to answer a capital-D `Documents`. A create echoed
+  that way produced an all-`None` `Document` built from the wrapper.
+
+
+- **Documented how a comment actually works, retracting two wrong claims.** This
+  entry previously said "this API has no private-comment feature" and that the
+  API "cannot reveal" which action types are internal. Both were wrong, and the
+  second was a *correction that deleted a true finding*. Measured live
+  2026-08-28 on one instance:
+  - **A comment is an action that has been ENDED.** An action is a unit of work:
+    created open (a task to do), then ended (work reported). Only an ended action
+    appears in the ticket history with its text visible; an open one renders as a
+    pending row with no body, which reads as though the text vanished. Ending
+    sets `START_DATE_UT`, `END_DATE_UT`, `ELAPSED_TIME` and
+    `STATUS_ID_ON_TERMINATE` and fills `DONE_BY_ID`. None of those can be set on
+    create — they return HTTP 200 and are dropped. (This bullet also said ending
+    **clears** `GROUP_ID`; it does not — see the retraction above.)
+  - **Ending is vendor-documented, and it works.**
+    `PUT actions/{rfc_number}`, body wrapped in `end_action`, dates in the
+    instance's own format. This bullet previously said every documented form
+    returned `590 Action not found` and read that as an instance/profile
+    restriction. That was wrong: the 590 is what the route answers when no
+    *open* action matches, such as replaying it against one already ended. It is
+    implemented as `end_action` — see the entry at the top of this release.
+  - **Visibility is by action type, and the labels do say which.** Type 94 is
+    `Commentaire [Public]` / `Customer Comment`; type 95 is
+    `Note Interne [Privé]` / `Internal Note`. Ids are per-deployment, but they
+    are **discoverable**: `GET action-types` is 403, yet every action record
+    carries `ACTION_TYPE_ID` beside translated `ACTION_LABEL_*` columns, so one
+    `GET actions` recovers the types in use.
+  - **The bracket "correction" was itself wrong.** Two conventions exist and mean
+    opposite things. A whole label bracketed and echoing another language
+    (`EN='[Analyse et résolution]'`) is an untranslated placeholder, which is why
+    `references.localized_label` discards it. A bracketed *suffix* on distinct
+    text with genuine sibling translations (`FR='Commentaire [Public]'` beside
+    `EN='Customer Comment'`) is a real visibility marker. The earlier correction
+    generalised the first pattern over the second and removed an accurate claim.
+  No release carried any of the wrong versions.
+- `PostRequest`'s docstring claimed a ticket "needs at minimum `catalog_code`
+  plus `title`". That was wrong in a way that cost real debugging time. **Send
+  the whole documented create body** — `catalog_code`, `origin`, `title`,
+  `description`, `department_id`, `urgency_id`, `impact_id`. The full body is
+  accepted everywhere tried; the same body minus those ids is accepted on some
+  catalogs and rejected on others with the *identical* remaining bytes. The
+  rejection's message is a bare **SQL parser error** naming no field
+  (`=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...`), which reads
+  like a server-side defect and is not one — it is what an under-specified create
+  looks like here. Every id in that body was verified to persist by reading it
+  back under an explicit projection (these columns are absent from the default
+  projection, like `TITLE`, so an unprojected read shows `None` regardless).
+- Documented that **a rejected create may still have created the ticket**: 12
+  attempts returned 3 `RFC_NUMBER`s and afterwards all 12 tickets existed. A 590
+  therefore means *possibly created*, never *not created* — retrying duplicates,
+  and the caller never learns the id. The `external_reference` marker does
+  survive the failed insert and is searchable, which is the only way to reconcile
+  such an orphan.
+- `integration_tests/test_live_smoke.py` leaked one ticket per live run. Its
+  `test_missing_mandatory_field_raises_validation_error` asserted that a create
+  with a catalog but no title is rejected "(no ticket created), so this stays
+  read-only-safe by construction" — both halves false: `title` is not the
+  mandatory field (the full documented body with no title creates fine), and the
+  rejection does create a row. Replaced by
+  `test_an_underspecified_create_body_raises_validation_error`, which omits the
+  ids that really are required and reconciles the leftover ticket by its marker
+  in a `finally`. Two tests added beside it: one pinning that the documented body
+  lands every id, one pinning that `set_status` reaches a **non-terminal**
+  status.
+- `PostRequest.origin` and `PostRequest.impact_id` now accept `int | str`, but
+  they were widened for different reasons, not the same one. `origin` is
+  vendor-documented as a **string** (tier 1); an `int` was separately measured
+  accepted on one instance (tier 4, date not recorded). `impact_id` is
+  vendor-documented as an **integer** (tier 1); its `str` branch exists so a
+  caller who quotes it is not rejected, not because a string was independently
+  measured landing here. `origin` sends whichever type is passed, unchanged;
+  `impact_id` normalizes a numeric string back to the vendor's documented int —
+  see **Changed** below, where the wire-form consequences of both are set out.
+- Three shipped docstrings cited a gitignored, instance-private handover note
+  as the documented request body. That file is invisible to every reader of the
+  published repository — a dead link — and was never the vendor documentation
+  it was cited as; `docs/vendor-api-reference.md` now carries the citable
+  facts instead. A new guard (`scripts/tests/test_source_citations.py`) fails
+  the suite if any tracked file cites a gitignored path again — it scans
+  `easyvista_python_client/**/*.py`, `scripts/**/*.py`, `docs/*.rst`,
+  `docs/*.md`, `integration_tests/**/*.py`, and the root `.md` files,
+  including this changelog.
+- `PostRequest`'s "send the whole documented set" doctrine is corrected. The
+  vendor requires only `catalog_guid` or `catalog_code`; the seven-field body
+  is a hedge against per-catalog configuration measured on one instance, which
+  the docstring stated as an API requirement.
+- `TicketContext.to_markdown` dropped a non-default memo. Fetch was
+  parameterised by `memo_fields` and rendering was not, so
+  `get_ticket_context(rfc, memo_fields=("solution",))` — the headline case for
+  that parameter, a deployment whose body memo is neither default — produced a
+  Markdown export with no body section and no warning. It now applies the same
+  role-naming rule to `memos`: when neither `description` nor `comment` has
+  text, a single populated memo becomes the body under `## Description`, and
+  several each get a heading derived from the field name requested.
+
+
+- `ev_since_filter` / `ev_between_filter` accepted a **timestamp string with no
+  UTC offset** and passed it to the wire. EasyVista accepts such a literal and
+  reads it in a different zone, which moves the bound and **silently skips
+  records** — measured live 2026-08-18, the same wall-clock text with and without
+  its offset enumerated 13 rows and 11 rows against one instance. Both builders
+  now refuse a time that carries no offset (or `Z`), matching the guard
+  `format_ev_datetime` already applied to a naive `datetime`; a bare date is
+  still accepted, having no time to misplace. Found by probing, not by review:
+  the datetime path was guarded and the string path was not, for the identical
+  hazard.
+- `ev_since_filter` / `ev_between_filter` now **normalise** a timestamp string
+  bound instead of passing it through. The offset gate above made an offset
+  mandatory, and the obvious way to comply with a stored
+  `"2026-08-17T20:26:40"` watermark is to append `+02:00` — but measured live
+  2026-08-18, `LAST_UPDATE:(2025-11-28T16:14:41+01:00;)` is **HTTP 590**, as are
+  minute precision, `seconds+00:00` and a space instead of `T` (which is what
+  `str(aware_datetime)` produces). Only a bare date and
+  millisecond-precision-with-offset (or `Z`) are honoured. An admitted string
+  bound is therefore re-rendered through
+  `format_ev_datetime(parse_ev_datetime(text))`, so the string and datetime
+  paths now emit byte-identical bounds and both emit a rendering the wire
+  accepts; a bare date is still passed through unchanged. Lowercase `z` is now
+  accepted too — `parse_ev_datetime` already accepted it on the read path, so
+  refusing it here rejected a value this package itself produces. The rendered
+  bound is validated as well, so a `datetime` in a zone whose UTC offset is not
+  a whole number of minutes (every pre-1900 `zoneinfo` entry) raises locally
+  instead of emitting `+05:53:20`.
+- **Documented, not changed:** the interval's lower bound is **inclusive** and
+  milliseconds are honoured (verified live on three independent boundaries), so
+  a watermark set to `max(t.last_update)` re-reads that boundary record on the
+  next sweep. And an offset-pagination sweep over a change window must be sorted
+  **descending** (`sort="LAST_UPDATE DESC"`) and de-duplicated: the rows the
+  filter selects are by construction the rows that are changing, so a ticket
+  touched between two pages moves within the set being paged and can slip past
+  the read cursor. Descending, the row that slips is the re-touched one, whose
+  stamp is now *above* the watermark, so the next sweep picks it up — the miss is
+  deferred. Ascending, the row that slips is a neighbour whose stamp did *not*
+  change, so it falls *below* the watermark and is lost. A caller who cannot
+  tolerate even a deferred miss must page `search_tickets` with keyset
+  pagination (advance the window to the last row's stamp instead of an offset),
+  which `iter_tickets` cannot express. The sweep examples in `ev_since_filter`,
+  the user guide and the search-syntax skill all carry the sort and the
+  de-duplication. **Undocumented until now:** because descending yields the
+  newest row first, the watermark reaches its final value on page 1 of any
+  given sweep, so a sweep that is interrupted or capped with `max_records`
+  still ends up holding the newest stamp — advancing the watermark from it
+  permanently excludes every row the incomplete sweep never read. The four
+  sites above now say so: advance the watermark only after a sweep runs to
+  completion, and checkpoint a mid-sweep caller with keyset pagination instead.
+- `Request`/`Action`/`Employee` timestamp columns now **raise** on a malformed
+  value instead of falling through to pydantic's own datetime parser, which is
+  far more permissive than EasyVista's format and invented plausible-looking
+  instants: `"20260817"` became `1970-08-23T12:00:17Z` (56 years off) and
+  `1755434441610` — what an epoch-millis format change would look like — became
+  a wholly credible `2025-08-17T12:40:41.610Z`. Absorbing a format change is the
+  opposite of what the guard exists for, and the docstring already promised a
+  raise. The `""` unset sentinel still becomes `None`, unchanged.
+- **Documentation correction:** `RequestUpdate`'s docstring claimed `DESCRIPTION`
+  is empty on every ticket of the verified instance. It is not. A pooled 77-row
+  sample across four orderings found `COMMENT` populated on 57 rows,
+  `DESCRIPTION` on 27 and *both* on 24, with the proportions flipping by slice
+  (measured 2026-08-18). The earlier 0/15 reading was a sampling artifact drawn
+  from probe-authored tickets. The load-bearing claim is unchanged and still
+  verified: `RequestUpdate.description` writes the `COMMENT` memo. What is
+  withdrawn is the generalisation about `DESCRIPTION` being universally empty —
+  which also means an instance's body memo cannot be auto-detected by sampling.
+- `find_departments` and `list_actions` interpolated caller values into a `search` expression
+  unescaped. Because `,` is an EasyVista combinator, a crafted value could silently widen the
+  result set (verified live: a department lookup returned 2 records instead of 1). Both now
+  validate the value.
+- `TicketContext.to_markdown` rendered every action with an empty body. It read
+  the text from `Action.comment`, but `COMMENT` is a distinct field that never
+  carries it; the note supplied as `PostAction.description` comes back through
+  the action's `DESCRIPTION` Memo, which is reachable only via an item-level
+  `GET actions/{id}`. Verified against a live instance.
+- **Every mapped exception's message no longer interpolates the raw HTTP response
+  body.** For a body this client does not recognize (an nginx or WAF HTML page, a
+  plain-text 503, any unmodelled shape), the message previously ended with that
+  body's literal text — which then surfaced verbatim wherever the exception was
+  rendered (`str(exc)`, a traceback, a test runner's failure summary), regardless
+  of what the body actually contained. The message now reports only the byte
+  count. **Added:** `EasyvistaError.body` (`bytes | None`) carries the raw
+  response body, so the content dropped from the message is not lost — it is the
+  only way left to retrieve an unrecognized body. `.status_code`, `.ev_code` and
+  `.ev_message` are unaffected: a *recognized* EasyVista error body (one with a
+  parseable `error`/`error_code` shape) reads exactly as it did before.
+- `RECENT_TICKETS_SORT` used a colon-separated token (`RFC_NUMBER:DESC`) that
+  EasyVista silently ignores, so `get_department_context(recent_tickets=...)`
+  returned tickets in the API's default order rather than newest-first. The
+  descending token must be space-separated (`RFC_NUMBER DESC`) — verified live
+  2026-08-17 by `integration_tests/test_live_change_window.py`. Closes O-DIR-1.
+
+### Notes
+
+- Open item **O-590-PARTIAL**: `PUT requests/{rfc}` with `URGENCY_ID` returned
+  HTTP 590 (code 2013) while nevertheless changing the stored value. A rejected
+  update may therefore have partially applied — re-read before retrying. Needs a
+  focused live probe (set each id from `GET /urgencies` in turn and re-read)
+  before `urgency_id` can be added to `RequestUpdate`.
 
 ## [0.1.0] - 2026-07-15
 
@@ -188,5 +1022,6 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/baraline/easyvista_python_client/releases/tag/v0.1.0
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...v0.2.0
+[0.1.0]: https://github.com/baraline/easyvista_python_client/releases/tag/0.1.0

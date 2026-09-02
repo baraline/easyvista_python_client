@@ -99,10 +99,11 @@ def test_description_round_trips_through_the_comment_memo(
 ):
     # Phase 0 follow-up, verified live: `RequestUpdate.description` writes the
     # ticket's COMMENT memo, not DESCRIPTION, and a description supplied at
-    # CREATE time is not readable back through either. On this deployment
-    # DESCRIPTION is empty on every ticket sampled (0/15, portal-created
-    # included) while COMMENT is populated on all of them -- so COMMENT is
-    # where a ticket's body text lives here. This pins the path that works.
+    # CREATE time is not readable back through either. This pins the path that
+    # works. It does NOT pin which memo an instance populates: a later pooled
+    # 77-row sample across four orderings found COMMENT on 57, DESCRIPTION on
+    # 27 and both on 24, so the earlier "DESCRIPTION empty on 0/15" reading was
+    # a sampling artifact and must not be generalized (see RequestUpdate).
     rfc = ticket_factory()
     body = f"EVCLI{uuid.uuid4().hex[:10].upper()}BODY"
     live_client.update_ticket(rfc, RequestUpdate(description=body))

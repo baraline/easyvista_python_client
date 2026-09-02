@@ -1,8 +1,17 @@
 import pytest
 
-from easyvista_python_client.models.action import Action, PostAction
+from easyvista_python_client.models.action import (
+    Action,
+    ActionUpdate,
+    PostAction,
+    PostTask,
+)
 from easyvista_python_client.resources import actions as a
-from easyvista_python_client.resources.actions import build_get_action
+from easyvista_python_client.resources.actions import (
+    build_get_action,
+    build_list_actions,
+    build_update_action,
+)
 
 
 def test_action_accepts_object_action_type():
@@ -30,8 +39,11 @@ def test_build_create_action_bare_body_and_path():
 
 
 def test_build_create_action_custom_fields_prefix():
-    spec, _ = a.build_create_action("I1", PostAction(custom_fields={"team": "L2"}))
-    assert spec.json == {"e_team": "L2"}
+    spec, _ = a.build_create_action(
+        "I1",
+        PostAction(action_type_id=94, group_id=3, custom_fields={"team": "L2"}),
+    )
+    assert spec.json == {"action_type_id": 94, "group_id": 3, "e_team": "L2"}
 
 
 def test_build_list_actions_uses_top_level_filtered_endpoint():
@@ -69,6 +81,39 @@ def test_build_list_actions_filters_by_rfc():
     assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'
 
 
+def test_list_actions_passes_a_fields_projection_through():
+    """EV-R3: the projection is what makes comment metadata 1 request, not N."""
+    spec, _parse = build_list_actions(
+        "I240101_0001", fields=["ACTION_ID", "CREATION_DATE_UT", "LAST_UPDATE"]
+    )
+    assert spec.params["fields"] == "ACTION_ID,CREATION_DATE_UT,LAST_UPDATE"
+    assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'
+
+
+def test_list_actions_accepts_a_bare_string_projection():
+    spec, _parse = build_list_actions("I240101_0001", fields="ACTION_ID,LAST_UPDATE")
+    assert spec.params["fields"] == "ACTION_ID,LAST_UPDATE"
+
+
+def test_list_actions_omits_fields_when_not_requested():
+    """Absent, not empty: `fields=` with no value is not the same request."""
+    spec, _parse = build_list_actions("I240101_0001")
+    assert "fields" not in spec.params
+
+
+def test_list_actions_sends_the_row_cap_explicitly_when_given_one():
+    """The cap must be the CLIENT's, not the server's unstated default.
+
+    This call returns one page and does not paginate, so whoever owns the cap
+    owns where the action log gets truncated. Every sibling search on the client
+    injects ``config.default_max_rows``; this one used to be the single search
+    that deferred to the server (25 on the verified instance), which a caller
+    could neither see nor raise.
+    """
+    spec, _parse = build_list_actions("I240101_0001", max_rows=200)
+    assert spec.params["max_rows"] == 200
+
+
 def test_build_get_action_targets_the_top_level_path():
     spec, _ = build_get_action(52990)
     assert spec.method == "GET"
@@ -80,3 +125,176 @@ def test_build_get_action_parses_an_enveloped_record():
     _, parse = build_get_action(52990)
     action = parse({"actions": [{"ACTION_ID": 52990}]})
     assert action.action_id == 52990
+
+
+def test_update_action_uses_the_top_level_path():
+    """The nested requests/{rfc}/actions/{id} form returns 403 (verified live)."""
+    spec, _parse = build_update_action(57483, ActionUpdate(description="edited"))
+    assert spec.method == "PUT"
+    assert spec.path == "actions/57483"
+    assert spec.json == {"description": "edited"}
+
+
+def test_update_action_drops_unset_fields():
+    spec, _parse = build_update_action(1, ActionUpdate(description="only this"))
+    assert "comment" not in spec.json
+
+
+def test_build_search_actions_exposes_the_envelope_a_pager_needs():
+    """The parser yields the whole ``SearchResult``, so ``@next`` is readable."""
+    spec, parse = a.build_search_actions("I240101_0001")
+    assert spec.path == "actions"
+    result = parse(
+        {
+            "records": [{"ACTION_ID": 1}, {"ACTION_ID": 2}],
+            "record_count": "2",
+            "total_record_count": "3",
+            "@next": "https://ev.test/api/v1/acme/actions?offset=2",
+        }
+    )
+    assert [x.action_id for x in result.records] == [1, 2]
+    assert result.total_record_count == 3
+    assert result.next_url == "https://ev.test/api/v1/acme/actions?offset=2"
+
+
+def test_build_search_actions_sends_the_offset():
+    spec, _parse = a.build_search_actions("I240101_0001", max_rows=25, offset=50)
+    assert spec.params["offset"] == 50
+    assert spec.params["max_rows"] == 25
+
+
+def test_build_search_actions_keeps_the_rfc_filter_on_every_page():
+    """A page-2 request that lost the filter would sweep the whole table."""
+    spec, _parse = a.build_search_actions("I240101_0001", offset=25)
+    assert spec.params["search"] == 'REQUEST.RFC_NUMBER:"I240101_0001"'
+
+
+@pytest.mark.parametrize("rfc", ["", "   ", 'x",REQUEST.RFC_NUMBER:"y'])
+def test_build_search_actions_refuses_an_unsafe_or_blank_rfc(rfc):
+    """The guard is shared with ``build_list_actions``."""
+    with pytest.raises(ValueError):
+        a.build_search_actions(rfc)
+
+
+# --- the create parsers name their envelope ---------------------------------
+#
+# Both passed `extract_records(data)` with no envelope key. A deployment
+# echoing the created record under an `actions` wrapper handed
+# `model_validate` the wrapper itself, and `extra="allow"` accepted it
+# silently -- so the assert below is on `action_id`, not on the type: the old
+# code returned a perfectly well-formed `Action` with every field `None`.
+
+
+def test_build_create_action_unwraps_an_actions_envelope():
+    _, parser = a.build_create_action(
+        "I1", PostAction(action_type_id=94, group_id=3)
+    )
+    assert parser({"actions": [{"ACTION_ID": 9}]}).action_id == 9
+
+
+def test_build_create_action_unwraps_a_capital_a_actions_envelope():
+    _, parser = a.build_create_action(
+        "I1", PostAction(action_type_id=94, group_id=3)
+    )
+    assert parser({"Actions": [{"ACTION_ID": 9}]}).action_id == 9
+
+
+def test_build_create_task_unwraps_an_actions_envelope():
+    _, parser = a.build_create_task("I1", PostTask(action_type_id=94, group_id=3))
+    assert parser({"actions": [{"ACTION_ID": 9}]}).action_id == 9
+
+
+def test_build_end_action_addresses_the_ticket_not_the_action():
+    """The path segment is the RFC; the action is named in the body.
+
+    Getting this backwards is the documented failure mode -- ``actions/{id}``
+    answers 404 for this verb even when the body names the action too.
+    """
+    spec, _ = a.build_end_action(
+        "I1", action_id=42, end_date="01/09/2026 17:23:51", elapsed_time=15
+    )
+    assert spec.method == "PUT"
+    assert spec.path == "actions/I1"
+    assert spec.json == {
+        "end_action": {
+            "action_id": 42,
+            "end_date": "01/09/2026 17:23:51",
+            "elapsed_time": 15,
+        }
+    }
+
+
+def test_build_end_action_refuses_a_bare_missing_action_id():
+    """The id-less bulk form must be asked for, never arrived at by omission.
+
+    ``Action.action_id`` is legitimately ``None`` across this package -- a
+    create response carries no id, and a ``fields=`` projection without
+    ``ACTION_ID`` drops it -- so forwarding one would otherwise select the
+    vendor's "end every open action" form in silence.
+    """
+    with pytest.raises(ValueError, match="end_all"):
+        a.build_end_action("I1", end_date="01/09/2026 17:00:00")
+
+
+def test_build_end_action_end_all_reaches_the_wire_without_an_action_id():
+    """Asked for explicitly, the bulk form omits the key rather than nulling it."""
+    spec, _ = a.build_end_action("I1", end_all=True, elapsed_time=15)
+    assert spec.json == {"end_action": {"elapsed_time": 15}}
+    assert "action_id" not in spec.json["end_action"]
+
+
+def test_build_end_action_refuses_action_id_and_end_all_together():
+    """They are contradictory: end_all IS the id-less form."""
+    with pytest.raises(ValueError):
+        a.build_end_action("I1", action_id=5, end_all=True)
+
+
+@pytest.mark.parametrize("value", [0, "0"])
+def test_build_end_action_sends_a_falsy_elapsed_time(value):
+    """``is not None``, not truthiness.
+
+    Zero minutes is a legitimate value the server stores; a truthiness check
+    would drop it silently and the action would end with an empty
+    ``ELAPSED_TIME`` instead.
+    """
+    spec, _ = a.build_end_action("I1", action_id=1, elapsed_time=value)
+    assert spec.json["end_action"]["elapsed_time"] == value
+
+
+def test_build_end_action_sends_a_falsy_action_id():
+    """``action_id=0`` must address action 0, not become the bulk form."""
+    spec, _ = a.build_end_action("I1", action_id=0)
+    assert spec.json["end_action"]["action_id"] == 0
+
+
+def test_build_end_action_passes_start_date_through():
+    """``start_date`` is the fix for the server's offset-shifted derived one."""
+    spec, _ = a.build_end_action(
+        "I1", action_id="7", start_date="01/09/2026 17:00:00",
+        end_date="01/09/2026 17:15:00", elapsed_time="15", doneby_mail="a@b.c",
+    )
+    assert spec.json["end_action"] == {
+        "action_id": "7",
+        "start_date": "01/09/2026 17:00:00",
+        "end_date": "01/09/2026 17:15:00",
+        "elapsed_time": "15",
+        "doneby_mail": "a@b.c",
+    }
+
+
+@pytest.mark.parametrize("rfc", ["", "   "])
+def test_build_end_action_refuses_a_blank_rfc(rfc):
+    """Blank would build ``PUT actions/`` -- the collection, not a ticket."""
+    with pytest.raises(ValueError):
+        a.build_end_action(rfc, action_id=1)
+
+
+def test_build_end_action_parses_the_href_only_response_without_raising():
+    """The measured response is href-only and names the parent REQUEST.
+
+    It carries no ACTION_ID, so the parsed Action is empty by construction --
+    the point of this test is that it parses rather than that it is useful.
+    """
+    _, parser = a.build_end_action("I1", action_id=1)
+    parsed = parser({"HREF": "https://host/api/v1/50004/requests/I1"})
+    assert parsed.action_id is None

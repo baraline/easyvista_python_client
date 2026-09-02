@@ -29,9 +29,11 @@ What the live probes established (full tables in ``task-1-report.md``):
   silently *widens* a same-field query. A ``,`` **inside** the quotes is a
   literal, so escaping the quote is what blocks it.
 * **``;`` is not a combinator** — it is swallowed into the quoted value.
-* **``~`` is exact-match, not "contains"** — identical to ``:``, on code-like
-  fields (``DEPARTMENT_CODE``, ``ASSET_TAG``) and free-text label fields
-  (``DEPARTMENT_FR``) alike. The published docs claiming otherwise are wrong.
+* **``~`` is a pattern operator, but only with an explicit wildcard.**
+  ``FIELD~"abc*"`` matches a prefix and ``FIELD~"*abc*"`` a substring (verified
+  live 2026-08-17); ``%`` works as a wildcard too. Given a *bare* value it is
+  identical to ``:`` — exact match — which is why this suite once concluded it
+  was exact-only. ``:`` never expands a wildcard: ``FIELD:"abc*"`` returns 0.
 * **No escape for an embedded ``"`` was found.** Raw, backslash-escaped, and
   doubled-quote renderings of a title containing a literal ``"`` all fail to
   match a ticket verifiably created with that exact title (full table in
@@ -378,13 +380,14 @@ def test_semicolon_is_not_a_combinator(live_client, sample_department_row, basel
 # --- the tilde operator ----------------------------------------------------
 
 
-def test_tilde_is_exact_match_not_contains(
+def test_tilde_without_a_wildcard_behaves_as_exact_match(
     live_client, other_department_code, baseline
 ):
-    """``FIELD~value`` behaves identically to ``FIELD:"value"``.
-
-    Decisive probe: a strict infix of a code that verifiably exists. A real
-    "contains" operator must match that code; exact-match cannot.
+    """``~`` requires an EXPLICIT wildcard to act as a pattern operator. Given a
+    bare value it is equality, which is what this test pins. The README's
+    ``ASSET_TAG~LAPTOP`` therefore finds only a tag that *is* ``LAPTOP``; to
+    mean "contains", write ``ASSET_TAG~"*LAPTOP*"`` — see
+    ``test_live_change_window.py`` for that behaviour, verified live 2026-08-17.
     """
     code = other_department_code
     infix = code[1:]
@@ -402,16 +405,17 @@ def test_tilde_is_exact_match_not_contains(
     assert tilde_infix == 0
 
 
-def test_tilde_is_exact_match_on_free_text_fields_too(
+def test_tilde_without_a_wildcard_is_exact_on_free_text_too(
     live_client, department_label, baseline
 ):
-    """``~`` is not "contains" on free text either — it is exact everywhere.
+    """``~`` requires an EXPLICIT wildcard to act as a pattern operator. Given a
+    bare value it is equality, which is what this test pins. The README's
+    ``ASSET_TAG~LAPTOP`` therefore finds only a tag that *is* ``LAPTOP``; to
+    mean "contains", write ``ASSET_TAG~"*LAPTOP*"`` — see
+    ``test_live_change_window.py`` for that behaviour, verified live 2026-08-17.
 
     ``DEPARTMENT_FR`` is a human label, not a code, so this rules out the
-    "``~`` is contains, but only on free-text fields" hypothesis. The published
-    docs (``user_guide.rst`` calls ``~`` "contains"; the README advertises
-    ``ASSET_TAG~LAPTOP``) are wrong: ``~LAPTOP`` matches only a tag that *is*
-    exactly ``LAPTOP``.
+    "``~`` is contains, but only on free-text fields" hypothesis.
     """
     label = department_label
     infix = label[1:-1]
@@ -446,12 +450,14 @@ def test_comma_inside_a_quoted_value_is_a_literal(
     assert inside != baseline  # and it is not silently ignored either
 
 
-def test_tilde_on_asset_tag_is_exact_match(live_client):
-    """The README's advertised ``ASSET_TAG~LAPTOP`` does not do what it implies.
+def test_tilde_without_a_wildcard_is_exact_on_asset_tag(live_client):
+    """``~`` requires an EXPLICIT wildcard to act as a pattern operator. Given a
+    bare value it is equality, which is what this test pins. The README's
+    ``ASSET_TAG~LAPTOP`` therefore finds only a tag that *is* ``LAPTOP``; to
+    mean "contains", write ``ASSET_TAG~"*LAPTOP*"`` — see
+    ``test_live_change_window.py`` for that behaviour, verified live 2026-08-17.
 
-    Probed on the very endpoint and field the README documents. ``~`` is exact
-    there too, so ``ASSET_TAG~LAPTOP`` finds only an asset tagged exactly
-    ``LAPTOP`` — not the laptops.
+    Probed on the very endpoint and field the README documents.
     """
     try:
         result = live_client.search_assets(max_rows=25)

@@ -24,6 +24,7 @@ import pytest
 import respx
 
 from easyvista_python_client import (
+    ActionUpdate,
     AsyncEasyvistaClient,
     DepartmentUpdate,
     EasyvistaClient,
@@ -33,6 +34,7 @@ from easyvista_python_client import (
     PostDepartment,
     PostEmployee,
     PostRequest,
+    PostTask,
     RequestUpdate,
 )
 
@@ -43,7 +45,8 @@ from easyvista_python_client import (
 #: ``records[0]``. So a search sees a one-record page with real counts, and a
 #: single-record get/create/update sees that same record. ``parse_memo`` finds
 #: no matching field and returns ``None``, which is a legal ``resolve_memo``
-#: result. ``ASSET_ID`` must be an int -- ``Asset`` rejects a string.
+#: result. ``ASSET_ID`` is an int here because that is the shape the live list
+#: returns; ``Asset`` also accepts the ``""`` sentinel and a numeric string.
 PAYLOAD = {
     "records": [
         {
@@ -69,14 +72,31 @@ NO_TRANSPORT = {
 #: Positional and keyword arguments for every method that does reach HTTP.
 ARGS: dict[str, tuple[tuple, dict]] = {
     "add_document": (("I1",), {"filename": "d.txt", "content": b"x"}),
+    # The escape hatch: an arbitrary route, parsed by nobody. PAYLOAD satisfies
+    # it because `send` returns the raw JSON body unchanged.
+    "send": (("GET", "requests"), {}),
     "close_ticket": (("I1",), {}),
+    "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
     "count_tickets": ((), {}),
-    "create_action": (("I1", PostAction()), {}),
+    "create_action": (("I1", PostAction(action_type_id=94, group_id=3)), {}),
+    # action_id named explicitly: omitted, the vendor form ends EVERY open
+    # action, and on a ticket whose only open one is its workflow step that
+    # resolves the ticket. The registry should model the safe call.
+    "end_action": (("I1",), {"action_id": 1, "end_date": "01/01/2026 09:00:00"}),
+    # sample_size=1 / action_sample_tickets=1 keep the blanket-mocked runs
+    # cheap: the shared PAYLOAD carries one RFC_NUMBER and one ACTION_ID with no
+    # `@next`, so every sweep terminates after one page on both surfaces.
+    "describe_instance": ((), {"sample_size": 1, "action_sample_tickets": 1}),
+    "discover": (("STATUS",), {"sample_size": 1, "action_sample_tickets": 1}),
+    "get_api_spec": ((), {}),
+    "list_reference_table": (("status",), {}),
+    "create_task": (("I1", PostTask(action_type_id=94, group_id=3)), {}),
     "create_asset": ((PostAsset(catalog_id=1),), {}),
     "create_department": ((PostDepartment(),), {}),
     "create_employee": ((PostEmployee(),), {}),
     "create_ticket": ((PostRequest(catalog_code="C"),), {}),
     "create_tickets": (([PostRequest(catalog_code="C")],), {}),
+    "delete_document": (("I1", "d1"), {}),
     "download_document": (("requests/I1/documents/1",), {}),
     "find_departments": (("Acme",), {}),
     "get_action": ((1,), {}),
@@ -87,6 +107,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "get_employee": ((1,), {}),
     "get_ticket": (("I1",), {}),
     "get_ticket_context": (("I1",), {}),
+    "iter_actions": (("I1",), {"max_records": 1}),
     "iter_assets": ((), {"max_records": 1}),
     "iter_departments": ((), {"max_records": 1}),
     "iter_employees": ((), {"max_records": 1}),
@@ -98,7 +119,9 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "search_departments": ((), {}),
     "search_employees": ((), {}),
     "search_tickets": ((), {}),
+    "stream_document": (("requests/I1/documents/1",), {}),
     "ticket_statistics": ((), {"max_records": 1}),
+    "update_action": ((1, ActionUpdate()), {}),
     "update_department": ((1, DepartmentUpdate()), {}),
     "update_employee": ((1, EmployeeUpdate()), {}),
     "update_ticket": (("I1", RequestUpdate()), {}),

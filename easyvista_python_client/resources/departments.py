@@ -23,8 +23,10 @@ DEPARTMENTS: ResourceDescriptor[Department] = ResourceDescriptor(
 
 def build_get_department(
     department_id: str | int,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Department]]:
-    return build_get(DEPARTMENTS, department_id)
+    return build_get(DEPARTMENTS, department_id, context=context)
 
 
 def build_search_departments(
@@ -34,6 +36,7 @@ def build_search_departments(
     sort: str | None = None,
     max_rows: int | None = None,
     offset: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], SearchResult[Department]]]:
     return build_search(
         DEPARTMENTS,
@@ -42,16 +45,22 @@ def build_search_departments(
         sort=sort,
         max_rows=max_rows,
         offset=offset,
+        context=context,
     )
 
 
 def build_create_department(
     payload: PostDepartment,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Department]]:
-    return build_create(DEPARTMENTS, payload)
+    return build_create(DEPARTMENTS, payload, context=context)
 
 
 def build_update_department(
-    department_id: str | int, update: DepartmentUpdate
+    department_id: str | int,
+    update: DepartmentUpdate,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Department]]:
-    return build_update(DEPARTMENTS, department_id, update)
+    return build_update(DEPARTMENTS, department_id, update, context=context)

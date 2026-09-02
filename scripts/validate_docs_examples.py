@@ -2,19 +2,29 @@
 """Validate the documentation examples against the real library (and, optionally,
 a live EasyVista test instance).
 
-The examples in ``docs/user_guide.rst`` / ``docs/installation.rst`` are the
-contract this script checks. It runs three tiers:
+This script does **not** read the documents. It checks a *hand-maintained
+transcription* of what ``docs/user_guide.rst`` / ``docs/installation.rst``
+claim -- no ``.rst`` file is ever opened, and nothing mechanically ties a check
+here to the passage it stands for. A doc example nobody transcribed cannot fail
+here, so a green run is evidence about the transcribed subset only, not about
+the documents. Keep that in mind before trusting it: prose examples in
+particular (inline literals in a bullet, rather than a ``code-block``) have
+gone stale under a green run. It runs three tiers:
 
 1. **offline** (always): every symbol, model field, method signature, attribute
-   and serialization claim the docs make is exercised through the *public*
-   package surface (``import easyvista_python_client``). No network. This is the
-   part that catches a doc that names a field/kwarg/attribute the code does not
-   have.
+   and serialization claim *transcribed below* is exercised through the
+   *public* package surface (``import easyvista_python_client``). No network.
+   This is the part that catches a transcribed claim naming a
+   field/kwarg/attribute the code does not have.
 
 2. **live read-only** (if credentials resolve): the read examples
    (``search_tickets``, ``get_ticket``, ``search_assets``, ``iter_tickets``,
    ``list_actions``, ``list_documents``) plus the *rejected* create that the docs
-   use to demonstrate ``EasyvistaValidationError`` (no record is created).
+   use to demonstrate ``EasyvistaValidationError``. That last one is **not**
+   read-only: a 590 rejection was measured to leave a row behind anyway (one
+   instance, 2026-08-25 -- 12 attempts, 3 RFC numbers returned, all 12
+   tickets present afterwards), so this tier can leak one ticket per run. See
+   ``rejected_create`` below.
 
 3. **live writes** (only with ``--writes`` AND credentials): the create / update
    / close / action / document / asset examples, which create real records on
@@ -22,9 +32,15 @@ contract this script checks. It runs three tiers:
 
 Credentials resolve exactly like ``integration_tests/conftest.py``:
 
-    url    <- EASYVISTA_TEST_URL    | secrets/easyvista_test_url
-    user   <- EASYVISTA_TEST_USER (or _ACCOUNT) | secrets/easyvista_test_user
-    token  <- EASYVISTA_TEST_TOKEN  | secrets/easyvista_test_token
+    url     <- EASYVISTA_TEST_URL     | secrets/easyvista_test_url
+    account <- EASYVISTA_TEST_ACCOUNT | secrets/easyvista_test_account
+    token   <- EASYVISTA_TEST_TOKEN   | secrets/easyvista_test_token
+
+``account`` is **not a login**: it is the instance id forming the ``{account}``
+path segment of ``https://host/api/{version}/{account}`` (e.g. ``50004``). Auth
+is the ``token`` alone. It is read only when ``url`` is a bare host -- a full API
+root already carries the account. Spelled ``EASYVISTA_TEST_USER`` before
+2026-08-25; that name is now refused, not silently accepted.
 
 A ``.env`` file at the repo root is loaded first if ``python-dotenv`` is
 installed. Secret values are never printed.
@@ -252,7 +268,7 @@ def run_offline(r: Results) -> None:
             catalog_code="SAMPLE_CATALOG",
             title="Printer down",
             description="The 3rd-floor printer is offline",
-            origin=7,
+            origin="Phone",
             department_id=9,
             urgency_id=8,
             impact_id=28,
@@ -319,6 +335,7 @@ def run_offline(r: Results) -> None:
             "close_ticket": {"rfc_number", "status_guid", "delete_actions", "comment"},
             "create_action": {"rfc_number", "action"},
             "list_actions": {"rfc_number"},
+            "iter_actions": {"rfc_number", "fields", "page_size", "max_records"},
             "create_asset": {"asset"},
             "get_asset": {"asset_id"},
             "search_tickets": {"search", "fields", "sort", "max_rows", "offset"},
@@ -328,6 +345,7 @@ def run_offline(r: Results) -> None:
             "add_document": {"rfc_number", "filename", "content"},
             "list_documents": {"rfc_number"},
             "download_document": {"document"},
+            "stream_document": {"document", "chunk_size"},
         }
         problems = []
         for method, params in expected.items():
@@ -355,6 +373,7 @@ def run_offline(r: Results) -> None:
             "close_ticket",
             "create_action",
             "list_actions",
+            "iter_actions",
             "create_asset",
             "get_asset",
             "search_tickets",
@@ -364,6 +383,7 @@ def run_offline(r: Results) -> None:
             "add_document",
             "list_documents",
             "download_document",
+            "stream_document",
             "from_env",
         }
         missing = [m for m in public if not hasattr(AsyncEasyvistaClient, m)]
@@ -371,6 +391,11 @@ def run_offline(r: Results) -> None:
         # iter_tickets must be an async generator on the async client.
         assert inspect.isasyncgenfunction(AsyncEasyvistaClient.iter_tickets), (
             "AsyncEasyvistaClient.iter_tickets is not an async generator"
+        )
+        # And so must stream_document: the user guide documents it as something
+        # you iterate, which on the async surface means `async for`.
+        assert inspect.isasyncgenfunction(AsyncEasyvistaClient.stream_document), (
+            "AsyncEasyvistaClient.stream_document is not an async generator"
         )
 
     r.check(
@@ -396,6 +421,18 @@ def run_offline(r: Results) -> None:
         "SearchResult has records/record_count/total_record_count/href/next_url",
         search_result_fields,
     )
+
+    # 11b. Action exposes the label the docs name as an attribute.
+    def action_visibility_label() -> None:
+        from easyvista_python_client import Action
+
+        action = Action.model_validate(
+            {"ACTION_ID": "1", "ACTION_LABEL_FR": "Analyse de Resolution"}
+        )
+        assert action.action_label_fr == "Analyse de Resolution"
+        assert action.reference("ACTION_TYPE").id is None  # absent -> empty, no raise
+
+    r.check("Action.action_label_fr  [Actions]", action_visibility_label)
 
     # 12. Exception hierarchy + attributes carried by EasyvistaError.
     def exceptions() -> None:
@@ -452,6 +489,32 @@ def _resolve(env_names: tuple[str, ...], filename: str) -> str | None:
     return None
 
 
+# Retired 2026-08-25: the value is the API-root ``{account}`` path segment, not a
+# login. Reading the old spelling as a fallback would re-admit the confusion the
+# rename removed, so it is refused. Only names are printed, never values.
+_LEGACY_ACCOUNT_ENV = "EASYVISTA_TEST_USER"
+_LEGACY_ACCOUNT_FILE = "easyvista_test_user"
+
+
+def _reject_legacy_account_name() -> None:
+    """Abort when the pre-rename account credential is still configured."""
+    stale: list[str] = []
+    value = os.environ.get(_LEGACY_ACCOUNT_ENV)
+    if value and value.strip():
+        stale.append("the " + _LEGACY_ACCOUNT_ENV + " environment variable")
+    if (SECRETS_DIR / _LEGACY_ACCOUNT_FILE).is_file():
+        stale.append("secrets/" + _LEGACY_ACCOUNT_FILE)
+    if stale:
+        verb = "is" if len(stale) == 1 else "are"
+        raise SystemExit(
+            " and ".join(stale) + " " + verb + " still set. That name was retired on "
+            "2026-08-25 and is no longer read: the value is the EasyVista "
+            "account -- the instance id in https://host/api/{version}/{account} "
+            "-- and never a login. Rename it to EASYVISTA_TEST_ACCOUNT / "
+            "secrets/easyvista_test_account."
+        )
+
+
 def _resolve_int(env_names: tuple[str, ...], filename: str) -> int | None:
     value = _resolve(env_names, filename)
     return int(value) if value is not None else None
@@ -461,12 +524,14 @@ def resolve_live_config() -> EasyvistaConfig | None:
     from easyvista_python_client import EasyvistaConfig
 
     url = _resolve(("EASYVISTA_TEST_URL",), "easyvista_test_url")
-    user = _resolve(
-        ("EASYVISTA_TEST_USER", "EASYVISTA_TEST_ACCOUNT"), "easyvista_test_user"
-    )
+    account = _resolve(("EASYVISTA_TEST_ACCOUNT",), "easyvista_test_account")
     token = _resolve(("EASYVISTA_TEST_TOKEN",), "easyvista_test_token")
     if not url or not token:
         return None
+    # Ordered after the no-credentials exit, matching integration_tests/conftest.py:
+    # a checkout with nothing configured stays gracefully skippable whether or not
+    # a stray legacy file is lying around.
+    _reject_legacy_account_name()
     root = url.rstrip("/")
     if "/api/" in root:
         server, _, rest = root.partition("/api/")
@@ -477,9 +542,11 @@ def resolve_live_config() -> EasyvistaConfig | None:
         return EasyvistaConfig(
             server=server, account=account, token=token, api_version=version
         )
-    if not user:
+    # A bare host: the account cannot be parsed out of the URL, so it must be
+    # supplied separately.
+    if not account:
         return None
-    return EasyvistaConfig(server=root, account=user, token=token)
+    return EasyvistaConfig(server=root, account=account, token=token)
 
 
 # --------------------------------------------------------------------------- #
@@ -596,6 +663,24 @@ def run_live_readonly(
         else:
             r.skip("list_actions(<rfc>)", "no tickets on instance")
 
+        def iter_actions() -> None:
+            if not sample_rfc:
+                raise AssertionError("no ticket available")
+            # Bounded: the offset contract is unverified on this endpoint,
+            # so a sweep that never advances is possible.
+            seen = list(client.iter_actions(sample_rfc, max_records=30))
+            assert all(isinstance(a, Action) for a in seen)
+            ids = [a.action_id for a in seen if a.action_id is not None]
+            assert len(ids) == len(set(ids)), (
+                "iter_actions repeated an action id: the endpoint ignored "
+                "offset, so paging loops instead of advancing"
+            )
+
+        if sample_rfc:
+            r.check(f"iter_actions('{sample_rfc}', max_records=30)", iter_actions)
+        else:
+            r.skip("iter_actions(<rfc>)", "no tickets on instance")
+
         def list_documents() -> None:
             if not sample_rfc:
                 raise AssertionError("no ticket available")
@@ -645,11 +730,22 @@ def run_live_readonly(
             )
 
         def rejected_create() -> None:
-            # The error-handling example: missing mandatory title is rejected
-            # server-side (HTTP 590) -- no ticket is created, so this is safe.
-            # catalog_code must be *valid* on this instance so the missing title
-            # is the payload's only defect -- an unknown catalog would also 590,
-            # and the assertion below couldn't tell the two failures apart.
+            # The error-handling example: an under-specified body (a valid
+            # catalog, but none of the ids the catalog needs) is rejected
+            # server-side with HTTP 590. `title` is NOT the mandatory field --
+            # the full documented body with no title creates fine -- so do not
+            # describe this as a missing-title test.
+            #
+            # NOT read-only. A 590 rejection was measured to write the row
+            # anyway (one instance, 2026-08-25: 12 attempts, 3 RFC_NUMBERs
+            # returned, all 12 tickets present afterwards), so each run of this
+            # check can leave an orphan on the target instance. It is left in
+            # place because the docs demonstrate exactly this call, but it is
+            # the one live-read-only check that writes.
+            #
+            # catalog_code must be *valid* on this instance so the missing ids
+            # are the payload's only defect -- an unknown catalog would also
+            # 590, and the assertion below couldn't tell the two failures apart.
             try:
                 client.create_ticket(PostRequest(catalog_code=catalog_code))
             except EasyvistaValidationError as exc:
@@ -659,13 +755,13 @@ def run_live_readonly(
 
         if catalog_code:
             r.check(
-                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "create_ticket(under-specified) -> EasyvistaValidationError(590)"
                 "  [Error handling]",
                 rejected_create,
             )
         else:
             r.skip(
-                "create_ticket(missing title) -> EasyvistaValidationError(590)"
+                "create_ticket(under-specified) -> EasyvistaValidationError(590)"
                 "  [Error handling]",
                 "no EASYVISTA_TEST_CATALOG_CODE"
                 " (or secrets/easyvista_test_catalog_code)",
@@ -823,7 +919,7 @@ def run_live_writes(
         else:
             r.skip("get_ticket/update/action/document", "no ticket was created")
 
-        # create_asset  [Assets] -- catalog_id not in API_Info.md; profile may 403.
+        # create_asset  [Assets] -- catalog_id not vendor-documented; profile may 403.
         def create_asset() -> None:
             a = client.create_asset(
                 PostAsset(catalog_id=asset_catalog_id, asset_tag="DOCSVAL001")
@@ -922,9 +1018,11 @@ def main() -> int:
         config = resolve_live_config()
         if config is None:
             print("\n== Live tiers SKIPPED ==")
-            print("  No credentials. Set EASYVISTA_TEST_URL + EASYVISTA_TEST_TOKEN")
-            print("  (and EASYVISTA_TEST_USER if the URL has no /api/ segment), or add")
-            print("  secrets/easyvista_test_url and secrets/easyvista_test_token.")
+            print("  No credentials. Set EASYVISTA_TEST_URL and")
+            print("  EASYVISTA_TEST_TOKEN, or add secrets/easyvista_test_url and")
+            print("  secrets/easyvista_test_token. EASYVISTA_TEST_ACCOUNT (or")
+            print("  secrets/easyvista_test_account) is needed only when the URL")
+            print("  has no /api/ segment -- it is the instance id, not a login.")
             r.skip("live read-only tier", "no credentials")
             if args.writes:
                 r.skip("live writes tier", "no credentials")

@@ -80,12 +80,36 @@ HAND_WRITTEN = {"_concurrency.py", "tests/test_concurrency.py"}
 #: * **Third-party naming.** unasync's built-in ``Async*`` -> ``Sync*``
 #:   convention would produce ``SyncClient``, which does not exist; the real
 #:   httpx name is ``Client``. Same for tenacity's ``AsyncRetrying``.
+#: * **httpx's own async method names**, which are spelled with a leading
+#:   ``a`` rather than the ``Async`` prefix the convention knows about, so
+#:   nothing infers them. ``aclose``, ``aread`` and ``aiter_bytes`` all have
+#:   sync twins in httpx that differ only by that letter, and an unmapped one
+#:   is emitted verbatim into the sync tree. Only ``aclose`` **on the client**
+#:   then fails loudly: ``httpx.Client`` has no ``aclose``, so that line raises
+#:   ``AttributeError``. Every other case is *silent*, which is the real reason
+#:   this dict has to cover them all -- httpx defines both spellings on
+#:   ``httpx.Response`` (checked against 0.28.1: ``aread``, ``aiter_bytes`` and
+#:   ``aclose`` are all present on the one class), so the attribute exists in
+#:   sync code and merely does the wrong thing. ``response.aread()`` without an
+#:   ``await`` builds a coroutine and drops it -- a ``RuntimeWarning`` and an
+#:   unread body, after which the next line's ``_raise_for_response`` raises
+#:   ``httpx.ResponseNotRead`` instead of the mapped EasyVista exception; and
+#:   ``for chunk in response.aiter_bytes(...)`` raises ``TypeError:
+#:   'async_generator' object is not iterable``. A wrong exception escaping the
+#:   client, not a missing attribute -- exactly the silent-collision class
+#:   ``testing/test_unasync_codegen.py`` says a diff of the two trees cannot
+#:   catch, so a new httpx async method must be added here rather than trusted
+#:   to blow up on its own.
 #: * **This package's own public class name**, which differs between the two
-#:   surfaces by design, and ``aclose``, which is public async API.
+#:   surfaces by design. ``aclose`` is in both categories: httpx's method and
+#:   this package's public async API.
 #:
 #: Everything else -- helpers, module names, the executor's methods -- is
 #: spelled *identically* in both trees. Keeping this list short is
 #: deliberate: every entry is a chance for a silent collision.
+#: ``testing/test_unasync_codegen.py`` scans the async tree for identifiers
+#: that would be rewritten by any of these, so a local or a parameter that
+#: happens to share a spelling fails there rather than in production.
 TOKEN_REPLACEMENTS = {
     # Intra-tree imports are absolute, so the package segment is itself a
     # NAME token and rewriting it repoints every one of them at the
@@ -95,6 +119,12 @@ TOKEN_REPLACEMENTS = {
     "AsyncClient": "Client",
     "AsyncRetrying": "Retrying",
     "aclose": "close",
+    # The streaming download path: `Response.aiter_bytes` yields the body in
+    # chunks and `Response.aread` materialises it, the latter needed on the
+    # error path because a streaming response refuses `.content` until it has
+    # been read.
+    "aread": "read",
+    "aiter_bytes": "iter_bytes",
 }
 
 #: The qualified package prefix, and what it becomes in the generated tree.

@@ -78,9 +78,30 @@ def test_find_departments_returns_list(live_client: EasyvistaClient) -> None:
 def test_get_department_context(
     live_client: EasyvistaClient, sample_department_id: int
 ) -> None:
+    """Read-only. Also the live guard for the default ticket projection.
+
+    ``recent_tickets`` is projected with ``RECENT_TICKET_FIELDS`` by default,
+    which is a deliberate change from sending no projection at all. It exists
+    because the unprojected list projection returns ``TITLE`` present but EMPTY
+    on this instance -- measured over 400 tickets, zero with a populated title
+    (see ``_adopt_by_title`` in ``conftest.py`` and
+    ``test_title_search_requires_the_fields_projection_to_return_a_value`` in
+    ``test_live_search_syntax.py``). So before this, every recent ticket's
+    ``.title`` was ``None``. If that assertion ever fails while tickets come
+    back, the projection has stopped reaching the wire.
+    """
     ctx = live_client.get_department_context(sample_department_id, recent_tickets=3)
     assert_shape(ctx, DepartmentContext, "get_department_context result")
     id_round_trips = ctx.department.department_id == sample_department_id
     assert id_round_trips, "the context is not for the department requested"
     assert_shape(ctx.employees, list, "DepartmentContext.employees")
     assert_shape(ctx.ticket_count, int, "DepartmentContext.ticket_count")
+    if ctx.recent_tickets:
+        # Bound to a local first: P2 keeps live titles out of failure output,
+        # and an assert sub-expression would print the whole ticket.
+        any_titled = any(bool(t.title) for t in ctx.recent_tickets)
+        assert any_titled, (
+            "no recent ticket carried a TITLE -- the default fields= projection "
+            "is what makes it non-empty on this instance, so this suggests it "
+            "stopped being sent"
+        )

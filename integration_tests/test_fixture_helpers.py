@@ -548,3 +548,184 @@ def test_close_tracked_error_text_carries_no_server_prose():
     assert "connection failed" not in message
     assert info.value.__cause__ is None
     assert info.value.__context__ is None
+
+
+# --- the retired-credential tripwire and account resolution --------------------
+#
+# The account credential was named ``EASYVISTA_TEST_USER`` until 2026-08-25, which
+# read as a login and never was one. Honouring the old name as a fallback would
+# have preserved exactly that misreading, so ``live_config`` refuses it instead.
+# That refusal is the only thing standing between a stale file and the confusion
+# coming back, and mypy does not watch it: ``integration_tests/`` is excluded from
+# type-checking by pyproject and mirrored in the pre-commit hook. These tests are
+# the coverage. Like everything else in this module they need no credentials and
+# touch no network -- ``live_config`` only assembles a dataclass.
+
+
+def _live_config():
+    """``live_config``'s undecorated body.
+
+    ``pytest.fixture`` guards its wrapper against direct calls, so the plain
+    function has to be reached through ``__wrapped__``.
+    """
+    return conftest_module.live_config.__wrapped__
+
+
+@pytest.fixture
+def _clean_credential_env(monkeypatch, tmp_path):
+    """Isolate every credential source, so a real ``secrets/`` cannot leak in.
+
+    Points ``_SECRETS_DIR`` at an empty tmp dir and clears the four environment
+    variables the resolver reads. Without this a developer's own configuration
+    would decide the outcome of these tests.
+    """
+    monkeypatch.setattr(conftest_module, "_SECRETS_DIR", tmp_path)
+    for name in (
+        "EASYVISTA_TEST_URL",
+        "EASYVISTA_TEST_TOKEN",
+        "EASYVISTA_TEST_ACCOUNT",
+        conftest_module._LEGACY_ACCOUNT_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return tmp_path
+
+
+def test_the_retired_account_env_var_is_refused_not_honoured(
+    monkeypatch, _clean_credential_env
+):
+    """The old name must abort, and must name its replacement while doing so.
+
+    Resolving it as a silent fallback is the failure mode this whole rename
+    exists to prevent, so "it still works" would be the bug.
+    """
+    monkeypatch.setenv(conftest_module._LEGACY_ACCOUNT_ENV, "50004")
+
+    with pytest.raises(pytest.fail.Exception) as info:
+        conftest_module._reject_legacy_account_name()
+
+    message = str(info.value)
+    assert conftest_module._LEGACY_ACCOUNT_ENV in message
+    assert "EASYVISTA_TEST_ACCOUNT" in message
+    assert "never a login" in message
+    # The value is a credential-adjacent secret: name the variable, never print it.
+    assert "50004" not in message
+
+
+def test_the_retired_account_secrets_file_is_refused(_clean_credential_env):
+    """A leftover file trips the wire even with a clean environment.
+
+    This is the likely real-world case: the env var was never set, the file was
+    simply left on disk by a checkout that predates the rename.
+    """
+    (_clean_credential_env / conftest_module._LEGACY_ACCOUNT_FILE).write_text(
+        "50004", encoding="utf-8"
+    )
+
+    with pytest.raises(pytest.fail.Exception) as info:
+        conftest_module._reject_legacy_account_name()
+
+    message = str(info.value)
+    assert "secrets/" + conftest_module._LEGACY_ACCOUNT_FILE in message
+    assert "secrets/easyvista_test_account" in message
+    assert "50004" not in message
+
+
+def test_both_retired_sources_are_reported_together(monkeypatch, _clean_credential_env):
+    """Naming only one source would send someone round the loop twice."""
+    monkeypatch.setenv(conftest_module._LEGACY_ACCOUNT_ENV, "50004")
+    (_clean_credential_env / conftest_module._LEGACY_ACCOUNT_FILE).write_text(
+        "50004", encoding="utf-8"
+    )
+
+    with pytest.raises(pytest.fail.Exception) as info:
+        conftest_module._reject_legacy_account_name()
+
+    message = str(info.value)
+    assert conftest_module._LEGACY_ACCOUNT_ENV in message
+    assert "secrets/" + conftest_module._LEGACY_ACCOUNT_FILE in message
+    assert " are still set" in message  # plural agreement, not "is"
+
+
+def test_no_retired_source_is_silent(_clean_credential_env):
+    """The tripwire must cost nothing when nothing is stale."""
+    assert conftest_module._reject_legacy_account_name() is None
+
+
+def test_a_blank_retired_env_var_does_not_trip_the_wire(
+    monkeypatch, _clean_credential_env
+):
+    """An empty string is not configuration -- the resolver ignores it too.
+
+    Tripping on it would make an exported-but-empty variable an unfixable abort.
+    """
+    monkeypatch.setenv(conftest_module._LEGACY_ACCOUNT_ENV, "   ")
+
+    assert conftest_module._reject_legacy_account_name() is None
+
+
+def test_a_bare_host_url_takes_the_account_from_its_own_credential(
+    monkeypatch, _clean_credential_env
+):
+    """The one case where the account credential is actually read."""
+    monkeypatch.setenv("EASYVISTA_TEST_URL", "https://example.invalid")
+    monkeypatch.setenv("EASYVISTA_TEST_TOKEN", "t0ken")
+    monkeypatch.setenv("EASYVISTA_TEST_ACCOUNT", "50004")
+
+    config = _live_config()()
+
+    assert config.account == "50004"
+    assert config.server == "https://example.invalid"
+    assert config.api_root == "https://example.invalid/api/v1/50004"
+
+
+def test_a_full_api_root_never_consults_the_account_credential(
+    monkeypatch, _clean_credential_env
+):
+    """A full API root already carries the account, so the credential is dead.
+
+    Pinning this is what makes the docstring's claim checkable: the sentinel
+    below would win if the resolver ever preferred the credential to the URL.
+    """
+    monkeypatch.setenv("EASYVISTA_TEST_URL", "https://example.invalid/api/v2/12345")
+    monkeypatch.setenv("EASYVISTA_TEST_TOKEN", "t0ken")
+    monkeypatch.setenv("EASYVISTA_TEST_ACCOUNT", "SENTINEL-NEVER-USED")
+
+    config = _live_config()()
+
+    assert config.account == "12345"
+    assert config.api_version == "v2"
+    assert config.api_root == "https://example.invalid/api/v2/12345"
+
+
+def test_a_bare_host_with_no_account_skips_and_says_which_name_to_set(
+    monkeypatch, _clean_credential_env
+):
+    """The skip has to hand back the *new* name, or it just relocates the puzzle."""
+    monkeypatch.setenv("EASYVISTA_TEST_URL", "https://example.invalid")
+    monkeypatch.setenv("EASYVISTA_TEST_TOKEN", "t0ken")
+
+    with pytest.raises(pytest.skip.Exception) as info:
+        _live_config()()
+
+    message = str(info.value)
+    assert "EASYVISTA_TEST_ACCOUNT" in message
+    assert "not a login" in message
+
+
+def test_missing_credentials_still_skip_even_with_a_stale_legacy_file(
+    monkeypatch, _clean_credential_env
+):
+    """A fresh checkout stays offline and green, stray file or not.
+
+    The tripwire is deliberately ordered *after* the url/token skip: with nothing
+    configured there is no live run for a stale name to mislead, and turning that
+    case into a hard failure would break the suite's "skips cleanly" contract.
+    """
+    (_clean_credential_env / conftest_module._LEGACY_ACCOUNT_FILE).write_text(
+        "50004", encoding="utf-8"
+    )
+
+    with pytest.raises(pytest.skip.Exception) as info:
+        _live_config()()
+
+    assert "live credentials unavailable" in str(info.value)

@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from easyvista_python_client.models.employee import (
     Employee,
     EmployeeUpdate,
@@ -65,3 +67,18 @@ def test_post_employee_to_api():
 
 def test_employee_update_is_write_model():
     assert EmployeeUpdate(phone_number="0102").to_api() == {"phone_number": "0102"}
+
+
+def test_employee_last_update_parses_to_an_aware_datetime():
+    """BREAKING as of 2026-08-17: last_update was str. EV-R7 proved the format.
+
+    One of the seven fields the retype covers -- this is the only one of the
+    seven that had no failing pre-existing assertion to fix, so it was
+    otherwise only exercised transitively (never directly asserted).
+    """
+    emp = Employee.model_validate(
+        {"EMPLOYEE_ID": 1, "LAST_UPDATE": "2026-08-17T15:40:41.610+02:00"}
+    )
+    assert emp.last_update == datetime(
+        2026, 8, 17, 15, 40, 41, 610000, tzinfo=timezone(timedelta(hours=2))
+    )

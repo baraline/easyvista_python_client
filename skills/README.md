@@ -14,13 +14,14 @@ installed wheel, which carries only the `easyvista_python_client` package.
 | Skill | Use when the agent needs to | Main public API |
 | --- | --- | --- |
 | `easyvista-client-setup` | Build and configure an authenticated client | `EasyvistaConfig`, `EasyvistaClient`, `AsyncEasyvistaClient` |
-| `easyvista-search-syntax` | Write or debug any `search=` expression | `ev_equals_filter`, `ev_in_filter`, `escape_ev_value`, `is_safe_ev_value` |
+| `easyvista-search-syntax` | Write or debug any `search=` expression, including a date/time window | `ev_equals_filter`, `ev_in_filter`, `ev_contains_filter`, `ev_since_filter`, and 4 more filter builders |
 | `easyvista-ticket-workflow` | Create, read, search, update or close tickets, or read instance-specific columns off any record | `PostRequest`, `Request`, `RequestUpdate`, `SearchResult`, `Reference`, `FieldClassification` |
-| `easyvista-ticket-actions` | Read or write a ticket's action log | `PostAction`, `Action`, `resolve_memo` |
-| `easyvista-document-workflow` | Attach, list or download ticket files | `Document`, `add_document`, `download_document` |
+| `easyvista-ticket-actions` | Post a comment (task), or read and write a ticket's action log | `PostTask`, `create_task`, `PostAction`, `Action`, `ActionUpdate`, `resolve_memo` |
+| `easyvista-document-workflow` | Attach, list, download, stream or delete ticket files | `Document`, `add_document`, `download_document`, `stream_document`, `delete_document` |
 | `easyvista-asset-workflow` | Create, fetch, search or iterate assets | `PostAsset`, `Asset` |
 | `easyvista-directory` | Resolve or provision departments and employees | `Department`, `Employee`, `find_departments` |
 | `easyvista-reporting-and-context` | Count and break down tickets, or build one context bundle | `TicketStatistics`, `aggregate_tickets`, `TicketContext`, `DepartmentContext` |
+| `easyvista-instance-discovery` | Find out what ids, routes and reference tables *this* deployment actually has, before hardcoding one | `describe_instance`, `discover`, `list_reference_table`, `get_api_spec`, `InstanceProfile`, `DiscoveredReference` |
 
 ## Sync and async
 
@@ -30,7 +31,8 @@ The package ships two clients with one endpoint surface:
   `await`, `for` over the iterators.
 - `AsyncEasyvistaClient` — asynchronous, doing real non-blocking I/O.
   `async with AsyncEasyvistaClient(config) as client`, `await` every method,
-  `async for` over the iterators.
+  `async for` over the iterators and over `stream_document`, which is an async
+  generator rather than a coroutine.
 
 Neither wraps the other. `_async/` is hand-written and `_sync/` is generated
 from it by `unasync_build.py` under a byte-equality CI gate, so the two surfaces

@@ -67,17 +67,39 @@ def extract_records(data: Any, envelope_key: str | None = None) -> list[dict[str
     envelopes, and a bare single object. ``envelope_key`` names a resource's own
     envelope (e.g. ``"departments"``) so a response echoed in that wrapper is
     unwrapped too; it is checked right after ``records`` and before the legacy
-    defaults. With ``envelope_key=None`` the behavior is unchanged.
+    defaults.
+
+    Matching is **case-insensitive**, over this fixed candidate list only --
+    never over whatever keys the payload happens to carry, which would let an
+    arbitrary record column win. Envelope casing is not stable across
+    deployments: the instance OpenAPI document read 2026-08-27 spells every
+    envelope lowercase in its examples, yet the live
+    ``GET requests/{rfc}/documents`` on the verified instance answers a
+    capital-D ``Documents`` (measured 2026-08-17, one instance, may not
+    generalise). Priority still runs ``records`` first, then ``envelope_key``,
+    then the legacy defaults, so a payload carrying several is unwrapped the
+    same way it was before.
+
+    A matched list must be empty or hold at least one dict to be accepted as
+    the envelope. Without that check a payload whose envelope-named key holds
+    scalars (``{"REQUESTS": ["a", "b"]}``) returned ``[]`` -- silently, and
+    indistinguishably from an empty page -- rather than falling through to
+    ``[data]``. ``{"records": []}`` stays ``[]``: an empty page is legitimate.
     """
     if isinstance(data, dict):
         keys = ["records"]
         if envelope_key and envelope_key not in keys:
             keys.append(envelope_key)
         keys.extend(k for k in ("requests", "assets", "documents") if k not in keys)
+        lowered = {str(k).lower(): v for k, v in data.items()}
         for key in keys:
-            value = data.get(key)
-            if isinstance(value, list):
+            value = lowered.get(key.lower())
+            if isinstance(value, list) and any(
+                isinstance(r, dict) for r in value
+            ):
                 return [r for r in value if isinstance(r, dict)]
+            if isinstance(value, list) and not value:
+                return []
         return [data]
     if isinstance(data, list):
         return [r for r in data if isinstance(r, dict)]

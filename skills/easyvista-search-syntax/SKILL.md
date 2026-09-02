@@ -1,11 +1,11 @@
 ---
 name: easyvista-search-syntax
-description: "Write correct EasyVista server-side search expressions for search_tickets, iter_tickets, count_tickets, search_assets, search_departments and search_employees using ev_equals_filter, ev_in_filter, escape_ev_value and is_safe_ev_value. Use whenever building a search= argument, filtering EasyVista records, or debugging a filter that returned everything or nothing — EasyVista silently ignores conditions it cannot honour and returns the whole table."
+description: "Write correct EasyVista server-side search expressions for search_tickets, iter_tickets, count_tickets, search_assets, search_departments and search_employees using ev_equals_filter, ev_in_filter, ev_contains_filter, ev_starts_with_filter, ev_since_filter, ev_between_filter, escape_ev_value and is_safe_ev_value. Use whenever building a search= argument, filtering EasyVista records, filtering by a date/time window, or debugging a filter that returned everything or nothing — EasyVista silently ignores conditions it cannot honour and returns the whole table."
 license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, and network access to an EasyVista Service Manager REST API."
 metadata:
   package: easyvista-python-client
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -15,22 +15,62 @@ metadata:
 
 Every `search_*` and `iter_*` method takes the same `search` string. The
 grammar is small and two of its three failure modes are silent, so this skill
-is a prerequisite for any filtering work. Except where a claim below is
-explicitly flagged as unconfirmed, everything here was characterized against a
-live instance by `integration_tests/test_live_search_syntax.py` — that file is
-the authority when something here looks wrong.
+is a prerequisite for any filtering work. Everything here was characterized
+against a live instance by `integration_tests/test_live_search_syntax.py`
+(the base grammar) and `integration_tests/test_live_change_window.py` (the
+interval, wildcard and sort grammars) — those files are the authority when
+something here looks wrong.
 
 ## The grammar
 
 - `FIELD:"value"` — exact match.
-- `~` is a **synonym for `:`** — exact match, not "contains", on code-like
-  fields (`DEPARTMENT_CODE`, `ASSET_TAG`) and on free-text label fields
-  (`DEPARTMENT_FR`) alike. Vendor documentation claiming otherwise is wrong.
-  **No substring operator has been identified.**
-- `%` inside a value is a **literal character**, not a wildcard.
+- `~` is documented by the vendor as plain **Contains** (Oxygen 1.7+) — one
+  word, no example, no wildcard mentioned. **On the instance this package was
+  characterized against it is a pattern operator instead** (measured live
+  2026-08-17; one deployment, may not generalise): it behaves like "contains"
+  or "starts with" only when the value carries an **explicit** wildcard. `*`
+  and `%` both expand there (`FIELD~"*abc*"` substring, `FIELD~"abc*"` prefix,
+  and `%` reproduced `*`'s match count exactly). Given a **bare** value, `~`
+  degenerates to exact match — identical to `:` — which is why this skill once
+  documented it as exact-match-only; that conclusion held only for the
+  wildcard-free inputs it was tested with. `:` never expands a wildcard even
+  when the value contains one: `FIELD:"abc*"` matches nothing.
+  `ev_contains_filter` / `ev_starts_with_filter` append `*` by default, which
+  is right for a deployment like the verified one. On a deployment that
+  follows the vendor's reading and compares `*` literally, that default
+  returns **zero rows with HTTP 200 and no hint** — pass `wildcard=None` there
+  to emit the bare value, or `wildcard="%"` for a LIKE-style backend. Confirm
+  which reading your deployment follows once, by comparing a filtered count
+  against the unfiltered baseline; you cannot tell from a single response.
+  Note `wildcard=None` on `ev_starts_with_filter` removes the *anchor*, not
+  just the token — it is a substring match on a vendor-conformant deployment.
+- `*` and `%` are not the only metacharacters under `~`, and the other two
+  belong to the **operator**, not to the wildcard the builders append. `_`
+  matches any **single** character and `[` opens a character class — measured
+  live 2026-08-18 on one instance with a *wildcard-free* pattern: replacing an
+  RFC's last character with `_`, or with `[0-9]`, turned a 1-row exact match
+  into 9, while `[<the real character>x]` still matched the one row. There is
+  **no escape**: a backslash before `_` returned 0 rows, i.e. it is compared
+  literally. So `ev_contains_filter` / `ev_starts_with_filter` raise
+  `ValueError` for `_` or `[` in the value at **every** `wildcard=` setting,
+  `None` included, and additionally for `*` or `%` while a wildcard is being
+  appended (a second one would compose with it). With `wildcard=None` a `*` or
+  `%` in the value passes through, which is how to hand-build a pattern.
+  This bites on ordinary input, not exotic input: `_` is pervasive in
+  EasyVista codes, and `ev_contains_filter("ASSET_TAG", "LAPTOP_01")` would
+  otherwise also match `LAPTOP-01` and `LAPTOP001` with HTTP 200 and no hint.
+  For an **exact** match on such a value use `ev_equals_filter` — `:` does not
+  expand a wildcard, so a `_` there is compared literally. Only if you need to
+  pattern-match *around* a literal `_` are you stuck: filter server-side on a
+  wider condition and match exactly in Python.
 - `,` combines conditions: **OR** when every condition names the same field,
   **AND** across different fields.
 - `;` is **not** a combinator; it is swallowed into the quoted value.
+- There is **no comparison operator** (`>=`, `BETWEEN`, `[a TO b]`…). Writing
+  one fails one of two different ways depending on its exact shape — see fate
+  3 below — never by narrowing the result. Use `ev_since_filter` /
+  `ev_between_filter` for a date/time window instead (see "Filtering by a
+  change window").
 - There is **no escape for a `"` inside a value**. Raw, backslash-escaped and
   doubled renderings were all tested against a ticket verifiably created with
   a quote in its title; none matched.
@@ -41,17 +81,92 @@ the authority when something here looks wrong.
 2. **Silently dropped** — no error. EasyVista removes any condition it cannot
    honour and applies what is left; with nothing left, it returns **every**
    row. This happens for structurally unparseable input
-   (`DEPARTMENT_FR LIKE "%TECH%"`, bare garbage), for an unknown field, and
-   for a well-formed condition on a returned-but-unsearchable field. Dropping
-   is **per condition**: in a two-condition search, one can be honoured while
-   the other vanishes.
+   (`DEPARTMENT_FR LIKE "%TECH%"`, bare garbage, a colon-free comparison like
+   `LAST_UPDATE>="2026-01-01"`), for an unknown field, and for a well-formed
+   condition on a returned-but-unsearchable field. Dropping is **per
+   condition**: in a two-condition search, one can be honoured while the
+   other vanishes.
 3. **Rejected outright** — `EasyvistaValidationError` (HTTP 590) when the
    value's *type* does not match the column, e.g. sending a status name to
-   the integer `STATUS_ID`. This is the friendly failure.
+   the integer `STATUS_ID`. This is the friendly failure. A comparison
+   operator embedded *inside* `FIELD:"value"` syntax lands here too —
+   `LAST_UPDATE:">=2026-01-01"` and `LAST_UPDATE:"[2026-01-01 TO *]"` both
+   raise HTTP 590, because the quoted text must still parse as `LAST_UPDATE`'s
+   date type. So a comparison operator has **two** fates, not one: drop the
+   `FIELD:` colon and it is silently dropped (fate 2); keep the colon and
+   embed the operator in the value and it is a type mismatch (fate 3).
+   Neither ever narrows the result.
 
 The counter-intuitive case: a **broken quote does not** return the table.
 `DEPARTMENT_CODE:"X""` still parses as a field expression, the value swallows
 the junk, and it matches nothing (0 rows).
+
+## Filtering by a change window
+
+There is no comparison operator, so a range is an interval in the *value*
+position: `ev_since_filter("LAST_UPDATE", watermark)` builds
+`LAST_UPDATE:(<watermark>;)`, an open-ended lower bound; `ev_between_filter`
+builds a closed `LAST_UPDATE:(a;b)`. Pass a `datetime` (preferred, and what a
+`Request` timestamp field already is) or a timestamp string — either bound is
+validated as a real timestamp because it is interpolated **unquoted**, so a
+stray `;` or `)` inside it would silently change the query rather than being
+escaped away.
+
+**A bound naming a time must carry its UTC offset**, and both builders refuse one
+that does not — as a `datetime` or as a string. EasyVista *accepts* an
+offset-less literal and reads it in another zone, moving the bound later and
+skipping records with no error (measured live: 13 rows with the offset, 11
+without, same wall-clock text). A bare date is fine; it has no time to misplace.
+
+An admitted string bound naming a **time** is re-rendered to millisecond
+precision with an offset, because that is the only time rendering the wire
+honours: `LAST_UPDATE:(2025-11-28T16:14:41+01:00;)` — second precision with an
+offset, the most obvious way to satisfy the rule above — is **HTTP 590**, as are
+minute precision and a space instead of `T` (what `str(aware_datetime)`
+produces). So the string and `datetime` paths emit identical bounds; do not
+hand-build the literal.
+
+The lower bound is **inclusive** and milliseconds are honoured (verified live on
+three independent boundaries), so a watermark taken as `max(t.last_update)`
+re-reads the boundary record on the next sweep. De-duplicate by `rfc_number`.
+
+**Sort a sweep `LAST_UPDATE DESC`, and de-duplicate.** `iter_*` walks the result
+set by *offset*, and the rows a change window selects are by construction the
+rows that are changing, so a ticket touched between two pages moves *within the
+set being paged*. An unsorted sweep can drop such a row silently — and so can
+either sort direction. What differs is where the dropped row's own timestamp
+lands relative to the watermark this sweep records:
+
+- **`LAST_UPDATE DESC`**: the re-touched row jumps to the head, behind the read
+  cursor, so this sweep misses it — but its stamp is now *above* the watermark,
+  so the next sweep selects it again. **Deferred, self-healing.**
+- **`LAST_UPDATE` / `LAST_UPDATE ASC`**: the re-touched row moves to the tail and
+  everything behind it shifts one place head-ward, so the row that crosses the
+  cursor is one whose own stamp did **not** change. It falls *below* the new
+  watermark and no later sweep selects it. **Permanent miss.**
+
+Both tokens are honoured (measured live); descending is chosen for the reason
+above. De-duplicate by `rfc_number` — the duplicates are the deferred rows
+arriving on a later sweep, plus the inclusive-boundary re-read.
+
+**A sweep that never finishes is a separate trap.** `DESC` yields the newest
+row first, so the watermark reaches its *final* value on page 1. A sweep that
+is interrupted, or capped with `max_records` (as some pagination examples in
+this repo do), still ends up holding the newest stamp — advance the watermark
+from that and the next window's `(newest;)` bound permanently excludes every
+row the incomplete sweep never read. Only advance the watermark after a sweep
+runs to completion.
+
+If even a deferred miss is unacceptable, do not use `iter_*`: page
+`search_tickets` yourself with **keyset** pagination — sort ascending and, after
+each page, advance the *window* to `ev_since_filter(field, max(stamps on the
+page))` at `offset=0` instead of incrementing an offset. With no offset there is
+no cursor for a row to shift past. `iter_tickets` cannot express this because it
+owns its own offset.
+
+(An earlier version of this skill recommended ascending, reasoning that it turns
+a permanent miss into a duplicate. That was wrong: the row an ascending sweep
+drops is not the re-touched one.)
 
 ## What is searchable
 
@@ -64,6 +179,15 @@ searchable, and naming one matches everything:
   inside `STATUS`) — they are not top-level columns at all. Filter
   `STATUS_ID`.
 
+A **dotted path across a relation** is the exception and IS honoured in
+`search`: `REQUEST.RFC_NUMBER:"<rfc>"` on `/actions` genuinely scopes, and it is
+what `list_actions` is built on (pinned by
+`integration_tests/test_live_ticket_history.py::test_list_actions_filters_to_the_requested_ticket`).
+What is silently ignored is a **bare** nested sub-key (`STATUS_EN`) and a
+`*_PATH` display column — not the dotted form. Note `fields` does not accept the
+dotted form even where `search` does: a projection like `DESCRIPTION.HREF` is
+silently dropped.
+
 The rule is about **nesting, not language**: `DEPARTMENT_FR` is a top-level
 column on `departments` and filters correctly. `CATALOG_GUID` is not an
 instance of this rule — it is not returned at all, so it is merely an unknown
@@ -72,9 +196,11 @@ ids are instance-specific.
 
 ## Procedure
 
-1. Build every filter with `ev_equals_filter` / `ev_in_filter`. Never
+1. Build every filter with a helper: `ev_equals_filter` / `ev_in_filter` for
+   exact match, `ev_contains_filter` / `ev_starts_with_filter` for a pattern,
+   `ev_since_filter` / `ev_between_filter` for a date/time window. Never
    f-string a value into a `search`.
-2. Handle `None`: both builders return `None` for a blank or missing value,
+2. Handle `None`: every builder returns `None` for a blank or missing value,
    so `search=None` means unfiltered — guard when that is not what you want.
 3. Call `is_safe_ev_value(value)` first when you would rather skip a filter
    than raise; `escape_ev_value` raises `ValueError` on a value containing
@@ -153,6 +279,41 @@ with EasyvistaClient.from_env() as client:
         result = client.find_departments(user_supplied, limit=10)
 ```
 
+```python
+from easyvista_python_client import EasyvistaClient, ev_contains_filter
+
+with EasyvistaClient.from_env() as client:
+    # ev_contains_filter appends '*' by default: on the instance this package
+    # was characterized against, a bare '~' is exact match and the wildcard is
+    # what makes it "contains". The vendor documents '~' as plain Contains --
+    # if that is your deployment, pass wildcard=None instead.
+    result = client.search_assets(search=ev_contains_filter("ASSET_TAG", "LAPTOP"))
+    print(result.total_record_count)
+```
+
+```python
+from easyvista_python_client import EasyvistaClient, ev_since_filter
+
+with EasyvistaClient.from_env() as client:
+    ticket = client.get_ticket("I240101_0001")
+    # ticket.last_update is already an aware datetime -- feed it straight back
+    # in as a watermark for "everything changed since this ticket".
+    search = ev_since_filter("LAST_UPDATE", ticket.last_update)
+    if search is not None:
+        # The sort direction is load-bearing. Descending on the filtered
+        # column defers a mid-sweep miss to the next sweep (the row's stamp
+        # ends up above the watermark); ascending loses it for good. Hence
+        # the de-duplication -- see "Filtering by a change window".
+        seen = set()
+        for changed in client.iter_tickets(
+            search=search, sort="LAST_UPDATE DESC", page_size=100
+        ):
+            if changed.rfc_number in seen:
+                continue
+            seen.add(changed.rfc_number)
+            print(changed.rfc_number)
+```
+
 ## Gotchas
 
 - A `,` reaching the server inside untrusted input **widens** a same-field
@@ -161,12 +322,15 @@ with EasyvistaClient.from_env() as client:
   `escape_ev_value` does.
 - `ev_equals_filter` returns `None` for a blank value; passing that straight
   through as `search=` silently means "no filter".
-- An unknown `sort` token is believed to be ignored, not rejected, falling
-  back to the default order — but unlike the rest of this skill, that is
-  **not** covered by the live suite. It is what
+- The sort token must be **space-separated**: `FIELD DESC` (or `field desc`)
+  genuinely reorders the result, and bare `FIELD` / `FIELD ASC` both sort
+  ascending — verified live by
+  `integration_tests/test_live_change_window.py`. `FIELD:DESC`, `-FIELD` and
+  `DESC(FIELD)` are all silently ignored — the query falls back to the
+  server's default order with no error, so a sweep written with one of those
+  looks sorted and is not. Nothing validates the token locally. This is what
   `easyvista_python_client/directory.py`'s `RECENT_TICKETS_SORT` relies on
-  (open item O-DIR-1); treat it as unconfirmed until checked against your
-  own instance.
+  (closes open item O-DIR-1).
 - `count_tickets` is the cheap way to check a filter: it sends `max_rows=1`
   and reads the envelope total without fetching records.
 - `search_*` returns one page; `iter_*` pages until the server reports no

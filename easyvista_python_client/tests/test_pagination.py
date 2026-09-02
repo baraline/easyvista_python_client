@@ -66,3 +66,46 @@ def test_build_search_result_handles_non_dict_payload():
     assert sr.record_count == 3
     assert sr.total_record_count == 3
     assert sr.href is None
+
+
+# --- envelope casing is not stable across deployments ------------------------
+
+
+def test_extract_records_matches_an_envelope_key_case_insensitively():
+    """The instance already answers a capital-D ``Documents``.
+
+    Measured 2026-08-17 on the verified instance, where the same instance's own
+    OpenAPI examples spell every envelope lowercase -- so matching the casing
+    exactly is a coin flip per deployment.
+    """
+    assert extract_records({"Documents": [{"d": 1}]}) == [{"d": 1}]
+    assert extract_records({"Actions": [{"a": 1}]}, "actions") == [{"a": 1}]
+    assert extract_records({"REQUESTS": [{"r": 1}]}) == [{"r": 1}]
+
+
+def test_extract_records_still_prefers_records_over_a_resource_envelope():
+    """Priority is unchanged: ``records`` first, then the envelope key.
+
+    The case-insensitive rewrite must not disturb the order, or a payload
+    carrying both would start unwrapping the wrong one.
+    """
+    payload = {"records": [{"r": 1}], "Actions": [{"a": 1}]}
+    assert extract_records(payload, "actions") == [{"r": 1}]
+
+
+def test_extract_records_ignores_a_scalar_list_under_an_envelope_name():
+    """A list of scalars is not an envelope of records.
+
+    Without this check the payload below returned ``[]`` -- silently, and
+    indistinguishably from an empty page -- rather than falling through to
+    ``[data]``. The check matters more now that matching is case-insensitive:
+    it is the guard against a record column that happens to be named like an
+    envelope and to hold a list.
+    """
+    assert extract_records({"REQUESTS": ["a", "b"]}) == [{"REQUESTS": ["a", "b"]}]
+
+
+def test_extract_records_still_returns_an_empty_page_as_empty():
+    """An empty envelope list is a legitimate empty page, not a fallthrough."""
+    assert extract_records({"records": []}) == []
+    assert extract_records({"Documents": []}) == []

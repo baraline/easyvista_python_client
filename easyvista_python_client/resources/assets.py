@@ -21,12 +21,18 @@ ASSETS: ResourceDescriptor[Asset] = ResourceDescriptor(
 
 def build_create_asset(
     payload: PostAsset,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Asset]]:
-    return build_create(ASSETS, payload)
+    return build_create(ASSETS, payload, context=context)
 
 
-def build_get_asset(asset_id: str) -> tuple[RequestSpec, Callable[[Any], Asset]]:
-    return build_get(ASSETS, asset_id)
+def build_get_asset(
+    asset_id: str,
+    *,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Asset]]:
+    return build_get(ASSETS, asset_id, context=context)
 
 
 def build_search_assets(
@@ -36,6 +42,7 @@ def build_search_assets(
     sort: str | None = None,
     max_rows: int | None = None,
     offset: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], SearchResult[Asset]]]:
     return build_search(
         ASSETS,
@@ -44,4 +51,5 @@ def build_search_assets(
         sort=sort,
         max_rows=max_rows,
         offset=offset,
+        context=context,
     )

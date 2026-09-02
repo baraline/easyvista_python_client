@@ -4,15 +4,17 @@
 (``GET employees/{id}``). ``E_MAIL`` is a **declared official** field, so the generic
 field model never misclassifies it as a custom ``e_*`` column. ``extra="allow"``
 preserves the ``COMMENT_EMPLOYEE`` Memo link and any other columns. Aliases are
-grounded in the live inventory (``docs/easyvista-field-inventory.md``). Writes are
-**provisional** pending an authorised profile (spec open item O-DIR-2).
+grounded in the live inventory (tier 4 -- a field inventory generated from
+one instance, 2026-07-07; it may not generalise to another deployment).
+Writes are **provisional** pending an authorised profile (spec open item
+O-DIR-2).
 """
 
 from __future__ import annotations
 
 from pydantic import Field
 
-from .common import EasyvistaModel, EasyvistaWriteModel, OptionalInt
+from .common import EasyvistaModel, EasyvistaWriteModel, OptionalDateTime, OptionalInt
 
 
 class Employee(EasyvistaModel):
@@ -33,7 +35,7 @@ class Employee(EasyvistaModel):
     login: str | None = Field(default=None, alias="LOGIN")
     function_id: OptionalInt = Field(default=None, alias="FUNCTION_ID")
     language_id: OptionalInt = Field(default=None, alias="LANGUAGE_ID")
-    last_update: str | None = Field(default=None, alias="LAST_UPDATE")
+    last_update: OptionalDateTime = Field(default=None, alias="LAST_UPDATE")
     href: str | None = Field(default=None, alias="HREF")
 
 

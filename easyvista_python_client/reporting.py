@@ -7,43 +7,18 @@ delegate to :func:`aggregate_tickets`.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from .models.request import Request
-from .references import resolve_reference
+from .references import DEFAULT_LANGUAGE_ORDER, resolve_reference
+from .timestamps import parse_ev_datetime
 
-_FRACTION_RE = re.compile(r"\.(\d+)")
-
-
-def _parse_iso_datetime(value: Any) -> datetime | None:
-    """Parse an EasyVista timestamp to a timezone-aware ``datetime``, or ``None``.
-
-    Accepts a ``datetime`` (returned as-is, naive made UTC) or an ISO-8601 string.
-    Normalizes for Python 3.10's stricter ``fromisoformat``: maps a trailing ``Z``
-    to ``+00:00`` and pads/truncates fractional seconds to 6 digits. A naive result
-    is treated as UTC. Unparseable input returns ``None``.
-    """
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if not isinstance(value, str) or not value.strip():
-        return None
-    text = value.strip()
-    if text.endswith(("Z", "z")):
-        text = text[:-1] + "+00:00"
-    match = _FRACTION_RE.search(text)
-    if match:
-        frac6 = (match.group(1) + "000000")[:6]
-        text = text[: match.start()] + "." + frac6 + text[match.end() :]
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
+# Kept as a module-level alias so the eight existing tests in
+# tests/test_reporting.py keep importing the name they were written against.
+_parse_iso_datetime = parse_ev_datetime
 
 DEFAULT_DIMENSIONS: tuple[str, ...] = (
     "STATUS",
@@ -63,15 +38,33 @@ class TicketStatistics:
     ``total`` is the number of tickets aggregated (after any date window).
     ``breakdowns`` maps each requested dimension name to ``{label: count}``; for
     every dimension ``sum(breakdowns[dim].values()) == total``.
+
+    ``truncated`` is ``True`` when the fetch stopped because it hit its record
+    cap, so ``total`` describes a sample and not the population. It is a local
+    fact -- "the cap was reached" -- and over-reports by exactly one case: a
+    population whose size equals the cap. ``population_total`` resolves that
+    case: it is the server's reported total for the search, read off the first
+    page, and it is counted BEFORE any client-side ``created_since`` /
+    ``created_until`` window, so it is not comparable with ``total`` when a
+    window is set. It is ``None`` when no total was reported.
+
+    :func:`aggregate_tickets` is pure and offline: it has no page, no envelope
+    and no cap, so it always leaves these two at their defaults. The client's
+    ``ticket_statistics`` stamps them from the fetch it performed. Do not move
+    that computation in here.
     """
 
     total: int
     breakdowns: dict[str, dict[str, int]]
+    truncated: bool = False
+    population_total: int | None = None
 
 
-def _dimension_value(data: dict[str, Any], name: str) -> str:
+def _dimension_value(
+    data: dict[str, Any], name: str, languages: Sequence[str]
+) -> str:
     """Group key for one ticket on one dimension: label, else id, else unknown."""
-    return resolve_reference(data, name).display or _UNKNOWN
+    return resolve_reference(data, name, languages=languages).display or _UNKNOWN
 
 
 def fields_for_references(
@@ -109,6 +102,7 @@ def aggregate_tickets(
     dimensions: Sequence[str] = DEFAULT_DIMENSIONS,
     created_since: datetime | str | None = None,
     created_until: datetime | str | None = None,
+    languages: Sequence[str] = DEFAULT_LANGUAGE_ORDER,
 ) -> TicketStatistics:
     """Aggregate tickets into a total plus per-dimension breakdowns.
 
@@ -118,6 +112,32 @@ def aggregate_tickets(
     ``CREATION_DATE_UT`` (a ``datetime`` or ISO string); a ticket with a
     missing/unparseable date is excluded when a bound is set. Raises ``ValueError``
     for a malformed bound string.
+
+    **An offset-less bound is interpreted as UTC**, not as instance-local time,
+    because it routes through
+    :func:`~easyvista_python_client.parse_ev_datetime`. On a ``+02:00`` instance
+    ``created_since="2026-01-01T00:00:00"`` therefore silently excludes every
+    ticket created between 00:00 and 02:00 local on 1 January -- a two-hour hole
+    in a bound this docstring calls inclusive. Pass an aware ``datetime``, or an
+    offset-bearing string, when the boundary matters. Note this filter is
+    client-side and deliberately more permissive than the *wire* builders, which
+    refuse an offset-less time outright
+    (:func:`~easyvista_python_client.ev_since_filter`); making the two agree is a
+    behaviour change and a candidate follow-up.
+
+    ``languages`` orders the language columns tried when turning each
+    dimension's nested reference object into a bucket key (default:
+    :data:`~easyvista_python_client.DEFAULT_LANGUAGE_ORDER`). It affects the
+    keys of ``breakdowns`` only, never ``total``: a dimension that resolves to
+    no label still buckets by its id, and then by ``"(unknown)"``.
+
+    The "unparseable" half of that per-ticket guard is unreachable for a
+    ``Request`` built the normal way: ``Request.model_validate`` itself now
+    rejects a malformed ``CREATION_DATE_UT`` before this function ever sees the
+    ticket (see ``OptionalDateTime`` in ``models/common.py``). It stays as
+    defence-in-depth for a ``Request`` assembled some other way (e.g.
+    ``model_construct``, which bypasses validation) -- do not delete it as dead
+    code.
     """
     since = _bound(created_since, "created_since")
     until = _bound(created_until, "created_until")
@@ -137,7 +157,7 @@ def aggregate_tickets(
                 continue
         total += 1
         for dim in dimensions:
-            key = _dimension_value(data, dim)
+            key = _dimension_value(data, dim, languages)
             counts = breakdowns[dim]
             counts[key] = counts.get(key, 0) + 1
     return TicketStatistics(total=total, breakdowns=breakdowns)

@@ -135,9 +135,10 @@ jobs:
       # easyvista_python_client.__version__ -- and the git tag is a third. PyPI
       # takes whatever pyproject says, so a tag that disagrees publishes a
       # release nobody can find by version, and a __version__ that disagrees
-      # misreports at runtime. Both are unfixable after upload. Tags in this
-      # repo are v-prefixed (see the CHANGELOG compare links), so the leading v
-      # is stripped before comparing.
+      # misreports at runtime. Both are unfixable after upload. The repo's only
+      # existing tag, 0.1.0, is UNPREFIXED; v-prefixing starts at v0.2.0. The
+      # leading v is therefore stripped before comparing, so both forms
+      # validate.
       - name: Validate release tag matches package version
         if: github.event_name == 'release'
         shell: bash

@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
 metadata:
   package: easyvista-python-client
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -55,18 +55,36 @@ deployment needs before you build a payload for it.
 
 ## Procedure
 
-1. Discover the ids (above). Never hardcode an id copied from another
-   instance — catalog codes, status/urgency/impact ids and group ids are all
-   instance-specific.
-2. Build a `PostRequest`. `catalog_code` plus `title` is the practical
-   minimum; most catalogs also require `origin`, `department_id`,
-   `urgency_id` and `impact_id`.
+1. Discover the ids. One call does it: `client.describe_instance()`, or
+   `client.discover("CATALOG_REQUEST")` / `discover("URGENCY")` /
+   `discover("IMPACT")` for one name at a time — see
+   `easyvista-instance-discovery`. Never hardcode an id copied from another
+   instance: catalog codes, status/urgency/impact ids and group ids are all
+   instance-specific, and adjacent numbers can mean opposite things.
+2. Build a `PostRequest`. The subject is the only vendor-required part, given
+   either as `catalog_guid` — the vendor documents the **guid** as the
+   preferred identifier — or as `catalog_code`; a body with neither is refused
+   locally. Add `title`, and note that most catalogs also want `origin`,
+   `department_id`, `urgency_id` and `impact_id`: that fuller body was accepted
+   on every catalog tried on one instance, so it is a hedge against per-catalog
+   configuration rather than an API requirement. `PostRequest` declares the rest
+   of the vendor's create body too — `description`, `external_reference`,
+   `severity_id`, `recipient_id` / `recipient_mail` / `recipient_name` /
+   `recipient_identification`, `requestor_mail` / `requestor_name` /
+   `requestor_identification`, `location_id` / `location_code`,
+   `department_code`, `parentrequest`, `phone` and `submit_date` — so check the
+   model before reaching for an escape hatch.
 3. Put instance-specific columns in `custom_fields`; they serialize with an
-   `e_` prefix unless already prefixed.
+   `e_` prefix unless already prefixed. For an **official** column a model does
+   not declare, use `extra_payload` instead — un-prefixed, merged last (a key
+   matching a declared one *ignoring case* replaces it), and not validated.
 4. Call `create_ticket(ticket)`. It returns a `Request` whose `rfc_number` is
    usable immediately — see the first Gotcha for why.
 5. To set body text you can read back afterwards, follow the create with
-   `update_ticket(rfc, RequestUpdate(description=...))`.
+   `update_ticket(rfc, RequestUpdate(description=...))`. `RequestUpdate` also
+   accepts `title`, `impact_id`, `owner_id` and `external_reference` (capped at
+   50 characters) after create — see the Gotchas for what it deliberately
+   omits, and use `set_status(rfc, status_guid=...)` for a status.
 6. Read one ticket with `get_ticket(rfc)`; search a page with
    `search_tickets(...)`, which returns a `SearchResult` carrying `.records`,
    `.record_count` (this page) and `.total_record_count` (every match on the
@@ -85,7 +103,7 @@ with EasyvistaClient.from_env() as client:
         PostRequest(
             catalog_code="YOUR_CATALOG_CODE",
             title="Printer offline on the third floor",
-            origin=1,
+            origin="Phone",  # a channel NAME, not an id -- see below
             department_id=1,
             urgency_id=1,
             impact_id=1,
@@ -96,9 +114,14 @@ with EasyvistaClient.from_env() as client:
     print(ticket.rfc_number)
 ```
 
-Every numeric id above is a placeholder — `origin=1`, `department_id=1`,
-`urgency_id=1` and `impact_id=1` are not guaranteed to mean anything on your
-instance. Use the ids the discovery block printed for it instead.
+`department_id=1`, `urgency_id=1` and `impact_id=1` above are **placeholders**
+and are not guaranteed to mean anything on your instance — use the ids
+`client.describe_instance()` or the discovery block printed for it.
+
+`origin` is not an id at all: the vendor documents it as a channel **name**
+(`"Phone"`, `"Email"`), which makes it the one create field with a portable,
+human-readable form. An int id is also accepted (measured on one instance) and
+passes through unchanged.
 
 ```python
 from easyvista_python_client import EasyvistaClient, RequestUpdate
@@ -107,6 +130,21 @@ with EasyvistaClient.from_env() as client:
     updated = client.update_ticket(
         "YOUR_RFC_NUMBER",
         RequestUpdate(title="Printer offline - third floor", description="Confirmed offline at 09:15."),
+    )
+    print(updated.rfc_number)
+```
+
+```python
+from easyvista_python_client import EasyvistaClient, RequestUpdate
+
+with EasyvistaClient.from_env() as client:
+    # impact_id, owner_id and external_reference can all be changed after
+    # create, not only set at create time. external_reference is capped at
+    # 50 characters -- 51 raises pydantic's own ValidationError locally,
+    # before any request is sent.
+    updated = client.update_ticket(
+        "YOUR_RFC_NUMBER",
+        RequestUpdate(impact_id=1, owner_id=1, external_reference="TICKET-REF-0001"),
     )
     print(updated.rfc_number)
 ```
@@ -154,6 +192,22 @@ with EasyvistaClient.from_env() as client:
 
 ## Gotchas
 
+- **Timestamp columns are aware `datetime`, so a record dump is not
+  JSON-serialisable.** `submit_date_ut`, `creation_date_ut`,
+  `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut` and `last_update`
+  are parsed, so `json.dumps(ticket.model_dump(by_alias=True))` and
+  `json.dumps(ticket.classify_fields().official)` raise `TypeError`. For a dump,
+  use `model_dump(mode="json")`. `classify_fields()` takes **no arguments**, so
+  that keyword has nowhere to go there: render the values with
+  `format_ev_datetime` before serialising the bucket, or re-key a JSON-mode dump
+  by the bucket's keys — `dumped = ticket.model_dump(mode="json",
+  by_alias=True)`, then `{k: dumped[k] for k in ticket.classify_fields().official}`.
+  Only the
+  **declared** columns are parsed — an instance-specific date reached through
+  `classify_fields().custom` is still the raw string, so pass it through
+  `parse_ev_datetime` before comparing the two. No write model accepts a
+  `datetime`, `custom_fields` included: a `datetime` there fails inside the HTTP
+  layer with a bare `TypeError`, so render it yourself.
 - `create_ticket`'s response body is **HREF-only** — the API returns no
   `RFC_NUMBER`. `Request` derives `rfc_number` from the trailing path segment
   of the `href` (its own model validator does this, and it is checked against
@@ -194,3 +248,9 @@ with EasyvistaClient.from_env() as client:
   the catalog is misconfigured is a reasonable next thing to try.
 - The accepted **write** format for the date fields is unverified; both a
   string and an int probe returned 590. Do not attempt to set them.
+- `RequestUpdate` deliberately does **not** expose `severity_id` (`SEVERITY_ID`
+  is rejected with HTTP 590) or a priority field (EasyVista derives priority
+  from urgency x impact rather than exposing a writable column). `urgency_id`
+  is also absent: it raised HTTP 590 while still changing the stored value on
+  the verified instance, so it is not offered until that is resolved (open
+  item `O-590-PARTIAL`).
