@@ -171,3 +171,95 @@ def build_update_action(
     against that path did not distinguish a denied route from an absent one.
     """
     return build_update(ACTIONS, action_id, payload, context=context)
+
+
+def build_end_action(
+    rfc_number: str,
+    *,
+    action_id: str | int | None = None,
+    end_all: bool = False,
+    end_date: str | None = None,
+    start_date: str | None = None,
+    elapsed_time: int | str | None = None,
+    doneby_mail: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Action]]:
+    """Build the ``{"end_action": {...}}`` PUT spec -- report an action as done.
+
+    Note the addressing, which is the first thing to get wrong: the path
+    segment is the **ticket's RFC number**, not the action id. The action is
+    named in the *body*. Sending the id in the path answers 404 even when the
+    body names it too (measured 2026-09-01).
+
+    The route and the wrapper are the vendor's own:
+    https://docs.easyvista.com/docs/rest-api-finish-an-action-attached-to-an-incident-request.md
+    The vendor documents ``action_id`` omitted as ending **every open action on
+    the ticket**. This builder does not let that happen by omission: it is
+    reachable only through ``end_all=True``, and a bare ``action_id=None`` is
+    refused.
+
+    That guard is not defensive styling. ``Action.action_id`` is legitimately
+    ``None`` across this package -- :func:`build_create_action`'s response
+    carries no id at all, and any ``fields=`` projection that omits
+    ``ACTION_ID`` yields rows without one -- so forwarding an id a caller
+    *thought* they had would otherwise select the bulk form silently. Compare
+    ``delete_document``, which refuses a document with no id rather than
+    addressing the collection. See the client's ``end_action`` for what ending
+    measurably does to a ticket.
+
+    Dates take the instance's own ``DATE_FORMAT``, so they are passed through
+    as strings rather than accepting a ``datetime`` this package would have to
+    format on a guess -- the same reasoning as
+    :func:`~easyvista_python_client.resources.requests.build_close_ticket`'s
+    ``end_date``. On the verified instance that format is
+    ``dd/mm/yyyy hh:mm:ss`` and **ISO 8601 is refused** with HTTP 590 "Invalid
+    End Date" (measured 2026-09-01 on one instance -- one instance, one date,
+    so it may not generalise). ``elapsed_time`` is a number of **minutes**.
+
+    A blank ``rfc_number`` is refused rather than allowed to build ``PUT
+    actions/``, which addresses the collection instead of a ticket.
+    """
+    if not rfc_number or not rfc_number.strip():
+        raise ValueError(
+            "rfc_number is required to end an action: the path segment is the "
+            "ticket's RFC number, not the action id. Blank would address "
+            "'actions/' -- the collection -- instead of a ticket."
+        )
+    if action_id is None and not end_all:
+        raise ValueError(
+            "end_action needs an action_id. Omitting it is the vendor's "
+            "'end every open action on this ticket' form, which on a ticket "
+            "whose only open action is its workflow step ends that step and "
+            "moves the ticket's status -- so it must be asked for explicitly "
+            "with end_all=True. Note that action_id is legitimately None all "
+            "over this package (create_action's response carries no id, and a "
+            "fields= projection without ACTION_ID drops it), which is exactly "
+            "the case this refusal is here to catch: recover the id by "
+            "diffing list_actions across the create."
+        )
+    if action_id is not None and end_all:
+        raise ValueError(
+            "pass either action_id or end_all=True, not both: end_all is the "
+            "id-less form, so naming an action contradicts it."
+        )
+    end: dict[str, Any] = {}
+    if action_id is not None:
+        end["action_id"] = action_id
+    if start_date is not None:
+        end["start_date"] = start_date
+    if end_date is not None:
+        end["end_date"] = end_date
+    if elapsed_time is not None:
+        end["elapsed_time"] = elapsed_time
+    if doneby_mail is not None:
+        end["doneby_mail"] = doneby_mail
+    spec = RequestSpec("PUT", f"actions/{rfc_number}", json={"end_action": end})
+
+    def parse(data: Any) -> Action:
+        # Same envelope reasoning as build_create_action's parser. The measured
+        # response is HREF-only and names the parent REQUEST, so the Action
+        # this returns is empty by construction -- see the client method.
+        records = extract_records(data, ACTIONS.envelope_key)
+        return Action.model_validate(records[0] if records else data, context=context)
+
+    return spec, parse

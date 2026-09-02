@@ -1462,6 +1462,91 @@ def test_ticket_context_tolerates_an_unreadable_action(config):
 
 
 @respx.mock
+def test_ticket_context_resolves_comment_when_description_is_empty(config):
+    # The EasyVista UI shows ONE text field per action, headed "comment or
+    # description": it renders DESCRIPTION and falls back to COMMENT only when
+    # DESCRIPTION is empty (measured in the UI 2026-09-01 on one instance,
+    # Service Manager 2025.3 -- one instance, one date, may not generalise).
+    # Resolving DESCRIPTION alone therefore loses the body of exactly the
+    # actions a human CAN read: this bundle must carry the COMMENT text.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 9}]})
+    )
+    respx.get(f"{ROOT}/actions/9").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 9,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/9/description"},
+                "COMMENT": {"HREF": f"{ROOT}/actions/9/comment"},
+            },
+        )
+    )
+    # DESCRIPTION resolves EMPTY -- the shadow-fallback case.
+    respx.get(f"{ROOT}/actions/9/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": ""})
+    )
+    comment = respx.get(f"{ROOT}/actions/9/comment").mock(
+        return_value=httpx.Response(
+            200, json={"COMMENT": "what the user actually reads"}
+        )
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert comment.call_count == 1
+    assert context.actions[0].comment == "what the user actually reads"
+    # ...and it must survive into the rendered document, not just the model.
+    assert "what the user actually reads" in context.to_markdown()
+
+
+@respx.mock
+def test_ticket_context_does_not_fetch_comment_when_description_has_text(config):
+    # The third request is conditional: DESCRIPTION wins in the UI, so a
+    # populated description makes the COMMENT memo dead weight. Resolving it
+    # anyway would add one request per action on every ticket.
+    respx.get(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    respx.get(f"{ROOT}/requests/I1/description").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/requests/I1/comment").mock(return_value=httpx.Response(404))
+    respx.get(f"{ROOT}/actions").mock(
+        return_value=httpx.Response(200, json={"actions": [{"ACTION_ID": 9}]})
+    )
+    respx.get(f"{ROOT}/actions/9").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ACTION_ID": 9,
+                "DESCRIPTION": {"HREF": f"{ROOT}/actions/9/description"},
+                "COMMENT": {"HREF": f"{ROOT}/actions/9/comment"},
+            },
+        )
+    )
+    respx.get(f"{ROOT}/actions/9/description").mock(
+        return_value=httpx.Response(200, json={"DESCRIPTION": "the visible note"})
+    )
+    comment = respx.get(f"{ROOT}/actions/9/comment").mock(
+        return_value=httpx.Response(200, json={"COMMENT": "shadowed, never rendered"})
+    )
+    respx.get(f"{ROOT}/requests/I1/documents").mock(
+        return_value=httpx.Response(200, json={"Documents": []})
+    )
+    with EasyvistaClient(config) as client:
+        context = client.get_ticket_context("I1")
+    assert comment.call_count == 0
+    assert context.actions[0].description == "the visible note"
+    assert "shadowed, never rendered" not in context.to_markdown()
+
+
+@respx.mock
 def test_ticket_context_tolerates_an_action_that_has_vanished(config):
     # The 404 arm of the same except clause -- an action listed but deleted
     # before we fetch it item-level. Without this case the clause could be
@@ -2464,3 +2549,52 @@ def test_describe_instance_returns_a_profile_when_everything_is_denied(config):
     assert profile.unavailable["spec"].startswith("denied")
     assert profile.references["STATUS"] == []
     assert profile.references["IMPACT"] == []
+
+
+@respx.mock
+def test_end_action_forwards_every_keyword_to_the_body(config):
+    """Pin the kwarg forwarding, ``start_date`` above all.
+
+    A dropped ``start_date`` is invisible in the response -- the server simply
+    derives one, and the derived one is early by the instance's UTC offset. So
+    this asserts the wire body, not the return value.
+    """
+    route = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={"HREF": f"{ROOT}/requests/I1"})
+    )
+    with EasyvistaClient(config) as client:
+        client.end_action(
+            "I1",
+            action_id=42,
+            start_date="01/09/2026 17:00:00",
+            end_date="01/09/2026 17:15:00",
+            elapsed_time=15,
+            doneby_mail="tech@example.invalid",
+        )
+    assert json.loads(route.calls.last.request.content) == {
+        "end_action": {
+            "action_id": 42,
+            "start_date": "01/09/2026 17:00:00",
+            "end_date": "01/09/2026 17:15:00",
+            "elapsed_time": 15,
+            "doneby_mail": "tech@example.invalid",
+        }
+    }
+
+
+@respx.mock
+def test_end_action_addresses_the_ticket_not_the_action(config):
+    """``actions/{action_id}`` answers 404 for this verb; the RFC is the path."""
+    route = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={"HREF": f"{ROOT}/requests/I1"})
+    )
+    with EasyvistaClient(config) as client:
+        client.end_action("I1", action_id=42)
+    assert route.calls.last.request.url.path.endswith("/actions/I1")
+
+
+def test_end_action_refuses_a_missing_action_id_before_any_request(config):
+    """No socket is opened: the refusal is local, so respx is not even needed."""
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="end_all"):
+            client.end_action("I1", end_date="01/09/2026 17:00:00")

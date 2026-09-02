@@ -159,7 +159,7 @@ class PostAction(EasyvistaWriteModel):
     the assigned group via ``group_id`` (or ``group_name``). Inherits
     ``custom_fields``/``to_api()`` from EasyvistaWriteModel.
 
-    **An action carries two independent text channels**, ``description`` and
+    **An action stores two separate text fields**, ``description`` and
     ``comment``, each addressable afterwards as its own memo sub-resource
     (``GET actions/{id}/description`` and ``GET actions/{id}/comment``). Both
     persist when sent together on create -- verified live 2026-08-28 on one
@@ -167,10 +167,24 @@ class PostAction(EasyvistaWriteModel):
     sent in each. The instance's own OpenAPI declares both on the create body
     and its example populates both (tier 2).
 
+    **Independent in storage, not in visibility.** Measured in the UI
+    2026-09-01 on one instance (Service Manager 2025.3 -- one instance, one
+    date, so it may not generalise), the ticket history shows ONE text field
+    per action, under a header reading literally "comment or description": it
+    renders ``DESCRIPTION`` when that memo has text, and falls back to
+    ``COMMENT`` only when it is empty. So **``description`` shadows
+    ``comment``**. A create carrying both stores both, and the comment is
+    readable through the API but never reaches a human -- no error, no dropped
+    field, nothing to signal the loss. Put the text a person must read in
+    ``description``; use ``comment`` only when you deliberately leave
+    ``description`` empty, or when you mean it as API-only metadata.
+
     ``comment`` was previously absent from this model, on the reasoning that an
     action's text lives in ``DESCRIPTION`` while ``COMMENT`` "is empty" on the
-    verified instance. That inference was wrong: ``COMMENT`` was empty because
-    nothing had ever written to it, not because the column is unused.
+    verified instance. That *reasoning* was wrong -- the column accepts writes
+    and reads back. But the instinct behind the omission was half right: an
+    action's **visible** text does live in ``DESCRIPTION``, because the UI
+    reaches ``COMMENT`` only when the description memo is empty.
 
     **A comment is an action that has been ENDED.** This is the single most
     important thing to know before posting one, and it is why a newly created
@@ -182,24 +196,62 @@ class PostAction(EasyvistaWriteModel):
     was ended, at which point its ``description`` appeared in the history.
 
     Ending sets ``START_DATE_UT``, ``END_DATE_UT``, ``ELAPSED_TIME`` and
-    ``STATUS_ID_ON_TERMINATE``, fills ``DONE_BY_ID`` with the person who ended
-    it, and **clears** ``GROUP_ID`` -- the record moves from "assigned to a
-    group" to "done by a person". None of those fields can be set through
-    ``POST requests/{rfc}/actions``: sending them returns HTTP 200 and drops
-    them silently.
+    ``STATUS_ID_ON_TERMINATE``, and fills ``DONE_BY_ID`` with the person who
+    ended it. None of those fields can be set through ``POST
+    requests/{rfc}/actions``: sending them returns HTTP 200 and drops them
+    silently.
 
-    The vendor documents ending as ``PUT actions/{rfc_number}`` with the body
-    wrapped in ``end_action`` (``doneby_mail``, ``start_date``, ``end_date``,
+    ``STATUS_ID_ON_TERMINATE`` records the status the **ticket** took when the
+    action ended, which is what makes a workflow action's ending visible in the
+    record: measured 2026-09-01/02 on one instance (one instance, two dates, so
+    it may not generalise), a workflow action stored ``2`` (the status the
+    ticket moved to) while a caller-created action on a ticket that did not
+    move stored ``12`` (where it stayed). Those ids are this deployment's --
+    status ids are per-instance and must never be hardcoded from another. It is
+    empty on an action that is still open, so it reports what happened rather
+    than predicting it.
+
+    .. warning::
+
+       **Retracted 2026-09-02.** This paragraph previously said ending
+       **clears** ``GROUP_ID`` -- "the record moves from assigned-to-a-group to
+       done-by-a-person". It does not. Re-read after ending, the group survived
+       on both an ended workflow action (``GROUP_ID`` 57) and an ended
+       caller-created one (``GROUP_ID`` 3, the value passed at create).
+
+    Ending is ``PUT actions/{rfc_number}`` with the body wrapped in
+    ``end_action`` (``doneby_mail``, ``start_date``, ``end_date``,
     ``elapsed_time``; omit ``action_id`` to end every open action at once), and
-    dates in the instance's own ``DATE_FORMAT`` -- ``dd/mm/yyyy`` on the
-    verified instance, **not** ISO 8601. See
+    dates in the instance's own ``DATE_FORMAT``. See
     https://docs.easyvista.com/docs/rest-api-finish-an-action-attached-to-an-incident-request.md
-    **This package does not implement it, and it could not be made to work on
-    the verified instance**: every documented form returned
-    ``590 Action not found``, including for a user who could end the same
-    action through the UI, which points at an instance- or profile-level
-    restriction rather than a payload error. Treat ending as an open problem
-    to raise with the deployment's administrator.
+    **This package implements it as** ``EasyvistaClient.end_action`` -- read
+    that method before calling it, because ending the ticket's own workflow
+    action advances the workflow and moves the ticket's status.
+
+    .. warning::
+
+       **Retracted 2026-09-01.** This docstring previously said every
+       documented form returned ``590 Action not found`` and read that as an
+       instance- or profile-level restriction to raise with an administrator.
+       That was wrong. The 590 is what the route answers when **no OPEN action
+       matches** -- replaying it against an action that is already ended, for
+       instance. Ending an open action succeeds.
+
+    Measured 2026-09-01 on one instance (Service Manager 2025.3 -- one
+    instance, one date, so it may not generalise):
+
+    * ``end_date`` accepts ``dd/mm/yyyy hh:mm:ss`` and ``dd/mm/yyyy hh:mm`` and
+      honours the time; a bare ``dd/mm/yyyy`` lands at midnight. **ISO 8601 is
+      rejected** with ``590 "Invalid End Date"``.
+    * ``elapsed_time`` is in **minutes**.
+    * Send ``start_date`` explicitly. Left to derive it, the server returns a
+      ``START_DATE_UT`` early by the instance's UTC offset -- confirmed with a
+      DST control (120 minutes in September at +02:00, 60 in February at
+      +01:00), so it tracks the offset rather than a fixed constant. An
+      explicit ``start_date`` is stored faithfully.
+    * The path segment is the **RFC number**, not an action id, despite the
+      route living under ``/actions``: ``PUT actions/{action_id}`` answers 404
+      even with the id also in the body.
 
     **Visibility is by action TYPE, and the labels say which is which.** There
     is no per-action visibility flag -- the item-level record was captured on
@@ -295,12 +347,25 @@ class ActionUpdate(EasyvistaWriteModel):
     and the 403 an earlier note recorded against both is what this API answers
     for an absent route as well as a denied one.
 
-    ``description`` and ``comment`` are the action's two independent text
-    channels, the same pair :class:`PostAction` writes on create -- both were
-    verified live on 2026-08-28 to persist and read back separately from a
-    single create. Editing either here targets that memo alone; neither is
-    inherently private (see :class:`PostAction` for why the API enforces no
-    visibility distinction).
+    ``description`` and ``comment`` are the action's two stored text fields,
+    the same pair :class:`PostAction` writes on create -- both were verified
+    live on 2026-08-28 to persist and read back separately from a single
+    create. Editing either targets that memo alone -- but **the two are not
+    interchangeable to a reader**. Measured in the UI 2026-09-01 on one
+    instance (Service Manager 2025.3 -- one instance, one date, may not
+    generalise), the history renders ``DESCRIPTION`` and falls back to
+    ``COMMENT`` only when the description memo is empty, so an
+    ``ActionUpdate(comment=...)`` on an action that already has a description
+    returns 200, re-reads cleanly, and changes nothing anyone sees.
+
+    **Write ``description`` to change what a person reads.** The same
+    measurement confirmed a ``description`` edit applied to an action that had
+    already been **ended** renders in the history, which is how to correct or
+    extend a resolution after the fact.
+
+    Neither memo is private in the API's sense (see :class:`PostAction`:
+    visibility is carried by the action type). An unrendered ``comment`` is
+    invisible by accident, not by permission.
     """
 
     description: str | None = None
@@ -318,7 +383,7 @@ class PostTask(EasyvistaWriteModel):
     ==================  ================================  ========================
     body shape          wrapped in ``action``             flat at the root
     resulting state     **open** -- work still to do      **ended** -- work reported
-    in the UI           a pending row, body NOT shown     a history entry WITH its text
+    in the UI           a pending row, body NOT shown     shows its ``description``
     needs ending after  yes                               no
     ==================  ================================  ========================
 
@@ -330,10 +395,18 @@ class PostTask(EasyvistaWriteModel):
     Vendor documentation:
     https://docs.easyvista.com/docs/rest-api-create-a-task-for-an-incident-request.md
 
+    **Put the comment text in ``description``.** ``comment`` is a second memo
+    on the same record, and the UI renders only one: ``description``, falling
+    back to ``comment`` when the description memo is empty (measured in the UI
+    2026-09-01 on one instance -- one instance, one date, may not generalise).
+    A task sending both therefore shows only the description, and a note split
+    across the two loses half of itself with no error.
+
     Prefer this over :class:`PostAction` unless you genuinely mean "someone
-    must still do this" -- ending an action afterwards needs
-    ``PUT actions/{rfc_number}``, which returned ``590 Action not found`` for
-    every documented form on the verified instance.
+    must still do this". An action is born open, so its text does not render
+    until it is ended; ending is a second call
+    (``EasyvistaClient.end_action``, which also advances the workflow when the
+    action is a workflow step), and a task skips it entirely.
 
     **Public vs internal is the action type**, not a flag on the body. On the
     verified instance type 94 is ``Commentaire [Public]`` / ``Customer

@@ -79,6 +79,10 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
     "count_tickets": ((), {}),
     "create_action": (("I1", PostAction(action_type_id=94, group_id=3)), {}),
+    # action_id named explicitly: omitted, the vendor form ends EVERY open
+    # action, and on a ticket whose only open one is its workflow step that
+    # resolves the ticket. The registry should model the safe call.
+    "end_action": (("I1",), {"action_id": 1, "end_date": "01/01/2026 09:00:00"}),
     # sample_size=1 / action_sample_tickets=1 keep the blanket-mocked runs
     # cheap: the shared PAYLOAD carries one RFC_NUMBER and one ACTION_ID with no
     # `@next`, so every sweep terminates after one page on both surfaces.

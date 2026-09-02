@@ -202,3 +202,99 @@ def test_build_create_action_unwraps_a_capital_a_actions_envelope():
 def test_build_create_task_unwraps_an_actions_envelope():
     _, parser = a.build_create_task("I1", PostTask(action_type_id=94, group_id=3))
     assert parser({"actions": [{"ACTION_ID": 9}]}).action_id == 9
+
+
+def test_build_end_action_addresses_the_ticket_not_the_action():
+    """The path segment is the RFC; the action is named in the body.
+
+    Getting this backwards is the documented failure mode -- ``actions/{id}``
+    answers 404 for this verb even when the body names the action too.
+    """
+    spec, _ = a.build_end_action(
+        "I1", action_id=42, end_date="01/09/2026 17:23:51", elapsed_time=15
+    )
+    assert spec.method == "PUT"
+    assert spec.path == "actions/I1"
+    assert spec.json == {
+        "end_action": {
+            "action_id": 42,
+            "end_date": "01/09/2026 17:23:51",
+            "elapsed_time": 15,
+        }
+    }
+
+
+def test_build_end_action_refuses_a_bare_missing_action_id():
+    """The id-less bulk form must be asked for, never arrived at by omission.
+
+    ``Action.action_id`` is legitimately ``None`` across this package -- a
+    create response carries no id, and a ``fields=`` projection without
+    ``ACTION_ID`` drops it -- so forwarding one would otherwise select the
+    vendor's "end every open action" form in silence.
+    """
+    with pytest.raises(ValueError, match="end_all"):
+        a.build_end_action("I1", end_date="01/09/2026 17:00:00")
+
+
+def test_build_end_action_end_all_reaches_the_wire_without_an_action_id():
+    """Asked for explicitly, the bulk form omits the key rather than nulling it."""
+    spec, _ = a.build_end_action("I1", end_all=True, elapsed_time=15)
+    assert spec.json == {"end_action": {"elapsed_time": 15}}
+    assert "action_id" not in spec.json["end_action"]
+
+
+def test_build_end_action_refuses_action_id_and_end_all_together():
+    """They are contradictory: end_all IS the id-less form."""
+    with pytest.raises(ValueError):
+        a.build_end_action("I1", action_id=5, end_all=True)
+
+
+@pytest.mark.parametrize("value", [0, "0"])
+def test_build_end_action_sends_a_falsy_elapsed_time(value):
+    """``is not None``, not truthiness.
+
+    Zero minutes is a legitimate value the server stores; a truthiness check
+    would drop it silently and the action would end with an empty
+    ``ELAPSED_TIME`` instead.
+    """
+    spec, _ = a.build_end_action("I1", action_id=1, elapsed_time=value)
+    assert spec.json["end_action"]["elapsed_time"] == value
+
+
+def test_build_end_action_sends_a_falsy_action_id():
+    """``action_id=0`` must address action 0, not become the bulk form."""
+    spec, _ = a.build_end_action("I1", action_id=0)
+    assert spec.json["end_action"]["action_id"] == 0
+
+
+def test_build_end_action_passes_start_date_through():
+    """``start_date`` is the fix for the server's offset-shifted derived one."""
+    spec, _ = a.build_end_action(
+        "I1", action_id="7", start_date="01/09/2026 17:00:00",
+        end_date="01/09/2026 17:15:00", elapsed_time="15", doneby_mail="a@b.c",
+    )
+    assert spec.json["end_action"] == {
+        "action_id": "7",
+        "start_date": "01/09/2026 17:00:00",
+        "end_date": "01/09/2026 17:15:00",
+        "elapsed_time": "15",
+        "doneby_mail": "a@b.c",
+    }
+
+
+@pytest.mark.parametrize("rfc", ["", "   "])
+def test_build_end_action_refuses_a_blank_rfc(rfc):
+    """Blank would build ``PUT actions/`` -- the collection, not a ticket."""
+    with pytest.raises(ValueError):
+        a.build_end_action(rfc, action_id=1)
+
+
+def test_build_end_action_parses_the_href_only_response_without_raising():
+    """The measured response is href-only and names the parent REQUEST.
+
+    It carries no ACTION_ID, so the parsed Action is empty by construction --
+    the point of this test is that it parses rather than that it is useful.
+    """
+    _, parser = a.build_end_action("I1", action_id=1)
+    parsed = parser({"HREF": "https://host/api/v1/50004/requests/I1"})
+    assert parsed.action_id is None

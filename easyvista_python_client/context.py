@@ -237,10 +237,16 @@ class TicketContext:
                 author = _text(adata.get("DONE_BY"))
                 heading = heading_label + (f" — {author}" if author else "")
                 lines.append(f"### {heading}")
-                # DESCRIPTION carries the note text once get_ticket_context has
-                # resolved it; COMMENT is a separate field that never does
-                # (verified live). Fall back to it only for records that
-                # predate resolution.
+                # One body per action, DESCRIPTION first. This mirrors what the
+                # UI does with the single text field it renders per action,
+                # headed literally "comment or description": DESCRIPTION when
+                # non-empty, COMMENT only when DESCRIPTION is empty (measured
+                # in the UI 2026-09-01 on one instance, Service Manager 2025.3
+                # -- one instance, one date, may not generalise). The COMMENT
+                # arm is NOT legacy compatibility: it renders exactly the
+                # actions a reader does see, and deleting it would drop their
+                # bodies. ``_resolve_action_body`` resolves that memo under the
+                # same condition, which is what makes this branch reachable.
                 body = html_to_text(
                     action.description if isinstance(action.description, str) else None
                 ) or html_to_text(

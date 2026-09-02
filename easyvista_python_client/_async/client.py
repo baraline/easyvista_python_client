@@ -517,12 +517,21 @@ class AsyncEasyvistaClient:
         label) afterwards, and compare against a status you resolved from the
         instance rather than a constant::
 
-            await client.close_ticket(rfc, status_guid=CLOSED_GUID)
-            after = await client.get_ticket(rfc)
+            client.close_ticket(rfc, status_guid=CLOSED_GUID)
+            after = client.get_ticket(rfc)
             assert after.end_date_ut is not None  # the close actually landed
 
         ``end_date_ut`` is the more portable signal than any status id: it is
-        empty on an open ticket and stamped on a closed one.
+        empty while a ticket is being worked and stamped once it is finished.
+        Note the boundary is **resolution, not closure** — measured 2026-09-02
+        on one instance (one instance, one date, so it may not generalise), a
+        ticket that reached *Résolu* already carried an ``end_date_ut``, and
+        closing it afterwards left that original stamp untouched rather than
+        re-stamping it. So a populated ``end_date_ut`` means "resolved or
+        closed", which is the right test for "stop working this ticket" but
+        **not** a test for "closed" specifically. Nothing in this package
+        distinguishes the two without resolving the status against the
+        instance.
 
         ``status_guid`` reaches **any** status, not only terminal ones -- see
         :meth:`set_status`, which is this same request under a name that says
@@ -559,19 +568,37 @@ class AsyncEasyvistaClient:
         **For a comment, use :meth:`create_task` instead.** An action is created
         **open** — work still to do — and an open action shows in the UI as a
         pending row with its text NOT displayed, which reads as though the note
-        was lost. Only an *ended* action becomes a readable history entry, and
-        ending one needs ``PUT actions/{rfc_number}``, which returned
-        ``590 Action not found`` for every documented form on the verified
-        instance. :meth:`create_task` posts the same record already ended, in
-        one call. Reach for ``create_action`` only when you genuinely mean
-        "someone must still do this".
+        was lost. Only an *ended* action becomes a readable history entry.
+        :meth:`create_task` posts the same record already ended, in one call.
+        Reach for ``create_action`` only when you genuinely mean "someone must
+        still do this", and finish it with :meth:`end_action` — which also
+        advances the ticket's workflow when the action is a workflow step, so
+        read that method before calling it.
 
         Public versus internal is the ``action_type_id``, not a flag on the
-        body — see :class:`~easyvista_python_client.PostAction`.
+        body — see :class:`~easyvista_python_client.PostAction`. Put the text a
+        person must read in ``description``: it shadows ``comment`` in the UI.
 
-        Creation is gated by the workflow's current stage: an otherwise valid
-        payload can be refused 590/2013 on a ticket that accepted the same body
-        earlier.
+        **This route resolves an implicit PARENT action, and that is what most
+        rejections are about.** Measured 2026-09-01 on one instance (one
+        instance, one date, may not generalise), the outcome tracks how many
+        actions are currently **open** on the ticket:
+
+        =================  ==========================================
+        open actions       result
+        =================  ==========================================
+        0                  ``590 Parent action not found or incorrect``
+        exactly 1          succeeds
+        2 or more          ``590 Ambiguous query : many parent actions found``
+        =================  ==========================================
+
+        Passing ``parent_action_id`` for an **open** action succeeds at any
+        count; naming an **ended** one is refused. A fresh ticket carries
+        exactly one open workflow action, and every status change ends the
+        ticket's open actions — which is why an otherwise valid payload can be
+        refused on a ticket that accepted the same body earlier. The messages
+        are literal, not a stage gate. :meth:`create_task` is not
+        parent-resolved and is unaffected.
         """
         spec, parse = actions_res.build_create_action(
             rfc_number, action, context=self._validation_context
@@ -588,9 +615,19 @@ class AsyncEasyvistaClient:
         call, no termination step. Verified live 2026-08-28: tasks came back
         with ``END_DATE_UT`` and ``STATUS_ID_ON_TERMINATE`` already set.
 
+        **Put that text in ``description``, not ``comment``**, despite the
+        name. :class:`~easyvista_python_client.PostTask` accepts both, but the
+        UI renders one field per action — ``description``, falling back to
+        ``comment`` only when the description memo is empty (measured in the UI
+        2026-09-01 on one instance; one instance, one date, may not
+        generalise). A task carrying both shows only the description, so a note
+        split across the two loses half of itself with no error.
+
         Public versus internal is carried by ``action_type_id`` — the type's
-        own ``ACTION_LABEL_*`` columns say which it is. Unlike an internal-note
-        *action*, a task needs no ``parent_action_id``.
+        own ``ACTION_LABEL_*`` columns say which it is. Unlike
+        :meth:`create_action`, this route is **not** parent-resolved: it needs
+        no ``parent_action_id`` and works on a ticket at any stage, including
+        one whose open actions a status change has already drained.
 
         Like :meth:`create_action`, the returned :class:`Action` carries **no
         usable ``action_id``** — the create response is an HREF naming the
@@ -704,7 +741,13 @@ class AsyncEasyvistaClient:
         """Fetch one action, including the Memo links ``list_actions`` omits.
 
         The note text lives behind :attr:`Action.description`'s href on this
-        record; :meth:`get_ticket_context` resolves it for you.
+        record — but only while that memo has text. ``comment`` is a second
+        href beside it, and it matters when ``description`` resolves empty:
+        the UI renders one field per action, falling back to ``comment``
+        exactly then (measured in the UI 2026-09-01 on one instance; one
+        instance, one date, may not generalise). To reproduce what a person
+        saw, resolve ``description`` first and ``comment`` only if it comes
+        back empty. :meth:`get_ticket_context` applies that rule for you.
         """
         spec, parse = actions_res.build_get_action(
             action_id, context=self._validation_context
@@ -714,8 +757,22 @@ class AsyncEasyvistaClient:
     async def update_action(self, action_id: str | int, update: ActionUpdate) -> Action:
         """Edit an existing action's note text.
 
+        ``ActionUpdate`` carries two fields, ``description`` and ``comment``,
+        and they are **not** interchangeable to a reader. The UI renders one
+        text field per action — ``description``, falling back to ``comment``
+        only when the description memo is empty (measured in the UI 2026-09-01
+        on one instance; one instance, one date, may not generalise). So
+        ``ActionUpdate(comment=...)`` on an action that already has a
+        description returns 200, re-reads cleanly through the API, and changes
+        nothing anyone sees. **Write ``description`` to change what a person
+        reads.**
+
         Live-verified 2026-08-17 by re-reading the memo afterwards, not by the
-        status code. Note that an action can be edited but **not deleted**: the
+        status code, and again 2026-09-01 on an action that had already been
+        **ended**, where the new ``description`` rendered in the history — an
+        ended action is not frozen, and this is how to correct or extend a
+        resolution visibly. Note that an action can be edited but **not
+        deleted**: the
         instance OpenAPI document (``GET {api_root}/swagger``, read 2026-08-27)
         declares only GET, PUT and PATCH on ``actions/{id}``, no DELETE, so
         there is deliberately no ``delete_action``. The 403 an earlier note
@@ -733,12 +790,142 @@ class AsyncEasyvistaClient:
         )
         return parse(await self._transport.send(spec))
 
-    async def _resolve_action_body(self, action: Action) -> Action:
-        """Return ``action`` with its note text resolved onto ``description``.
+    async def end_action(
+        self,
+        rfc_number: str,
+        *,
+        action_id: str | int | None = None,
+        end_all: bool = False,
+        end_date: str | None = None,
+        start_date: str | None = None,
+        elapsed_time: int | str | None = None,
+        doneby_mail: str | None = None,
+    ) -> Action:
+        """Report an action as done — the step :meth:`create_action` leaves open.
 
-        Costs two requests per action (item fetch, then the Memo), so callers
-        that do not need bodies pass ``resolve_action_bodies=False``. Degrades
-        to the unresolved record on 403/404 rather than failing the bundle.
+        An action is born **open** and its text does not render in the ticket
+        history until it is ended, so this is what turns a ``create_action``
+        into something a person can read. A comment needs neither call:
+        :meth:`create_task` posts an already-ended record in one request.
+
+        Addressed by the **ticket**, not the action: the path segment is
+        ``rfc_number`` and the action is named in the body. Passing an action
+        id as the path answers 404 even with the id also in the body (measured
+        2026-09-01).
+
+        .. warning::
+
+           **Ending the ticket's own workflow action advances the workflow.**
+           This call is not bookkeeping. Measured 2026-09-01 on one instance
+           (Service Manager 2025.3 — one instance, one date, so it may not
+           generalise), ending a fresh ticket's open type-20 *Traitement
+           Operation* action moved the **ticket** from *En cours* to *Résolu*
+           and spawned a new open type-1 *Validation Self Service* action
+           (2 tickets, 2/2). Controls the same day and the next showed the
+           opposite for an action the caller had created: ending a type-94
+           action left the ticket's status and its action count untouched
+           (3 tickets, 3/3). So ending your own action changes that action
+           only — it still ends it, which is the whole point, and its text
+           then renders — while ending a workflow step also changes the
+           ticket. Status ids are per-instance, so treat 12 and 2 as this
+           deployment's, not as values to hardcode.
+
+           **This is why ``action_id`` is required.** The vendor documents
+           the id-less form as ending *every open action on the ticket*, which
+           on a ticket whose only open action is its workflow step means
+           resolving it. That form is reachable only through ``end_all=True``;
+           a bare ``action_id=None`` raises ``ValueError`` before any request.
+           The guard exists because ``Action.action_id`` is legitimately
+           ``None`` all over this package — :meth:`create_action`'s response
+           carries no id, and a ``fields=`` projection without ``ACTION_ID``
+           drops it — so an id a caller thought they had would otherwise
+           select the bulk form in silence. Only ``end_all=True`` was measured
+           with a single open action, so *how* it behaves against several open
+           at once is vendor-documented, not measured here.
+
+        Both dates are passed through as **strings**, because the accepted
+        format follows the instance rather than a standard: it is not ISO 8601
+        on every deployment, and accepting a ``datetime`` would mean this
+        package formatting one on a guess. The date part is the instance's own
+        ``DATE_FORMAT`` (readable off any employee record); the time part is
+        not covered by that column, so the whole accepted spelling has to be
+        measured per deployment. On the verified instance it is
+        ``dd/mm/yyyy hh:mm:ss`` — ``dd/mm/yyyy hh:mm`` also works, a bare
+        ``dd/mm/yyyy`` lands at midnight, and **ISO 8601 is refused** with HTTP
+        590 "Invalid End Date" (measured 2026-09-01/02 on one instance, so it
+        may not generalise; ``close_ticket``'s ``end_date`` documents the
+        date-only spelling from an earlier measurement of the same instance).
+
+        **Send ``start_date`` explicitly.** Left out, the server derives it as
+        ``end_date`` minus ``elapsed_time`` and then minus the instance's UTC
+        offset, so the stored start is early by that offset — one hour or two
+        depending on DST (measured 2026-09-01 against a +02:00 instance and
+        against a February date at +01:00; confirmed to the second 2026-09-02,
+        where ``end_date`` 08:14:35 with ``elapsed_time`` 15 stored a start of
+        05:59:35). An explicit ``start_date`` is stored faithfully.
+
+        ``elapsed_time`` is a number of **minutes**, and it is neither derived
+        nor cross-checked. Measured 2026-09-02 on one instance (one instance,
+        one date, so it may not generalise):
+
+        * Omitted entirely, it stays **empty** — the server does not compute it
+          from your two dates, so send it if you want one.
+        * Sent, it is stored **as given, even when it contradicts the dates**:
+          60 was stored against a 15-minute window. Both ``60`` and ``"7"``
+          were honoured, so the type does not matter.
+        * The one exception: when ``start_date`` **equals** ``end_date``, the
+          stored value is ``0`` whatever you send (3/3). A zero-length window
+          silently discards it, which is easy to hit by passing the same
+          timestamp to both.
+
+        Raises :class:`~easyvista_python_client.EasyvistaValidationError` (HTTP
+        590, EV code 2013) with ``Action not found`` when **no open action
+        matches** — which is what replaying this call against an
+        already-ended action looks like. An earlier version of this package's
+        documentation read that message as a profile restriction to raise with
+        an administrator; that was wrong, and ending an open action succeeds.
+
+        ``doneby_mail`` attributes the work to somebody other than the
+        authenticating account; left out, the API credits that account.
+
+        The returned :class:`Action` carries **only ``href``**: the measured
+        response is href-only and names the parent *request*, exactly like
+        :meth:`create_action`'s, so ``action_id`` and every other field are
+        ``None`` — and because that href's tail is an RFC number rather than a
+        numeric id, no id is derived from it either. Re-read with
+        :meth:`get_action` to confirm ``END_DATE_UT``; a 200 is not a receipt
+        on this API.
+        """
+        spec, parse = actions_res.build_end_action(
+            rfc_number,
+            action_id=action_id,
+            end_all=end_all,
+            end_date=end_date,
+            start_date=start_date,
+            elapsed_time=elapsed_time,
+            doneby_mail=doneby_mail,
+            context=self._validation_context,
+        )
+        return parse(await self._transport.send(spec))
+
+    async def _resolve_action_body(self, action: Action) -> Action:
+        """Return ``action`` with its note text resolved onto the memo that shows.
+
+        Resolves ``DESCRIPTION``, and ``COMMENT`` **only when ``DESCRIPTION``
+        comes back empty** -- mirroring what a reader sees. The UI renders one
+        text field per action, under a header reading "comment or description":
+        ``DESCRIPTION`` when it has text, falling back to ``COMMENT`` when it
+        does not (measured in the UI 2026-09-01 on one instance, Service
+        Manager 2025.3 -- one instance, one date, so it may not generalise).
+        Resolving ``DESCRIPTION`` alone dropped the body of exactly the actions
+        a human *can* read, so a ticket exported through
+        :meth:`get_ticket_context` disagreed with the ticket on screen.
+
+        Costs two requests per action (item fetch, then the Memo), and a third
+        only in that fallback case, so a populated description never pays for
+        it. Callers that do not need bodies pass ``resolve_action_bodies=False``.
+        Degrades to the unresolved record on 403/404 rather than failing the
+        bundle.
         """
         if action.action_id is None:
             return action
@@ -749,6 +936,9 @@ class AsyncEasyvistaClient:
         if isinstance(full.description, dict):
             href = full.description.get("HREF")
             full.description = await self._safe_memo(href) if href else None
+        if not full.description and isinstance(full.comment, dict):
+            href = full.comment.get("HREF")
+            full.comment = await self._safe_memo(href) if href else None
         return full
 
     # --- assets --------------------------------------------------------------
