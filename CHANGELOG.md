@@ -9,7 +9,53 @@ a deprecation policy will follow the 1.0 release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-02
+
+The first release since `0.1.0`. A `0.2.0` section was prepared and dated
+2026-08-18 but never tagged or uploaded, so that work had never reached anyone;
+it is merged into this release rather than left stranded, which is why this
+entry is large and its date is later than the work it describes.
+
+**Upgrading.** Five breaking changes, each replacing a silently wrong answer with
+a correct one or a refusal — every one is marked `**BREAKING**` in the sections
+below, with the reasoning:
+
+- `PostAction` now requires an action type and a group, refusing locally what the
+  API rejected with an HTTP 590 naming no field.
+- `RequestUpdate.status_id` is gone: there is no flat status update on this API,
+  and it returned 200 while dropping the status. Use `set_status`/`close_ticket`.
+- `get_department_context`'s recent tickets are now projected.
+- `find_departments` changed how an all-digit name and the fuzzy fallback
+  resolve.
+
+Read the `### Changed` and `### Removed` sections before upgrading; the rest of
+the release is additive.
+
 ### Added
+
+- `end_action(rfc_number, *, action_id=, end_date=, start_date=, elapsed_time=,
+  doneby_mail=)` on both clients — the step `create_action` leaves undone. An
+  action is born open and its text does not render in the ticket history until
+  it is ended, so without this the package could create an action a person
+  could not read, and the pre-release walkthrough had to reach into
+  `client._transport` to finish one. Wraps the vendor's
+  `PUT actions/{rfc_number}` / `end_action` route. Addressed by the **ticket**,
+  not the action: the id goes in the body, and `actions/{action_id}` answers
+  404 for this verb. `create_task` still needs none of it.
+  - **Ending a workflow action advances the workflow** (measured 2026-09-01,
+    2/2 tickets): the ticket moved *En cours* → *Résolu* and a new open action
+    appeared. A control showed ending a caller-created action changed neither
+    the status nor the action count. Omitting `action_id` ends *every* open
+    action, which on a ticket whose only open one is its workflow step means
+    resolving it.
+  - `elapsed_time` is **minutes**, is not derived from the two dates (omitted,
+    it stays empty), and is stored as sent even when it contradicts them (60
+    against a 15-minute window) — except when `start_date` equals `end_date`,
+    where it stores `0` whatever you send (3/3).
+  - Dates take the instance's own `DATE_FORMAT` and are passed through as
+    strings; ISO 8601 is refused with HTTP 590 "Invalid End Date" on the
+    verified instance. Send `start_date` explicitly — a derived one comes back
+    early by the instance's UTC offset.
 
 - `ev_contains_filter` / `ev_starts_with_filter` take a keyword-only
   `wildcard: Literal["*", "%"] | None = "*"`. The vendor documents `~` as
@@ -155,173 +201,6 @@ a deprecation policy will follow the 1.0 release.
   it — its own scan is bracket-tolerant, and sharing would be a behaviour
   change rather than a refactor.
 
-### Changed
-
-- **BREAKING**: `PostAction` now requires an action type and a group, the same
-  way `PostTask` always has and on the same vendor sentence ("Required:
-  `action_type_id`, and one of `group_id` / `group_mail` / `group_name`").
-  `PostAction()` used to construct fine and ship `{"action": {}}`, drawing an
-  HTTP 590 that named no field; it now raises at construction with a message
-  that names what is missing. A body supplying either through `extra_payload`
-  satisfies the guard.
-- `PostAction.action_type_id` and `.group_id` widen from `int | None` to
-  `int | str | None`, matching `PostTask`. They had diverged for no recorded
-  reason, so a non-numeric id worked through `create_task` and failed through
-  `create_action`. Purely permissive.
-- `Asset.asset_id` and `.status_id` accept EasyVista's `""` sentinel
-  (`OptionalInt`), as every other read model already did. A CMDB row with an
-  unset `STATUS_ID` used to fail the whole page, and inside
-  `get_department_context` it failed the whole bundle.
-- `Request.time_used_to_solve_request` and `Document.document_id` widen to
-  non-coercing `str | int | None`. Both were typed from a single observation of
-  a single instance; an instance sending the other form failed the record, and
-  for documents that meant every attachment on the ticket.
-- `PostAsset.catalog_id` and `.status_id` accept `int | str`, coercing a
-  numeric string to the number the instance's own create example shows and
-  passing a non-numeric value through as written.
-- The required-field guards on `PostRequest`, `PostAction` and `PostTask` now
-  read the body `to_api()` will actually send rather than the declared
-  attributes, so a field supplied through `extra_payload` satisfies them.
-  Previously `PostRequest(extra_payload={"CATALOG_GUID": ...})` was refused
-  even though it ships exactly what the vendor documents as a complete create.
-- An unknown key on a write model now names itself and points at
-  `extra_payload`, instead of pydantic's bare "Extra inputs are not permitted".
-  The message stops short of promising the write will work: on this API an
-  exclusion is usually a measured misbehaviour, and a 200 is not a receipt.
-- **BREAKING**: `get_department_context`'s recent tickets are now **projected**
-  with `RECENT_TICKET_FIELDS`. The previous default sent no `fields=` at all,
-  and on the verified instance the unprojected list projection returns `TITLE`
-  present but **empty** (tier 4 — 400 tickets scanned, zero with a populated
-  title), so `recent_tickets[i].title` was `None` for every caller. Projecting
-  fixes that but narrows the rest: a caller reading a column outside the seven
-  — a custom `e_*`, `DEPARTMENT_ID`, `URGENCY_ID` — off a recent ticket loses
-  it. `ticket_fields=None` restores the exact previous request.
-- **BREAKING**: `find_departments` with an all-digit name now tries
-  `DEPARTMENT_CODE` before `DEPARTMENT_ID`. A department whose code is all
-  digits was previously looked up as an id, returning a **different department
-  with HTTP 200 and no hint** — that is the bug being fixed. Where no such code
-  exists the result is identical and one extra request is spent.
-  `by="DEPARTMENT_ID"` restores the old lookup exactly.
-- **BREAKING**: `find_departments`' fuzzy fallback now folds accents and
-  compatibility forms (NFKD + `casefold`), so it can return **more** departments
-  than before. It is strictly more permissive — no name that matched stops
-  matching — and it is what makes an unaccented search term reach an accented
-  label, which it could not do on an instance whose department names are French.
-- **Envelope matching is now case-insensitive**, over the same fixed candidate
-  list and in the same priority order — never a scan of whatever keys the
-  payload carries. Envelope casing is not stable across deployments: the
-  verified instance answers a capital-D `Documents` where its own OpenAPI
-  examples spell every envelope lowercase. A matched list must also be empty or
-  hold at least one dict, so a scalar list under an envelope name
-  (`{"REQUESTS": ["a", "b"]}`) falls through to the bare-record reading instead
-  of silently returning `[]`.
-- Corrected several docstrings that read an HTTP 403 as a permission verdict.
-  This API answers 403 for a path that does not exist as well as for one a
-  profile denies, so the status code alone never distinguished them. There is
-  no nested `requests/{rfc}/actions/{id}` route and no DELETE verb on
-  `actions/{id}` — those are topology facts from the instance's own OpenAPI
-  document, not restrictions. The conclusions were right; the reasons were not.
-  A route table now records them in `docs/vendor-api-reference.md`.
-
-
-- **A `[bracketed]` untranslated label no longer wins over a real sibling
-  translation.** `references._nested_label` scanned `_EN`/`_FR`/`_PATH` and
-  accepted any non-empty string, while `localized_label` fifty lines below
-  already knew six language columns and already rejected placeholders — two
-  incompatible policies in one module. They are now one. Affects
-  `TicketContext.to_markdown`'s Status/Department/Location/Catalog rows,
-  `TicketStatistics.breakdowns` keys, and `record.reference(name).label`. On a
-  single-language instance this only ever improves the value: the string
-  rendered before was a bracketed echo of the text now returned. It can never
-  *delete* output — a record whose every language column is a placeholder still
-  yields what it always yielded. A caller keying a dashboard on the exact old
-  string sees that key change.
-- A usable non-English/non-French language column now beats `_PATH`, which was
-  previously the third and last rung.
-- `easyvista_python_client._fields._label` is removed (private, unexported). Its
-  one caller now resolves labels through `references`, so the package has one
-  placeholder rule and one language order rather than three.
-- `EasyvistaConfig.verify_ssl` accepts a CA-bundle path or an `ssl.SSLContext`
-  as well as a bool, matching what `httpx` has always accepted. A corporate
-  private CA no longer reads as though disabling verification were the only
-  option. Runtime behaviour is unchanged; this widens the annotation.
-- Requests now carry `User-Agent: easyvista-python-client/{version}` instead of
-  the underlying HTTP library's default, so the integration can be identified in
-  an instance's access log and whitelisted by a WAF operator. This is the only
-  change to the wire.
-- `EasyvistaConfig.__hash__` covers the scalar identity fields only. The hash
-  the dataclass would generate spans every field and raises `TypeError` once a
-  mapping field is non-empty; `__eq__` still compares every field.
-
-### Fixed
-
-- **The action-type documentation contradicted itself.** The user guide and the
-  actions skill each stated the visibility rule correctly and then retracted it
-  a dozen lines later ("there is no naming convention to pattern-match", "they
-  carry no visibility meaning"), and both printed `INTERNAL_NOTE_TYPE_ID = 20`
-  — a number that appears in no test, probe or fixture and predates the
-  measurement that established 94/95. The `20` is deleted rather than replaced
-  with another invented one. The corrected text distinguishes the two halves
-  that are both true: the instance's OpenAPI declares **no `action-types` route
-  at all**, so there is nothing to enumerate and nothing for an administrator
-  to unblock — and every action record still carries `ACTION_TYPE_ID` beside
-  translated `ACTION_LABEL_*` columns, so the ids are recoverable from the
-  data. `discover("ACTION_TYPE")` now does that sampling.
-- **The actions skill taught `create_action` for comments.** Its front matter,
-  Procedure and first worked example all reached for the verb that creates an
-  action *open* — a pending row whose text the UI does not display — while the
-  skill's own headline said to use `create_task`. A Procedure is executed
-  verbatim by an agent, so this was the highest-value correction in the set.
-  The guide's end-to-end example was labelled "add a comment" and called
-  `create_action` too.
-- **Nothing documented how to obtain the one mandatory create field.** A new
-  guide subsection covers `catalog_code` / `catalog_guid`, including the trap
-  that `reference("CATALOG_REQUEST").id` resolves to `SD_CATALOG_ID`, which
-  `PostRequest` accepts under no name at all. A 403 on `/catalog-requests` is
-  now reported as a **grant to ask for** rather than an impossibility: the
-  route is declared in that same deployment's spec.
-- `origin` is taught as the channel **name** the vendor documents (`"Phone"`),
-  not as an id. It is the one create field with a portable, human-readable
-  form; the int that was measured accepted stays in a parenthetical, and every
-  live-hitting caller keeps it.
-- A new **"First steps on your instance"** section is now section 2 of the user
-  guide rather than section 20 of 23, and gives the order to discover a
-  deployment's values in — a reader needs it before they write anything.
-- `close_ticket`'s "omitting `status_guid` closes to the instance's default
-  *Closed* meta-status" is **retracted to an open question** in the guide and
-  in both docstrings that carried it. It is not recorded in
-  `docs/vendor-api-reference.md` and no live test exercises the omitted form —
-  every one passes an explicit `status_guid`. Recorded as O-CLOSE-DEFAULT.
-- `models/action.py` held the last copy of the retracted bracket rule ("the
-  brackets carry no other meaning"). A new test pins the half that nothing
-  guarded: a bracketed **suffix** on distinct text survives `localized_label`,
-  where a wholly-bracketed placeholder is discarded.
-
-
-- **The `create_action`, `create_task` and `close_ticket` parsers now name
-  their envelope.** All three called `extract_records(data)` with no envelope
-  key, so a deployment echoing the created record under an `actions` wrapper
-  handed `model_validate` the wrapper itself — and `extra="allow"` accepted it
-  silently, yielding a well-formed record with every declared field `None`.
-  `close_ticket` worked only because `"requests"` happened to sit in a
-  hardcoded fallback list belonging to no resource in particular.
-- **The `add_document` parser read its response by a different rule than
-  `list_documents`.** It used the case-sensitive `extract_records` while the
-  list parser was already case-insensitive — for the same resource on the same
-  instance, the one known to answer a capital-D `Documents`. A create echoed
-  that way produced an all-`None` `Document` built from the wrapper.
-
-### Removed
-
-- **BREAKING**: `RequestUpdate.status_id`. There is no flat status update on this
-  API and this field never worked. Sent alone the PUT is rejected 590/2013; sent
-  beside any other field the PUT returns **200, applies the other field, and
-  drops the status in silence** — measured on one ticket, title updated,
-  `STATUS_ID` unchanged. A write that reports success and stores nothing is worse
-  than one that fails, so the field is gone; `extra="forbid"` now makes
-  `RequestUpdate(status_id=...)` raise at construction. Use `set_status`.
-
-### Added
 
 - `EasyvistaClient.iter_actions` / `AsyncEasyvistaClient.iter_actions` page a
   ticket's **whole** action log. `list_actions` returns one page and truncates a
@@ -393,154 +272,6 @@ a deprecation policy will follow the 1.0 release.
   each tagged with the evidence behind it, plus the routes present in the
   instance's OpenAPI that the package does not implement.
 
-### Fixed
-
-- **Documented how a comment actually works, retracting two wrong claims.** This
-  entry previously said "this API has no private-comment feature" and that the
-  API "cannot reveal" which action types are internal. Both were wrong, and the
-  second was a *correction that deleted a true finding*. Measured live
-  2026-08-28 on one instance:
-  - **A comment is an action that has been ENDED.** An action is a unit of work:
-    created open (a task to do), then ended (work reported). Only an ended action
-    appears in the ticket history with its text visible; an open one renders as a
-    pending row with no body, which reads as though the text vanished. Ending
-    sets `START_DATE_UT`, `END_DATE_UT`, `ELAPSED_TIME` and
-    `STATUS_ID_ON_TERMINATE`, fills `DONE_BY_ID` and **clears** `GROUP_ID`. None
-    of those can be set on create — they return HTTP 200 and are dropped.
-  - **Ending is vendor-documented but unreachable here.**
-    `PUT actions/{rfc_number}`, body wrapped in `end_action`, dates in the
-    instance's `DATE_FORMAT` (`dd/mm/yyyy`, not ISO 8601). Every documented form
-    returned `590 Action not found` on the verified instance — including for a
-    user who could end the same action through the UI — so this looks like an
-    instance/profile restriction. Not implemented; tracked as an open problem.
-  - **Visibility is by action type, and the labels do say which.** Type 94 is
-    `Commentaire [Public]` / `Customer Comment`; type 95 is
-    `Note Interne [Privé]` / `Internal Note`. Ids are per-deployment, but they
-    are **discoverable**: `GET action-types` is 403, yet every action record
-    carries `ACTION_TYPE_ID` beside translated `ACTION_LABEL_*` columns, so one
-    `GET actions` recovers the types in use.
-  - **The bracket "correction" was itself wrong.** Two conventions exist and mean
-    opposite things. A whole label bracketed and echoing another language
-    (`EN='[Analyse et résolution]'`) is an untranslated placeholder, which is why
-    `references.localized_label` discards it. A bracketed *suffix* on distinct
-    text with genuine sibling translations (`FR='Commentaire [Public]'` beside
-    `EN='Customer Comment'`) is a real visibility marker. The earlier correction
-    generalised the first pattern over the second and removed an accurate claim.
-  No release carried any of the wrong versions.
-- `PostRequest`'s docstring claimed a ticket "needs at minimum `catalog_code`
-  plus `title`". That was wrong in a way that cost real debugging time. **Send
-  the whole documented create body** — `catalog_code`, `origin`, `title`,
-  `description`, `department_id`, `urgency_id`, `impact_id`. The full body is
-  accepted everywhere tried; the same body minus those ids is accepted on some
-  catalogs and rejected on others with the *identical* remaining bytes. The
-  rejection's message is a bare **SQL parser error** naming no field
-  (`=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...`), which reads
-  like a server-side defect and is not one — it is what an under-specified create
-  looks like here. Every id in that body was verified to persist by reading it
-  back under an explicit projection (these columns are absent from the default
-  projection, like `TITLE`, so an unprojected read shows `None` regardless).
-- Documented that **a rejected create may still have created the ticket**: 12
-  attempts returned 3 `RFC_NUMBER`s and afterwards all 12 tickets existed. A 590
-  therefore means *possibly created*, never *not created* — retrying duplicates,
-  and the caller never learns the id. The `external_reference` marker does
-  survive the failed insert and is searchable, which is the only way to reconcile
-  such an orphan.
-- `integration_tests/test_live_smoke.py` leaked one ticket per live run. Its
-  `test_missing_mandatory_field_raises_validation_error` asserted that a create
-  with a catalog but no title is rejected "(no ticket created), so this stays
-  read-only-safe by construction" — both halves false: `title` is not the
-  mandatory field (the full documented body with no title creates fine), and the
-  rejection does create a row. Replaced by
-  `test_an_underspecified_create_body_raises_validation_error`, which omits the
-  ids that really are required and reconciles the leftover ticket by its marker
-  in a `finally`. Two tests added beside it: one pinning that the documented body
-  lands every id, one pinning that `set_status` reaches a **non-terminal**
-  status.
-- `PostRequest.origin` and `PostRequest.impact_id` now accept `int | str`, but
-  they were widened for different reasons, not the same one. `origin` is
-  vendor-documented as a **string** (tier 1); an `int` was separately measured
-  accepted on one instance (tier 4, date not recorded). `impact_id` is
-  vendor-documented as an **integer** (tier 1); its `str` branch exists so a
-  caller who quotes it is not rejected, not because a string was independently
-  measured landing here. `origin` sends whichever type is passed, unchanged;
-  `impact_id` normalizes a numeric string back to the vendor's documented int —
-  see **Changed** below, where the wire-form consequences of both are set out.
-- Three shipped docstrings cited a gitignored, instance-private handover note
-  as the documented request body. That file is invisible to every reader of the
-  published repository — a dead link — and was never the vendor documentation
-  it was cited as; `docs/vendor-api-reference.md` now carries the citable
-  facts instead. A new guard (`scripts/tests/test_source_citations.py`) fails
-  the suite if any tracked file cites a gitignored path again — it scans
-  `easyvista_python_client/**/*.py`, `scripts/**/*.py`, `docs/*.rst`,
-  `docs/*.md`, `integration_tests/**/*.py`, and the root `.md` files,
-  including this changelog.
-- `PostRequest`'s "send the whole documented set" doctrine is corrected. The
-  vendor requires only `catalog_guid` or `catalog_code`; the seven-field body
-  is a hedge against per-catalog configuration measured on one instance, which
-  the docstring stated as an API requirement.
-- `TicketContext.to_markdown` dropped a non-default memo. Fetch was
-  parameterised by `memo_fields` and rendering was not, so
-  `get_ticket_context(rfc, memo_fields=("solution",))` — the headline case for
-  that parameter, a deployment whose body memo is neither default — produced a
-  Markdown export with no body section and no warning. It now applies the same
-  role-naming rule to `memos`: when neither `description` nor `comment` has
-  text, a single populated memo becomes the body under `## Description`, and
-  several each get a heading derived from the field name requested.
-
-### Changed
-
-- **The wire form changed for a caller who passes an id as a numeric string.**
-  Widening a `PostRequest` field from `int` to `int | str` is not purely
-  additive, and the entries above previously implied it was: pydantic's smart
-  union keeps the exact type match where the old `int` field coerced. So
-  `PostRequest(origin="7")` used to send `7` and now sends `"7"`, and the same
-  is true of `department_id` and `recipient_id`, widened in this release for
-  the same reason. The vendor documents all three columns as **strings**
-  (tier 1, `docs/vendor-api-reference.md`), so the string form is the
-  documented one and there is nothing to normalize towards. An id was measured
-  accepted in either form on one instance (tier 4, 2026-08-25), so on that
-  deployment this changes the bytes and not the outcome — but a deployment that
-  discriminates on JSON type would see a behaviour change. Pass an `int` to get
-  the old bytes.
-- **`PostRequest.impact_id` is the exception, and it coerces again.** It is
-  declared `Field(union_mode="left_to_right")` with `int` first, so
-  `impact_id="28"` reaches the wire as `28`. The vendor documents this column
-  as an **integer** (tier 1), which is the form worth normalizing towards; the
-  `str` branch exists so a caller who quotes the value is not rejected, not so
-  that the quoted form ships. A non-numeric string is still accepted and passes
-  through as written, so nothing previously accepted is refused now. (Between
-  the widening and this entry `impact_id="28"` did ship as `"28"`; both changes
-  fall in this same unreleased section, so no release carried it.)
-- **`extra_payload` overrides a declared field across letter case.** The vendor
-  documents the ticket *create* body's field names as case-insensitive (tier 1,
-  `docs/vendor-api-reference.md`); the other write bodies are assumed to match
-  it, which is the safe assumption in either direction here. Against that, the
-  exact-key merge broke the escape hatch's own promise: `PostRequest(urgency_id=8,
-  extra_payload={"URGENCY_ID": "4"})` put **both** spellings on the wire with
-  conflicting values and left the winner to the server. An `extra_payload` key
-  now replaces any declared or `custom_fields`-produced key it matches when
-  case is ignored, and `extra_payload`'s spelling and value are what ship. The
-  `ALL_CAPS` form is the likely one, not a corner case — it mirrors the read
-  side, which is where callers copy names from. This is a merge rule: a
-  collision is never an error.
-- **Live-test credential renamed** (contributor-facing; the published package is
-  unaffected). `EASYVISTA_TEST_USER` / `secrets/easyvista_test_user` are now
-  `EASYVISTA_TEST_ACCOUNT` / `secrets/easyvista_test_account`. The value never
-  was a login: it is the EasyVista **account**, the instance identifier that
-  forms the `{account}` path segment of `https://host/api/{version}/{account}`
-  (a number such as `50004`), and it feeds `EasyvistaConfig.account`.
-  Authentication is the Bearer token alone. The old name is **not** accepted as a
-  fallback — `integration_tests/`, `scripts/validate_docs_examples.py` and
-  `scripts/validate_live_content_fidelity.py` now abort with a message naming the
-  replacement if it is still configured, because silently honouring it would
-  preserve exactly the misreading the rename removes. Rename your local file;
-  `secrets/` is gitignored as a whole directory, so the new name stays ignored.
-  Note the value is consulted **only** when the URL is a bare host — a full API
-  root already carries the account, and most setups never read it at all.
-
-## [0.2.0] - 2026-08-18
-
-### Added
 
 - `EasyvistaClient.stream_document` / `AsyncEasyvistaClient.stream_document`
   yield an attachment's bytes in chunks (64 KiB by default, `chunk_size=` to
@@ -681,6 +412,153 @@ a deprecation policy will follow the 1.0 release.
 
 ### Changed
 
+- **BREAKING**: `PostAction` now requires an action type and a group, the same
+  way `PostTask` always has and on the same vendor sentence ("Required:
+  `action_type_id`, and one of `group_id` / `group_mail` / `group_name`").
+  `PostAction()` used to construct fine and ship `{"action": {}}`, drawing an
+  HTTP 590 that named no field; it now raises at construction with a message
+  that names what is missing. A body supplying either through `extra_payload`
+  satisfies the guard.
+- `PostAction.action_type_id` and `.group_id` widen from `int | None` to
+  `int | str | None`, matching `PostTask`. They had diverged for no recorded
+  reason, so a non-numeric id worked through `create_task` and failed through
+  `create_action`. Purely permissive.
+- `Asset.asset_id` and `.status_id` accept EasyVista's `""` sentinel
+  (`OptionalInt`), as every other read model already did. A CMDB row with an
+  unset `STATUS_ID` used to fail the whole page, and inside
+  `get_department_context` it failed the whole bundle.
+- `Request.time_used_to_solve_request` and `Document.document_id` widen to
+  non-coercing `str | int | None`. Both were typed from a single observation of
+  a single instance; an instance sending the other form failed the record, and
+  for documents that meant every attachment on the ticket.
+- `PostAsset.catalog_id` and `.status_id` accept `int | str`, coercing a
+  numeric string to the number the instance's own create example shows and
+  passing a non-numeric value through as written.
+- The required-field guards on `PostRequest`, `PostAction` and `PostTask` now
+  read the body `to_api()` will actually send rather than the declared
+  attributes, so a field supplied through `extra_payload` satisfies them.
+  Previously `PostRequest(extra_payload={"CATALOG_GUID": ...})` was refused
+  even though it ships exactly what the vendor documents as a complete create.
+- An unknown key on a write model now names itself and points at
+  `extra_payload`, instead of pydantic's bare "Extra inputs are not permitted".
+  The message stops short of promising the write will work: on this API an
+  exclusion is usually a measured misbehaviour, and a 200 is not a receipt.
+- **BREAKING**: `get_department_context`'s recent tickets are now **projected**
+  with `RECENT_TICKET_FIELDS`. The previous default sent no `fields=` at all,
+  and on the verified instance the unprojected list projection returns `TITLE`
+  present but **empty** (tier 4 — 400 tickets scanned, zero with a populated
+  title), so `recent_tickets[i].title` was `None` for every caller. Projecting
+  fixes that but narrows the rest: a caller reading a column outside the seven
+  — a custom `e_*`, `DEPARTMENT_ID`, `URGENCY_ID` — off a recent ticket loses
+  it. `ticket_fields=None` restores the exact previous request.
+- **BREAKING**: `find_departments` with an all-digit name now tries
+  `DEPARTMENT_CODE` before `DEPARTMENT_ID`. A department whose code is all
+  digits was previously looked up as an id, returning a **different department
+  with HTTP 200 and no hint** — that is the bug being fixed. Where no such code
+  exists the result is identical and one extra request is spent.
+  `by="DEPARTMENT_ID"` restores the old lookup exactly.
+- **BREAKING**: `find_departments`' fuzzy fallback now folds accents and
+  compatibility forms (NFKD + `casefold`), so it can return **more** departments
+  than before. It is strictly more permissive — no name that matched stops
+  matching — and it is what makes an unaccented search term reach an accented
+  label, which it could not do on an instance whose department names are French.
+- **Envelope matching is now case-insensitive**, over the same fixed candidate
+  list and in the same priority order — never a scan of whatever keys the
+  payload carries. Envelope casing is not stable across deployments: the
+  verified instance answers a capital-D `Documents` where its own OpenAPI
+  examples spell every envelope lowercase. A matched list must also be empty or
+  hold at least one dict, so a scalar list under an envelope name
+  (`{"REQUESTS": ["a", "b"]}`) falls through to the bare-record reading instead
+  of silently returning `[]`.
+- Corrected several docstrings that read an HTTP 403 as a permission verdict.
+  This API answers 403 for a path that does not exist as well as for one a
+  profile denies, so the status code alone never distinguished them. There is
+  no nested `requests/{rfc}/actions/{id}` route and no DELETE verb on
+  `actions/{id}` — those are topology facts from the instance's own OpenAPI
+  document, not restrictions. The conclusions were right; the reasons were not.
+  A route table now records them in `docs/vendor-api-reference.md`.
+
+
+- **A `[bracketed]` untranslated label no longer wins over a real sibling
+  translation.** `references._nested_label` scanned `_EN`/`_FR`/`_PATH` and
+  accepted any non-empty string, while `localized_label` fifty lines below
+  already knew six language columns and already rejected placeholders — two
+  incompatible policies in one module. They are now one. Affects
+  `TicketContext.to_markdown`'s Status/Department/Location/Catalog rows,
+  `TicketStatistics.breakdowns` keys, and `record.reference(name).label`. On a
+  single-language instance this only ever improves the value: the string
+  rendered before was a bracketed echo of the text now returned. It can never
+  *delete* output — a record whose every language column is a placeholder still
+  yields what it always yielded. A caller keying a dashboard on the exact old
+  string sees that key change.
+- A usable non-English/non-French language column now beats `_PATH`, which was
+  previously the third and last rung.
+- `easyvista_python_client._fields._label` is removed (private, unexported). Its
+  one caller now resolves labels through `references`, so the package has one
+  placeholder rule and one language order rather than three.
+- `EasyvistaConfig.verify_ssl` accepts a CA-bundle path or an `ssl.SSLContext`
+  as well as a bool, matching what `httpx` has always accepted. A corporate
+  private CA no longer reads as though disabling verification were the only
+  option. Runtime behaviour is unchanged; this widens the annotation.
+- Requests now carry `User-Agent: easyvista-python-client/{version}` instead of
+  the underlying HTTP library's default, so the integration can be identified in
+  an instance's access log and whitelisted by a WAF operator. This is the only
+  change to the wire.
+- `EasyvistaConfig.__hash__` covers the scalar identity fields only. The hash
+  the dataclass would generate spans every field and raises `TypeError` once a
+  mapping field is non-empty; `__eq__` still compares every field.
+
+
+- **The wire form changed for a caller who passes an id as a numeric string.**
+  Widening a `PostRequest` field from `int` to `int | str` is not purely
+  additive, and the entries above previously implied it was: pydantic's smart
+  union keeps the exact type match where the old `int` field coerced. So
+  `PostRequest(origin="7")` used to send `7` and now sends `"7"`, and the same
+  is true of `department_id` and `recipient_id`, widened in this release for
+  the same reason. The vendor documents all three columns as **strings**
+  (tier 1, `docs/vendor-api-reference.md`), so the string form is the
+  documented one and there is nothing to normalize towards. An id was measured
+  accepted in either form on one instance (tier 4, 2026-08-25), so on that
+  deployment this changes the bytes and not the outcome — but a deployment that
+  discriminates on JSON type would see a behaviour change. Pass an `int` to get
+  the old bytes.
+- **`PostRequest.impact_id` is the exception, and it coerces again.** It is
+  declared `Field(union_mode="left_to_right")` with `int` first, so
+  `impact_id="28"` reaches the wire as `28`. The vendor documents this column
+  as an **integer** (tier 1), which is the form worth normalizing towards; the
+  `str` branch exists so a caller who quotes the value is not rejected, not so
+  that the quoted form ships. A non-numeric string is still accepted and passes
+  through as written, so nothing previously accepted is refused now. (Between
+  the widening and this entry `impact_id="28"` did ship as `"28"`; both changes
+  fall in this same unreleased section, so no release carried it.)
+- **`extra_payload` overrides a declared field across letter case.** The vendor
+  documents the ticket *create* body's field names as case-insensitive (tier 1,
+  `docs/vendor-api-reference.md`); the other write bodies are assumed to match
+  it, which is the safe assumption in either direction here. Against that, the
+  exact-key merge broke the escape hatch's own promise: `PostRequest(urgency_id=8,
+  extra_payload={"URGENCY_ID": "4"})` put **both** spellings on the wire with
+  conflicting values and left the winner to the server. An `extra_payload` key
+  now replaces any declared or `custom_fields`-produced key it matches when
+  case is ignored, and `extra_payload`'s spelling and value are what ship. The
+  `ALL_CAPS` form is the likely one, not a corner case — it mirrors the read
+  side, which is where callers copy names from. This is a merge rule: a
+  collision is never an error.
+- **Live-test credential renamed** (contributor-facing; the published package is
+  unaffected). `EASYVISTA_TEST_USER` / `secrets/easyvista_test_user` are now
+  `EASYVISTA_TEST_ACCOUNT` / `secrets/easyvista_test_account`. The value never
+  was a login: it is the EasyVista **account**, the instance identifier that
+  forms the `{account}` path segment of `https://host/api/{version}/{account}`
+  (a number such as `50004`), and it feeds `EasyvistaConfig.account`.
+  Authentication is the Bearer token alone. The old name is **not** accepted as a
+  fallback — `integration_tests/`, `scripts/validate_docs_examples.py` and
+  `scripts/validate_live_content_fidelity.py` now abort with a message naming the
+  replacement if it is still configured, because silently honouring it would
+  preserve exactly the misreading the rename removes. Rename your local file;
+  `secrets/` is gitignored as a whole directory, so the new name stays ignored.
+  Note the value is consulted **only** when the URL is a bare host — a full API
+  root already carries the account, and most setups never read it at all.
+
+
 - **BREAKING:** Read-model timestamps are now timezone-aware `datetime`
   instead of `str`: `Request.submit_date_ut`, `creation_date_ut`,
   `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut`, `last_update`,
@@ -791,6 +669,15 @@ a deprecation policy will follow the 1.0 release.
 
 ### Removed
 
+- **BREAKING**: `RequestUpdate.status_id`. There is no flat status update on this
+  API and this field never worked. Sent alone the PUT is rejected 590/2013; sent
+  beside any other field the PUT returns **200, applies the other field, and
+  drops the status in silence** — measured on one ticket, title updated,
+  `STATUS_ID` unchanged. A write that reports success and stores nothing is worse
+  than one that fails, so the field is gone; `extra="forbid"` now makes
+  `RequestUpdate(status_id=...)` raise at construction. Use `set_status`.
+
+
 - **Breaking:** `PostRequest.catalog_guid` and `Request.catalog_guid` are gone.
   `CATALOG_GUID` is absent from every sampled live ticket (0/25 single-ticket
   GETs), from the documented create body, and from the vendor field inventory —
@@ -807,6 +694,209 @@ a deprecation policy will follow the 1.0 release.
   now pins its absence.
 
 ### Fixed
+
+- Two retractions in `PostAction`'s docstring, both measured 2026-09-02 by
+  re-reading the record after ending rather than trusting the write:
+  - It said ending **clears** `GROUP_ID` ("the record moves from
+    assigned-to-a-group to done-by-a-person"). It does not — the group survived
+    on an ended workflow action (57) and on an ended caller-created one (3, the
+    value passed at create).
+  - It said "**This package does not implement it**" of ending. It does now.
+- `STATUS_ID_ON_TERMINATE` is documented: it records the status the *ticket*
+  took when the action ended, and is empty while the action is open, so it
+  reports what happened rather than predicting it.
+
+
+- **`get_ticket_context` dropped the body of actions a reader can see.**
+  `_resolve_action_body` resolved only the `DESCRIPTION` memo, leaving
+  `COMMENT` an unresolved href dict — which made `TicketContext.to_markdown`'s
+  `isinstance(action.comment, str)` fallback unreachable on every item-level
+  record. The EasyVista UI renders one text field per action, `DESCRIPTION`
+  falling back to `COMMENT` when it is empty (measured in the UI 2026-09-01,
+  one instance, Service Manager 2025.3), so an action whose description was
+  empty exported as a heading with no body while the ticket on screen showed
+  the comment. `COMMENT` is now resolved under exactly that condition — one
+  extra request only when `DESCRIPTION` comes back empty, so a populated
+  description costs nothing.
+- **The docs taught an invisible write.** "Internal vs. customer-facing
+  comments" in the user guide, and the matching section of the actions skill,
+  presented `description` and `comment` as two *independent* channels and gave
+  as their worked example a `PostAction` putting the internal note in `comment`
+  beside a populated `description` — precisely the shadowed case, where the
+  text is stored, reads back through the API and is shown to nobody. Both now
+  state the shadowing rule and write human-facing text to `description`.
+  `comment` is not the private channel; visibility is the action type.
+- **Retracted: ending an action is not blocked.** `PostAction`, both clients'
+  `create_action`, the actions skill, the user guide and `CLAUDE.md` all said
+  `PUT actions/{rfc_number}` returned `590 Action not found` for every
+  documented form and read that as an instance or profile restriction to raise
+  with an administrator. Measured 2026-09-01: ending an **open** action
+  succeeds. The 590 is what the route answers when no open action matches —
+  replaying it against an already-ended one, for instance. The same measurement
+  fixed the surrounding details: `end_date` takes `dd/mm/yyyy hh:mm:ss` (ISO
+  8601 is refused `590 "Invalid End Date"`), `elapsed_time` is minutes, an
+  explicit `start_date` is stored faithfully while a derived one is early by
+  the instance's UTC offset, and the path segment is the RFC number — an
+  action id there answers 404.
+- **`create_action`'s refusals were attributed to the wrong cause.** The
+  docstring called creation "gated by the workflow's current stage". It is
+  parent resolution: the route needs exactly one **open** action on the ticket
+  (0 → `Parent action not found or incorrect`, 1 → succeeds, ≥2 → `Ambiguous
+  query : many parent actions found`), and an explicit `parent_action_id`
+  naming an open action works at any count. A status change ends the ticket's
+  open actions, which is why a body accepted earlier is refused later — the
+  stage is not itself the gate, and the error messages were literal all along.
+- **The action-type documentation contradicted itself.** The user guide and the
+  actions skill each stated the visibility rule correctly and then retracted it
+  a dozen lines later ("there is no naming convention to pattern-match", "they
+  carry no visibility meaning"), and both printed `INTERNAL_NOTE_TYPE_ID = 20`
+  — a number that appears in no test, probe or fixture and predates the
+  measurement that established 94/95. The `20` is deleted rather than replaced
+  with another invented one. The corrected text distinguishes the two halves
+  that are both true: the instance's OpenAPI declares **no `action-types` route
+  at all**, so there is nothing to enumerate and nothing for an administrator
+  to unblock — and every action record still carries `ACTION_TYPE_ID` beside
+  translated `ACTION_LABEL_*` columns, so the ids are recoverable from the
+  data. `discover("ACTION_TYPE")` now does that sampling.
+- **The actions skill taught `create_action` for comments.** Its front matter,
+  Procedure and first worked example all reached for the verb that creates an
+  action *open* — a pending row whose text the UI does not display — while the
+  skill's own headline said to use `create_task`. A Procedure is executed
+  verbatim by an agent, so this was the highest-value correction in the set.
+  The guide's end-to-end example was labelled "add a comment" and called
+  `create_action` too.
+- **Nothing documented how to obtain the one mandatory create field.** A new
+  guide subsection covers `catalog_code` / `catalog_guid`, including the trap
+  that `reference("CATALOG_REQUEST").id` resolves to `SD_CATALOG_ID`, which
+  `PostRequest` accepts under no name at all. A 403 on `/catalog-requests` is
+  now reported as a **grant to ask for** rather than an impossibility: the
+  route is declared in that same deployment's spec.
+- `origin` is taught as the channel **name** the vendor documents (`"Phone"`),
+  not as an id. It is the one create field with a portable, human-readable
+  form; the int that was measured accepted stays in a parenthetical, and every
+  live-hitting caller keeps it.
+- A new **"First steps on your instance"** section is now section 2 of the user
+  guide rather than section 20 of 23, and gives the order to discover a
+  deployment's values in — a reader needs it before they write anything.
+- `close_ticket`'s "omitting `status_guid` closes to the instance's default
+  *Closed* meta-status" is **retracted to an open question** in the guide and
+  in both docstrings that carried it. It is not recorded in
+  `docs/vendor-api-reference.md` and no live test exercises the omitted form —
+  every one passes an explicit `status_guid`. Recorded as O-CLOSE-DEFAULT.
+- `models/action.py` held the last copy of the retracted bracket rule ("the
+  brackets carry no other meaning"). A new test pins the half that nothing
+  guarded: a bracketed **suffix** on distinct text survives `localized_label`,
+  where a wholly-bracketed placeholder is discarded.
+
+
+- **The `create_action`, `create_task` and `close_ticket` parsers now name
+  their envelope.** All three called `extract_records(data)` with no envelope
+  key, so a deployment echoing the created record under an `actions` wrapper
+  handed `model_validate` the wrapper itself — and `extra="allow"` accepted it
+  silently, yielding a well-formed record with every declared field `None`.
+  `close_ticket` worked only because `"requests"` happened to sit in a
+  hardcoded fallback list belonging to no resource in particular.
+- **The `add_document` parser read its response by a different rule than
+  `list_documents`.** It used the case-sensitive `extract_records` while the
+  list parser was already case-insensitive — for the same resource on the same
+  instance, the one known to answer a capital-D `Documents`. A create echoed
+  that way produced an all-`None` `Document` built from the wrapper.
+
+
+- **Documented how a comment actually works, retracting two wrong claims.** This
+  entry previously said "this API has no private-comment feature" and that the
+  API "cannot reveal" which action types are internal. Both were wrong, and the
+  second was a *correction that deleted a true finding*. Measured live
+  2026-08-28 on one instance:
+  - **A comment is an action that has been ENDED.** An action is a unit of work:
+    created open (a task to do), then ended (work reported). Only an ended action
+    appears in the ticket history with its text visible; an open one renders as a
+    pending row with no body, which reads as though the text vanished. Ending
+    sets `START_DATE_UT`, `END_DATE_UT`, `ELAPSED_TIME` and
+    `STATUS_ID_ON_TERMINATE` and fills `DONE_BY_ID`. None of those can be set on
+    create — they return HTTP 200 and are dropped. (This bullet also said ending
+    **clears** `GROUP_ID`; it does not — see the retraction above.)
+  - **Ending is vendor-documented, and it works.**
+    `PUT actions/{rfc_number}`, body wrapped in `end_action`, dates in the
+    instance's own format. This bullet previously said every documented form
+    returned `590 Action not found` and read that as an instance/profile
+    restriction. That was wrong: the 590 is what the route answers when no
+    *open* action matches, such as replaying it against one already ended. It is
+    implemented as `end_action` — see the entry at the top of this release.
+  - **Visibility is by action type, and the labels do say which.** Type 94 is
+    `Commentaire [Public]` / `Customer Comment`; type 95 is
+    `Note Interne [Privé]` / `Internal Note`. Ids are per-deployment, but they
+    are **discoverable**: `GET action-types` is 403, yet every action record
+    carries `ACTION_TYPE_ID` beside translated `ACTION_LABEL_*` columns, so one
+    `GET actions` recovers the types in use.
+  - **The bracket "correction" was itself wrong.** Two conventions exist and mean
+    opposite things. A whole label bracketed and echoing another language
+    (`EN='[Analyse et résolution]'`) is an untranslated placeholder, which is why
+    `references.localized_label` discards it. A bracketed *suffix* on distinct
+    text with genuine sibling translations (`FR='Commentaire [Public]'` beside
+    `EN='Customer Comment'`) is a real visibility marker. The earlier correction
+    generalised the first pattern over the second and removed an accurate claim.
+  No release carried any of the wrong versions.
+- `PostRequest`'s docstring claimed a ticket "needs at minimum `catalog_code`
+  plus `title`". That was wrong in a way that cost real debugging time. **Send
+  the whole documented create body** — `catalog_code`, `origin`, `title`,
+  `description`, `department_id`, `urgency_id`, `impact_id`. The full body is
+  accepted everywhere tried; the same body minus those ids is accepted on some
+  catalogs and rejected on others with the *identical* remaining bytes. The
+  rejection's message is a bare **SQL parser error** naming no field
+  (`=(1,35) expected token:( * + - . IDENTIFIER CASE NOT JOIN ...`), which reads
+  like a server-side defect and is not one — it is what an under-specified create
+  looks like here. Every id in that body was verified to persist by reading it
+  back under an explicit projection (these columns are absent from the default
+  projection, like `TITLE`, so an unprojected read shows `None` regardless).
+- Documented that **a rejected create may still have created the ticket**: 12
+  attempts returned 3 `RFC_NUMBER`s and afterwards all 12 tickets existed. A 590
+  therefore means *possibly created*, never *not created* — retrying duplicates,
+  and the caller never learns the id. The `external_reference` marker does
+  survive the failed insert and is searchable, which is the only way to reconcile
+  such an orphan.
+- `integration_tests/test_live_smoke.py` leaked one ticket per live run. Its
+  `test_missing_mandatory_field_raises_validation_error` asserted that a create
+  with a catalog but no title is rejected "(no ticket created), so this stays
+  read-only-safe by construction" — both halves false: `title` is not the
+  mandatory field (the full documented body with no title creates fine), and the
+  rejection does create a row. Replaced by
+  `test_an_underspecified_create_body_raises_validation_error`, which omits the
+  ids that really are required and reconciles the leftover ticket by its marker
+  in a `finally`. Two tests added beside it: one pinning that the documented body
+  lands every id, one pinning that `set_status` reaches a **non-terminal**
+  status.
+- `PostRequest.origin` and `PostRequest.impact_id` now accept `int | str`, but
+  they were widened for different reasons, not the same one. `origin` is
+  vendor-documented as a **string** (tier 1); an `int` was separately measured
+  accepted on one instance (tier 4, date not recorded). `impact_id` is
+  vendor-documented as an **integer** (tier 1); its `str` branch exists so a
+  caller who quotes it is not rejected, not because a string was independently
+  measured landing here. `origin` sends whichever type is passed, unchanged;
+  `impact_id` normalizes a numeric string back to the vendor's documented int —
+  see **Changed** below, where the wire-form consequences of both are set out.
+- Three shipped docstrings cited a gitignored, instance-private handover note
+  as the documented request body. That file is invisible to every reader of the
+  published repository — a dead link — and was never the vendor documentation
+  it was cited as; `docs/vendor-api-reference.md` now carries the citable
+  facts instead. A new guard (`scripts/tests/test_source_citations.py`) fails
+  the suite if any tracked file cites a gitignored path again — it scans
+  `easyvista_python_client/**/*.py`, `scripts/**/*.py`, `docs/*.rst`,
+  `docs/*.md`, `integration_tests/**/*.py`, and the root `.md` files,
+  including this changelog.
+- `PostRequest`'s "send the whole documented set" doctrine is corrected. The
+  vendor requires only `catalog_guid` or `catalog_code`; the seven-field body
+  is a hedge against per-catalog configuration measured on one instance, which
+  the docstring stated as an API requirement.
+- `TicketContext.to_markdown` dropped a non-default memo. Fetch was
+  parameterised by `memo_fields` and rendering was not, so
+  `get_ticket_context(rfc, memo_fields=("solution",))` — the headline case for
+  that parameter, a deployment whose body memo is neither default — produced a
+  Markdown export with no body section and no warning. It now applies the same
+  role-naming rule to `memos`: when neither `description` nor `comment` has
+  text, a single populated memo becomes the body under `## Description`, and
+  several each get a heading derived from the field name requested.
+
 
 - `ev_since_filter` / `ev_between_filter` accepted a **timestamp string with no
   UTC offset** and passed it to the wire. EasyVista accepts such a literal and
