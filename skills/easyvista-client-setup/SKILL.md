@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and valid EasyVista credentials."
 metadata:
   package: easyvista-python-client
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 `easyvista_python_client` ships both clients over one surface:

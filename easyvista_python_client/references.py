@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from functools import lru_cache
 from typing import Any
 
@@ -141,7 +142,14 @@ def _scalar(value: Any) -> str | None:
             return format_ev_datetime(value)
         except ValueError:
             return value.isoformat()
-    if isinstance(value, (str, int)) and str(value).strip():
+    # ``Decimal`` joins ``str``/``int`` here because the read path retypes the
+    # currency columns (``TIME_COST``, ``CONTRACTUAL_COST``) into exact
+    # ``Decimal``s. Without this branch ``reference("TIME_COST")`` returned an
+    # EMPTY Reference on a populated column -- the same class of silent gap the
+    # ``datetime`` branch above was added to close. Rendered with ``str`` rather
+    # than the wire's own decimal comma: this extractor feeds labels and
+    # identifiers, not money formatting, and it must never raise.
+    if isinstance(value, (str, int, Decimal)) and str(value).strip():
         return str(value).strip()
     return None
 

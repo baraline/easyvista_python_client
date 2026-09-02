@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
@@ -408,3 +409,216 @@ def test_an_extra_payload_action_type_guid_satisfies_the_task_guard():
     """
     body = PostTask(group_id=3, extra_payload={"action_type_guid": "{TYPE}"}).to_api()
     assert body["action_type_guid"] == "{TYPE}"
+
+
+# --- the effort/cost columns (EV-TASKSHAPE) ----------------------------------
+# A GLPI comment maps to an EasyVista TASK, not an ACTION, so a caller syncing
+# a timeline must be able to see whether an effort column APPLIES to a record
+# at all. These five columns arrived as untyped ``extra="allow"`` strings until
+# 0.3.0; the tests below pin the one distinction that carries the signal.
+
+
+def test_elapsed_time_distinguishes_absent_from_zero():
+    """`''` means the column does not apply; `'0'` means it applies and is zero.
+
+    Measured 2026-09-02 over 1500 live action rows: 384 carried ``''`` and 895
+    carried ``'0'``. Collapsing the two -- to ``0`` or to ``None`` -- destroys
+    the only signal that says whether a row tracks effort.
+    """
+
+    def elapsed(raw):
+        row = {"ACTION_ID": "1", "ELAPSED_TIME": raw}
+        return Action.model_validate(row).elapsed_time
+
+    assert elapsed("") is None
+    assert elapsed("0") == 0
+    assert elapsed("27") == 27
+
+
+def test_the_absent_versus_zero_distinction_survives_a_dump():
+    """A caller comparing two rows dumps them; ``None`` and ``0`` must not merge."""
+    absent = Action.model_validate(
+        {"ACTION_ID": "1", "ELAPSED_TIME": "", "TIME_COST": ""}
+    )
+    zero = Action.model_validate(
+        {"ACTION_ID": "2", "ELAPSED_TIME": "0", "TIME_COST": "0,00"}
+    )
+    assert absent.model_dump(by_alias=True)["ELAPSED_TIME"] is None
+    assert zero.model_dump(by_alias=True)["ELAPSED_TIME"] == 0
+    assert absent.model_dump(by_alias=True)["TIME_COST"] is None
+    assert zero.model_dump(by_alias=True)["TIME_COST"] == Decimal("0.00")
+
+
+@pytest.mark.parametrize("alias", ["TIME_COST", "CONTRACTUAL_COST"])
+def test_a_french_decimal_comma_cost_parses_exactly(alias):
+    """Both cost columns arrive comma-separated (``'0,00'``, ``'99,00'``)."""
+    attr = alias.lower()
+    assert getattr(Action.model_validate({alias: ""}), attr) is None
+    assert getattr(Action.model_validate({alias: "0,00"}), attr) == Decimal("0.00")
+    assert getattr(Action.model_validate({alias: "99,00"}), attr) == Decimal("99.00")
+    # Decimal equality is scale-insensitive, so '129,00' equals Decimal("129").
+    # That is NOT the float-exactness claim -- see
+    # test_a_cost_is_an_exact_decimal_not_a_float for that.
+    assert getattr(Action.model_validate({alias: "129,00"}), attr) == Decimal("129")
+
+
+@pytest.mark.parametrize("alias", ["TIME_COST", "CONTRACTUAL_COST"])
+def test_a_dot_separated_cost_parses_too(alias):
+    """The separator is a deployment's locale, not an EasyVista constant."""
+    assert getattr(Action.model_validate({alias: "99.00"}), alias.lower()) == Decimal(
+        "99.00"
+    )
+
+
+@pytest.mark.parametrize("value", ["1 234,56", "1.234,56", "1,234.56", "abc", "9,999"])
+def test_an_unrecognised_cost_is_reported_not_guessed_at(value):
+    """A grouped or junk amount raises rather than inventing a wrong number.
+
+    ``'1.234,56'`` and ``'1,234.56'`` are the same amount under opposite
+    conventions and ``'9,999'`` is either 9.999 or 9999 -- unguessable. A wrong
+    money value is worse than a loud failure, the same trade
+    ``OptionalDateTime`` makes for a wrong instant.
+    """
+    with pytest.raises(ValidationError):
+        Action.model_validate({"TIME_COST": value})
+
+
+def test_the_effort_window_parses_as_aware_datetimes():
+    """``START_DATE_UT``/``END_DATE_UT`` are the action's own effort window."""
+    action = Action.model_validate(
+        {
+            "ACTION_ID": "1",
+            "START_DATE_UT": "2026-09-02T09:04:01.000+02:00",
+            "END_DATE_UT": "",
+        }
+    )
+    assert action.start_date_ut == datetime(2026, 9, 2, 9, 4, 1, tzinfo=_CEST)
+    assert action.end_date_ut is None
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["ELAPSED_TIME", "TIME_COST", "CONTRACTUAL_COST", "START_DATE_UT", "END_DATE_UT"],
+)
+def test_the_effort_columns_are_declared_not_left_in_model_extra(alias):
+    """Before 0.3.0 all five reached callers only as untyped extras."""
+    action = Action.model_validate({"ACTION_ID": "1", alias: ""})
+    assert alias not in (action.model_extra or {})
+
+
+def test_is_workflow_generated_reads_the_workflow_id():
+    """1500/1500 live rows: a WORKFLOW_ID is set iff the engine owns the row."""
+    assert Action.model_validate({"WORKFLOW_ID": "37"}).is_workflow_generated is True
+    assert Action.model_validate({"WORKFLOW_ID": ""}).is_workflow_generated is False
+    assert Action.model_validate({"ACTION_ID": "1"}).is_workflow_generated is False
+
+
+def test_a_public_comment_carrying_effort_is_not_reported_as_workflow_generated():
+    """The counter-example that refutes the effort-shape heuristic.
+
+    Measured 2026-09-02: a type-94 ``Commentaire [Public]`` carried
+    ``ELAPSED_TIME='12'``, ``TIME_COST='99,00'`` and ``CONTRACTUAL_COST='129,00'``
+    with an empty ``WORKFLOW_ID``. Any "effort set => not a comment" filter
+    drops it.
+    """
+    action = Action.model_validate(
+        {
+            "ACTION_ID": "14980",
+            "ACTION_TYPE_ID": "94",
+            "ACTION_LABEL_FR": "Commentaire [Public]",
+            "ELAPSED_TIME": "12",
+            "TIME_COST": "99,00",
+            "CONTRACTUAL_COST": "129,00",
+            "WORKFLOW_ID": "",
+        }
+    )
+    assert action.is_workflow_generated is False
+    assert action.elapsed_time == 12
+    assert action.time_cost == Decimal("99.00")
+    assert action.contractual_cost == Decimal("129.00")
+
+
+def test_a_cost_is_an_exact_decimal_not_a_float():
+    """Pins Decimal specifically -- a float field would pass the assertions above.
+
+    ``Decimal("0.1") + Decimal("0.2") == Decimal("0.3")``; the float equivalent
+    does not. If ``time_cost`` were ever retyped to ``float`` every other cost
+    test here would still pass, so this is the one that would fail.
+    """
+    a = Action.model_validate({"TIME_COST": "0,10"})
+    b = Action.model_validate({"TIME_COST": "0,20"})
+    assert isinstance(a.time_cost, Decimal)
+    assert a.time_cost + b.time_cost == Decimal("0.30")
+    assert 0.1 + 0.2 != 0.3  # the float trap this type avoids
+
+
+def test_magnitude_is_not_what_the_cost_parser_refuses():
+    """``'1000,00'`` parses; only the FORMAT is refused, never the size.
+
+    An earlier revision of the docs said "an amount above 999 is the case that
+    would trigger it", which was wrong -- 1000,00 carries no grouping separator.
+    """
+    assert Action.model_validate({"TIME_COST": "1000,00"}).time_cost == Decimal("1000")
+    assert Action.model_validate({"TIME_COST": "999999,99"}).time_cost == Decimal(
+        "999999.99"
+    )
+
+
+def test_three_fraction_digits_are_refused_as_ambiguous():
+    """``'1,234'`` is either 1.234 or a comma-grouped 1234 -- unguessable."""
+    with pytest.raises(ValidationError):
+        Action.model_validate({"TIME_COST": "1,234"})
+
+
+def test_none_does_not_distinguish_absent_from_not_projected():
+    """The documented ambiguity, pinned so nobody "fixes" it into a wrong answer.
+
+    A default ``list_actions`` row omits all five effort columns, so they read
+    ``None`` there -- the SAME value the ``""`` sentinel produces. The model
+    cannot tell "does not apply" from "not returned", which is why the docstring
+    tells callers to project the columns before reading meaning into a ``None``.
+    """
+    not_projected = Action.model_validate({"ACTION_ID": "1"})
+    does_not_apply = Action.model_validate({"ACTION_ID": "1", "ELAPSED_TIME": ""})
+    assert not_projected.elapsed_time is None
+    assert does_not_apply.elapsed_time is None
+
+
+def test_the_effort_columns_are_always_present_in_a_dump_once_declared():
+    """Declaring them changed PRESENCE, not the classify_fields bucket.
+
+    None of the five starts with ``E_``, so ``classify()`` always put them in
+    ``.official``. What the 0.3.0 change altered is that the keys are now
+    present even when the API did not return them.
+    """
+    action = Action.model_validate({"ACTION_ID": "1"})
+    official = action.classify_fields().official
+    for alias in (
+        "ELAPSED_TIME",
+        "TIME_COST",
+        "CONTRACTUAL_COST",
+        "START_DATE_UT",
+        "END_DATE_UT",
+    ):
+        assert alias in official
+        assert official[alias] is None
+        assert alias not in action.classify_fields().custom
+
+
+def test_a_cost_survives_a_json_mode_dump():
+    """A Decimal is not JSON-native; ``mode="json"`` is the documented recipe."""
+    import json
+
+    action = Action.model_validate({"ACTION_ID": "1", "TIME_COST": "99,00"})
+    with pytest.raises(TypeError):
+        json.dumps(action.model_dump(by_alias=True))
+    dumped = action.model_dump(mode="json", by_alias=True)
+    assert json.dumps(dumped)  # does not raise
+    # Renders with a '.', not the ',' the API sent -- documented in user_guide.
+    assert "99.00" in str(dumped["TIME_COST"])
+
+
+def test_reference_renders_a_cost_column_instead_of_returning_it_empty():
+    """``_scalar`` gained a Decimal branch; without it this Reference was empty."""
+    action = Action.model_validate({"ACTION_ID": "1", "TIME_COST": "99,00"})
+    assert action.reference("TIME_COST").display == "99.00"

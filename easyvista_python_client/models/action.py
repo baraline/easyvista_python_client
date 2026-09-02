@@ -11,6 +11,7 @@ from .common import (
     EasyvistaModel,
     EasyvistaWriteModel,
     OptionalDateTime,
+    OptionalDecimal,
     OptionalInt,
     _shipped_keys,
 )
@@ -41,6 +42,42 @@ class Action(EasyvistaModel):
     ``list_actions`` to get these top-level for a whole PAGE of actions in one
     request instead of an item fetch per action — ``list_actions`` returns one
     page and does not paginate, so it is a page's worth, not a ticket's.
+
+    **Effort columns: ``""`` and ``"0"`` are different answers.** ``elapsed_time``
+    (minutes), ``time_cost``, ``contractual_cost``, ``start_date_ut`` and
+    ``end_date_ut`` are declared as of 0.3.0, having previously reached callers
+    only as untyped ``extra="allow"`` strings. When the API **returns** the
+    column, ``""`` means it does not apply to this record and ``"0"`` /
+    ``"0,00"`` means it applies and is zero (tier 4, measured 2026-09-02 over
+    1500 rows on two instances -- so it may not generalise). This model preserves
+    that distinction deliberately -- ``None`` for ``""``, ``0`` /
+    ``Decimal("0.00")`` for the zeroes -- because collapsing the two destroys the
+    only signal saying whether a record tracks effort at all. The two cost columns
+    arrive with a French decimal comma (``'99,00'``) and parse to an exact
+    :class:`~decimal.Decimal`. Either decimal separator is accepted; a grouping
+    separator and three-or-more fraction digits are **refused** rather than
+    guessed at, because ``'1.234,56'`` and ``'1,234.56'`` are the same amount
+    under opposite conventions. Magnitude is not a trigger -- ``'1000,00'``
+    parses. The parser is ``models/common.py::_parse_ev_decimal``, named as a
+    path rather than cross-referenced because it is private and carries no
+    rendered API-reference page.
+
+    .. warning::
+
+       **``None`` is ambiguous, and the default list row is the trap.** None of
+       these five columns rides the default ``list_actions`` projection, so on a
+       default list row every one of them reads ``None`` -- meaning *not
+       returned*, not *does not apply*. The two are indistinguishable on the
+       model. Project them explicitly (``list_actions(rfc, fields=[...,
+       "ELAPSED_TIME", "WORKFLOW_ID"])``) or read item-level with
+       :meth:`~easyvista_python_client.EasyvistaClient.get_action` before reading
+       any meaning into a ``None``. To tell the two apart from a raw response,
+       check whether the key is present at all -- once validated, that is gone.
+
+    What that signal does **not** settle is whether a row was created as a task
+    or as an action -- nothing on the record does, and the effort-shape heuristic
+    that looks like it should is measurably wrong in both directions. See
+    :attr:`is_workflow_generated`.
 
     Naming: this model calls its two timestamps ``created_at``/``updated_at``
     where :class:`~easyvista_python_client.models.request.Request` and
@@ -103,6 +140,29 @@ class Action(EasyvistaModel):
     stage_id: OptionalInt = Field(default=None, alias="STAGE_ID")
     workflow_id: OptionalInt = Field(default=None, alias="WORKFLOW_ID")
     parent_action_id: OptionalInt = Field(default=None, alias="PARENT_ACTION_ID")
+    # --- effort and cost (EV-TASKSHAPE, added 0.3.0) -------------------------
+    # Until 0.3.0 these five reached callers only as untyped ``extra="allow"``
+    # strings. **The "" sentinel and "0" are different answers** -- "" means the
+    # column does not apply to this record, "0" that it applies and is zero --
+    # and ``OptionalInt``/``OptionalDecimal`` preserve exactly that: ``None`` for
+    # "", ``0`` for "0". Measured over 1500 live rows 2026-09-02, ELAPSED_TIME
+    # was "" on 384 and "0" on 895; the costs were "" on 691 and "0,00" on 808.
+    #
+    # ``elapsed_time`` is in MINUTES, is never derived from the window, and is
+    # stored verbatim even when it contradicts it -- but a zero-length window
+    # (``start_date_ut == end_date_ut``) stores 0 whatever was sent.
+    #
+    # Named for the wire (``start_date_ut``/``end_date_ut``) to match
+    # ``Request.end_date_ut``, rather than following this model's own
+    # ``created_at``/``updated_at``, which the class docstring flags as a wart.
+    # Both are the ACTION's effort window: unlike ``Request.end_date_ut``, which
+    # is stamped at RESOLUTION, an action's ``END_DATE_UT`` is set when the
+    # action itself is ended.
+    elapsed_time: OptionalInt = Field(default=None, alias="ELAPSED_TIME")
+    time_cost: OptionalDecimal = Field(default=None, alias="TIME_COST")
+    contractual_cost: OptionalDecimal = Field(default=None, alias="CONTRACTUAL_COST")
+    start_date_ut: OptionalDateTime = Field(default=None, alias="START_DATE_UT")
+    end_date_ut: OptionalDateTime = Field(default=None, alias="END_DATE_UT")
 
     @model_validator(mode="after")
     def _derive_action_id_from_href(self) -> Action:
@@ -149,6 +209,58 @@ class Action(EasyvistaModel):
         ``model_dump(by_alias=True)`` directly.
         """
         return localized_label(self.model_dump(by_alias=True), "ACTION_LABEL")
+
+    @property
+    def is_workflow_generated(self) -> bool:
+        """Whether the workflow engine owns this row, i.e. ``WORKFLOW_ID`` is set.
+
+        A ticket's catalog workflow auto-spawns its own action rows -- about a
+        dozen on a freshly created ticket -- and each carries a ``WORKFLOW_ID``
+        naming the workflow instance. Rows created by a person or by an API
+        caller do not. Measured 2026-09-02 over 1500 live action rows on one
+        instance (tier 4, so it may not generalise): no row of the
+        conversation-bearing types (94 ``Commentaire [Public]``, 95 ``Note
+        Interne [Prive]``, 7 ``Appel``) carried one, and every row of the
+        workflow step types (1, 20, 21, 23, 30, 32, 33, 50, 65, 82, 84) that
+        the engine had produced did.
+
+        .. warning::
+
+           **This is not a task/action discriminator, and there is none.** A
+           task (``create_task``) and an action (``create_action``) are the same
+           record in the same table, told apart only by the state they are born
+           in -- open versus already ended -- and **neither ``WORKFLOW_ID`` nor
+           the effort columns recover which route created a row**. Measured
+           2026-09-02, both directions of the tempting shape heuristic fail on
+           one instance:
+
+           * 173 of 1500 rows had a ``WORKFLOW_ID`` **and** an empty
+             ``ELAPSED_TIME`` -- 126 of them the type-20 ``Analyse et
+             resolution`` workflow step. So "workflow row => effort is 0" is
+             false.
+           * 39 of 49 type-94 ``Commentaire [Public]`` rows -- ordinary public
+             comments -- carried a **non-empty** ``ELAPSED_TIME``, usually
+             ``'1'``; one carried ``ELAPSED_TIME='12'``, ``TIME_COST='99,00'``
+             and ``CONTRACTUAL_COST='129,00'``. So "effort set => not a
+             comment" is false, and a filter built on it drops four public
+             comments in five.
+
+           What an effort column reports is whether *effort was recorded*, not
+           what kind of record this is. Deciding which action types count as
+           conversation is per-deployment policy: pin the ``action_type_id``
+           allowlist your administrator confirms, and use this property only to
+           exclude the workflow engine's own rows. See
+           ``docs/vendor-api-reference.md`` for the measurements.
+
+        A plain property, not a serialized field, so it never appears in
+        ``model_dump`` or ``classify_fields``. ``False``, never ``None``, when
+        ``WORKFLOW_ID`` is absent from the projection -- the default
+        ``list_actions`` row omits it, so on a default list row this reads
+        ``False`` for every action whether or not the engine owns it. Project
+        ``WORKFLOW_ID`` explicitly (``list_actions(rfc,
+        fields=[..., "WORKFLOW_ID"])``) or read item-level before trusting it.
+        """
+        return self.workflow_id is not None
 
 
 class PostAction(EasyvistaWriteModel):

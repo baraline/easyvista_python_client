@@ -2,7 +2,7 @@ import easyvista_python_client
 
 
 def test_package_imports_and_has_version():
-    assert easyvista_python_client.__version__ == "0.2.0"
+    assert easyvista_python_client.__version__ == "0.3.0"
 
 
 def test_public_exports_available():

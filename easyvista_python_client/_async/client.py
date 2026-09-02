@@ -629,6 +629,27 @@ class AsyncEasyvistaClient:
         no ``parent_action_id`` and works on a ticket at any stage, including
         one whose open actions a status change has already drained.
 
+        **This returns an** :class:`~easyvista_python_client.Action`, and that
+        is not a mistake in the annotation: a task *is* an action record, and
+        there is no separate task resource to model. ``tasks`` is a create-only
+        route — the instance's own OpenAPI declares
+        ``POST /requests/{rfc_number}/tasks`` and no other verb on it, and
+        declares no read route for a task anywhere (tier 2, read 2026-09-02 on
+        one deployment, 100 paths, and independently on a second the same day).
+        The only timeline reads are ``GET /actions``, ``GET /actions/{id}`` and
+        ``GET /actions/{id}/{comment}``, so **a task is written as a task and
+        read back as an action** — which is why this package has
+        :meth:`list_actions` and no ``list_tasks``. A GET against the tasks
+        path answers 403, and per
+        ``docs/vendor-api-reference.md`` no 403 on this API distinguishes an
+        absent route from a denied one, so the spec is what settles it.
+
+        A corollary worth stating, because it is where the read side goes
+        wrong: **once written, nothing on the record says which route created
+        it.** In particular the effort columns do not — see
+        :attr:`~easyvista_python_client.Action.is_workflow_generated` for the
+        measurements that refute the tempting heuristic.
+
         Like :meth:`create_action`, the returned :class:`Action` carries **no
         usable ``action_id``** — the create response is an HREF naming the
         parent request. Diff :meth:`list_actions` across the call to address

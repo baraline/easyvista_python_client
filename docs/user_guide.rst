@@ -1160,7 +1160,8 @@ Timestamps
 ``Request``'s timestamp fields (``submit_date_ut``, ``creation_date_ut``,
 ``max_resolution_date_ut``, ``expected_date_ut``, ``end_date_ut``,
 ``last_update``), ``Employee.last_update``, and ``Action.created_at`` /
-``Action.updated_at`` are timezone-aware
+``Action.updated_at`` / ``Action.start_date_ut`` / ``Action.end_date_ut`` are
+timezone-aware
 :class:`datetime.datetime`, parsed from EasyVista's ISO-8601-with-offset wire
 format (``2026-08-17T15:40:41.610+02:00``, millisecond precision — verified
 live 2026-08-17). An unset date is ``None``. The ``_UT`` suffix is a naming
@@ -1193,13 +1194,28 @@ is still the raw wire string, so within one record dump
    ``json.dumps(record.model_dump(by_alias=True))`` and
    ``json.dumps(record.classify_fields().official)`` raise
    ``TypeError: Object of type datetime is not JSON serializable``. For a dump,
-   pass ``model_dump(mode="json")``. ``classify_fields()`` takes **no arguments**,
-   so there is nowhere to put that keyword: render the ``datetime`` values with
-   :func:`~easyvista_python_client.format_ev_datetime` before serialising the
-   bucket, or classify the JSON-mode dump yourself — the buckets are keyed by
-   wire column name, so ``{k: dumped[k] for k in record.classify_fields().official}``
-   over ``dumped = record.model_dump(mode="json", by_alias=True)`` gives the same
+   pass ``model_dump(mode="json")``.
+
+   **Since 0.3.0 an ``Action`` can also carry a ``Decimal``** — ``time_cost``
+   and ``contractual_cost`` — which raises the same way
+   (``TypeError: Object of type Decimal is not JSON serializable``).
+   ``model_dump(mode="json")`` handles it too, rendering the amount as a string.
+
+   ``classify_fields()`` takes **no arguments**, so there is nowhere to put that
+   keyword. The only recipe that covers *both* types is to classify the
+   JSON-mode dump yourself — the buckets are keyed by wire column name, so
+   ``{k: dumped[k] for k in record.classify_fields().official}`` over
+   ``dumped = record.model_dump(mode="json", by_alias=True)`` gives the same
    split with serialisable values.
+
+   .. warning::
+
+      Rendering the bucket with
+      :func:`~easyvista_python_client.format_ev_datetime` — which earlier
+      revisions of this page offered as the alternative — **only ever handled
+      ``datetime``**, and now leaves a ``Decimal`` in place to raise on
+      ``json.dumps``. Use the JSON-mode dump above instead. Note the amount then
+      renders with a ``.`` decimal point, not the ``,`` the API sent.
 
 Use :func:`~easyvista_python_client.format_ev_datetime` to render a
 ``datetime`` back into the literal EasyVista's grammar accepts (e.g. as an

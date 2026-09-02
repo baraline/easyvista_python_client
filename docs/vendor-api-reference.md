@@ -104,6 +104,114 @@ and not proof of it; it omits `group_id`, `group_name` and `comment`, which
 it lists `available_field_1`/`_6`, which `PostTask` does not declare and which
 `extra_payload` reaches.
 
+### A task is write-only as a resource, and read back as an action
+
+**Tier 2, read 2026-09-02** on the development instance (100 paths), and
+independently the same day on a second deployment (also 2025.3, also 100
+paths). Both declare exactly:
+
+| Path | Verbs |
+| --- | --- |
+| `/requests/{rfc_number}/tasks` | **POST only** |
+| `/requests/{rfc_number}/actions` | POST only |
+| `/actions` | GET |
+| `/actions/{id}` | GET, PATCH, PUT |
+| `/actions/{id}/{comment}` | GET |
+
+There is **no read route for a task** — no `GET /requests/{rfc}/tasks`, no
+`/tasks/{id}`, nothing under any other spelling. The only timeline reads are
+the three `/actions` routes. So a task is *written* through `tasks` and *read
+back* through `actions`, and that is the whole story: a task and an action are
+the same row in the same table, differing only in the state they are born in
+(open vs already ended). This is why the package has `list_actions` and
+deliberately **no `list_tasks`/`iter_tasks`** — there is no route to wrap.
+
+A GET against the tasks path answers `403 "Unauthorized Method for your
+profile"`, which per *Route topology* above proves nothing either way; the
+spec's `paths` is what settles it.
+
+**`create_task` returns an `Action`.** That is where a reader first meets the
+confusion, and the annotation is correct rather than sloppy: there is no task
+resource to model, so there is no `Task` read model and could not be one.
+
+### The effort columns, and why they do not discriminate task from action
+
+Five columns on an action record — `ELAPSED_TIME`, `TIME_COST`,
+`CONTRACTUAL_COST`, `START_DATE_UT`, `END_DATE_UT` — are declared on `Action`
+as of 0.3.0. Until then they arrived only as `extra="allow"` extras: untyped
+strings, with a French decimal comma on the two costs.
+
+**Tier 4, measured 2026-09-02, 1500 action rows on the development instance**
+(one instance, one date, so it may not generalise), corroborated by an
+independent measurement the same day on that second deployment (1465 timeline
+entries across 120 tickets), which agreed on every point below.
+
+**`""` and `"0"` are different answers.** `""` means the column does not apply
+to this record; `"0"` (or `"0,00"`) means it applies and is zero.
+
+| Column | `""` | zero | non-zero |
+| --- | --- | --- | --- |
+| `ELAPSED_TIME` | 384 | 895 (`'0'`) | 221 |
+| `TIME_COST` | 691 | 808 (`'0,00'`) | 1 (`'99,00'`) |
+| `CONTRACTUAL_COST` | 691 | 808 (`'0,00'`) | 1 (`'129,00'`) |
+
+A parser that maps both to `0`, or both to `None`, destroys the only signal
+that says whether a record tracks effort. `Action` preserves it: `None` for
+`""`, `0` / `Decimal("0.00")` for the zeroes.
+
+**The shape heuristic is false in both directions.** It is tempting to read
+"workflow rows carry `WORKFLOW_ID`/`STAGE_ID` with `ELAPSED_TIME='0'` and
+`'0,00'` costs, task-shaped rows carry none of it and empty effort" as a
+task/action discriminator. Measured, it fails both ways:
+
+* **173 of 1500** rows carried a `WORKFLOW_ID` *and* an empty `ELAPSED_TIME`
+  — 126 of them the type-20 `Analyse et résolution` workflow step. So
+  "workflow row ⇒ effort is `'0'`" is false.
+* **171 of 1500** rows carried no `WORKFLOW_ID` *and* a non-empty
+  `ELAPSED_TIME`. Among them **39 of the 49** type-94 `Commentaire [Public]`
+  rows — ordinary public comments — usually with `ELAPSED_TIME='1'`. One
+  public comment carried `ELAPSED_TIME='12'`, `TIME_COST='99,00'` and
+  `CONTRACTUAL_COST='129,00'`. So "effort recorded ⇒ not a comment" is false,
+  and a filter built on it drops four public comments in five.
+
+`ACTION_TYPE_ID` alone does not discriminate either, which the second
+deployment measured directly: type 94 appeared in both shapes there (74 rows
+with a `PARENT_ACTION_ID`, 18 without; 37 with a non-zero `ELAPSED_TIME`, 55
+without).
+
+What an effort column reports is **whether effort was recorded**, not what kind
+of record this is. No column examined across those 1500 rows recorded which
+route created it — stated as a measurement, not as a proof of absence: the
+item-level record carries 88 columns, not all of which were tallied, and a
+deployment may populate one this instance leaves empty. If you find a column
+that does discriminate, it belongs here.
+
+**What *is* clean: `WORKFLOW_ID`.** 1500/1500 rows — a `WORKFLOW_ID` is set iff
+the workflow engine produced the row. No row of the conversation types (94
+`Commentaire [Public]`, 95 `Note Interne [Privé]`, 7 `Appel`) carried one.
+`Action.is_workflow_generated` exposes exactly that and nothing more. Deciding
+which of the remaining types count as conversation is per-deployment policy —
+an `action_type_id` allowlist — and stays with the caller.
+
+**Side finding, tier 4, same measurement: `ACTION_LABEL_*` is the label of the
+workflow *step*, not the name of the action type.** Type 20 appeared as
+`Analyse et résolution` (126 rows), `Traitement` (10), `Traitement du refus`,
+`Traitement de la demande`, `test` and `notif`; type 30 as `stocker le groupe
+d'implémentation`, `Mise à jour SLA` and `sauvegarde`; type 82 under two
+labels. So for **workflow** types the label varies row to row and cannot be
+used as a type name. For the non-workflow types (94, 95, 7) it was stable and
+is the type's real name. This qualifies the *Visibility is by action type*
+note: `discover("ACTION_TYPE")` recovers real names for the human types, and
+per-step text for the workflow ones.
+
+**Types 14, 27 and 28 have an empty `ACTION_LABEL_*` in every language column**
+— all six on the list projection and all twelve (`_EN`, `_FR`, `_GE`, `_IT`,
+`_PO`, `_SP`, `_L1`..`_L6`) on the item GET. There is no `action-types` route
+to ask, so on this deployment those ids **cannot be named through the API at
+all**. What is known about 28 is behavioural, not nominal: it is the row that
+carries the text passed to `set_status(comment=...)`, so it must not be
+filtered out of a timeline read.
+
 Also worth recording without acting on it: the instance's `POST /assets` schema
 (tier 3) titles its array `asset` while its own example uses `assets`, which is
 what this package sends and what works. That is an inconsistency inside one
@@ -143,8 +251,10 @@ spec's `paths` is what settles whether a route exists.
 | Path | Verbs | Note |
 | --- | --- | --- |
 | `/requests/{rfc_number}/actions` | POST | create-only; no nested list, item or update |
+| `/requests/{rfc_number}/tasks` | POST | create-only; **no task read route exists** — read them back through `/actions` |
 | `/actions` | GET | the only action list |
 | `/actions/{id}` | GET, PATCH, PUT | the only action item; **no DELETE** |
+| `/actions/{id}/{comment}` | GET | `{comment}` is a memo-field *selector*, not a literal |
 | `/requests/{RFC_NUMBER}/documents` | GET, POST | |
 | `/requests/{RFC_NUMBER}/documents/{id}` | GET, DELETE | what this package sends by default |
 | `/documents/{id}` | GET, DELETE | marked `deprecated`; opt in with `document_delete_path_style="top_level"` |
@@ -217,6 +327,27 @@ The vendor documents `catalog_guid` as the *preferred* identifier (tier 1) and
   docstrings now hedge. Until someone either re-reads the vendor page and adds
   the row here, or measures the omitted form live and dates it, the
   documentation must not assert it.
+* **O-COSTGROUP** — `TIME_COST` / `CONTRACTUAL_COST` are parsed by
+  `models/common._parse_ev_decimal`, which accepts either decimal separator and
+  **refuses a grouping separator** rather than guessing (`'1.234,56'` and
+  `'1,234.56'` are the same amount under opposite conventions). Every amount
+  observed live had exactly two fraction digits and no grouping (1500 rows,
+  2026-09-02), so the refusal has never fired. It **also** refuses three or more
+  fraction digits, for the same ambiguity (`'1,234'` could be `1.234` or a
+  comma-grouped `1234`) — which means a genuinely 3-decimal currency is refused
+  too. **Magnitude is not a trigger**: `'1000,00'` parses fine, since it carries
+  no grouping separator. Because the descriptor validates a page in a list
+  comprehension, a refusal fails a whole `list_actions` call, not one row. If a
+  refused literal is ever seen, record it here and widen the pattern with
+  evidence.
+* **O-ACTIONTYPE28** — types 14, 27 and 28 have an empty `ACTION_LABEL_*` in
+  every language column at both list and item level, and there is no
+  `action-types` route, so nothing in the API can name them. Type 28 is known
+  behaviourally (it carries `set_status(comment=...)` text) and 14 and 27 not
+  at all. Settling this needs the EasyVista **admin console**, not the API: the
+  administration screen listing action types, and specifically which type ids
+  that deployment classes as *task* types. Nobody working on this package has
+  console access; if you do, transcribe the list here.
 * **O-TASKDOC** — transcribe the vendor's create-a-task field table into the
   section above, so `PostTask` can be diffed against tier 1. Until then
   `action_type_guid` is declared on `PostAction` (tier 1, 2023.4+) and **not**
