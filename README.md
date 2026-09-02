@@ -89,6 +89,48 @@ with EasyvistaClient(config) as client:
 > Set `external_reference` on every create and reconcile by that marker — it survives the
 > failed insert and is searchable.
 
+## Comments and actions
+
+An action is a unit of work, and it is born **open** — an open action shows in the
+UI as a pending row with its text *not* displayed, which reads as though the note
+was lost. A comment is an action that has been **ended**.
+
+```python
+from easyvista_python_client import PostAction, PostTask
+
+# A COMMENT: `create_task` posts the same record already ended, in one call.
+# Put the text in `description` -- the UI renders one field per action and
+# `description` shadows `comment`, so text in `comment` beside a populated
+# `description` is stored, readable through the API, and displayed to nobody.
+client.create_task(
+    rfc,
+    PostTask(action_type_id=94, group_id=3, description="Investigating now."),
+)
+
+# WORK SOMEONE MUST STILL DO: create it open, then end it when it is done.
+client.create_action(
+    rfc,
+    PostAction(action_type_id=94, group_id=3, description="Chase the supplier."),
+)
+client.end_action(
+    rfc,
+    action_id=1234,                    # not recoverable from the create response
+    start_date="01/09/2026 17:00:00",  # your instance's format, not ISO 8601
+    end_date="01/09/2026 17:15:00",
+    elapsed_time=15,                   # MINUTES
+)
+```
+
+> **There is no private-comment flag.** Visibility is carried by the action
+> *type*, which is per-deployment — read the ids off existing actions with
+> `client.discover("ACTION_TYPE")` rather than hardcoding one.
+>
+> **`end_action` on a workflow action changes the ticket.** Ending your own
+> action only ends it; ending the ticket's open workflow step advances the
+> workflow and moves the ticket's status. Naming `action_id` is therefore
+> required — the vendor's id-less "end every open action" form is behind an
+> explicit `end_all=True`.
+
 ## Assets and documents
 
 ```python

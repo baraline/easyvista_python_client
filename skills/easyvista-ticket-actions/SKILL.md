@@ -1,6 +1,6 @@
 ---
 name: easyvista-ticket-actions
-description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, list_actions, iter_actions, get_action and update_action with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history."
+description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, end_action (an action is born OPEN and its text does not show until ended), list_actions, iter_actions, get_action and update_action with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history."
 license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
@@ -14,10 +14,10 @@ metadata:
 > `easyvista-client-setup`.
 
 Actions are EasyVista's per-ticket work log — the closest equivalent to a
-followup. Five methods: `create_action(rfc, action)`, `list_actions(rfc)`,
-`iter_actions(rfc)`, `get_action(action_id)` and `update_action(action_id,
-update)`. The list and item shapes differ substantially, which is where most
-mistakes come from.
+followup. Six methods: `create_action(rfc, action)`, `list_actions(rfc)`,
+`iter_actions(rfc)`, `get_action(action_id)`, `update_action(action_id,
+update)` and `end_action(rfc, action_id=...)`. The list and item shapes differ
+substantially, which is where most mistakes come from.
 
 ## Two shapes of the same record
 
@@ -57,23 +57,42 @@ mistakes come from.
   which fetches each action item-level and resolves its memo for you — see
   `easyvista-reporting-and-context`.
 
-## "Private" comments: two channels, but no visibility flag
+## Two stored text fields, but only ONE is displayed
 
-**An action has two independent text channels**, `description` and `comment`,
-each addressable afterwards as its own memo (`actions/{id}/description`,
+**An action stores two text fields**, `description` and `comment`, each
+addressable afterwards as its own memo (`actions/{id}/description`,
 `actions/{id}/comment`). `PostAction` writes both, and both persist from a
 single create — verified live 2026-08-28: each read back with exactly the text
 sent. The instance's own OpenAPI declares both on the create body and its
 example populates both.
 
+**They are independent in storage, not in visibility.** The UI shows **one**
+text field per action, under a header reading literally *"comment or
+description"*: it renders `DESCRIPTION` when that memo has text, and falls back
+to `COMMENT` only when it is empty. So **`description` shadows `comment`**
+(measured in the UI 2026-09-01 on one instance, Service Manager 2025.3 — one
+instance, one date, may not generalise).
+
+A `comment` written beside a populated `description` is stored, reads back
+cleanly through the API, and is **never shown to anyone**. There is no error and
+no dropped field, so nothing signals the loss. `comment` is not a private
+channel — it is the unread one.
+
 ```python
+# `description` is the field the history renders. Anything a person must read
+# goes here.
 PostAction(
     action_type_id=YOUR_TYPE_ID,
     group_id=YOUR_GROUP_ID,
-    description="Visible to the requester.",
-    comment="Internal working note.",
+    description="The text a reader will actually see.",
+    # `comment` is a second memo on the same record. Set it only when you are
+    # deliberately leaving `description` empty, or when you mean it as
+    # API-only metadata -- with a description present, nobody reads it.
 )
 ```
+
+To make text private, use the action **type** (see below) — that is the only
+distinction the API carries.
 
 ## To post a comment, create a TASK — not an action
 
@@ -86,9 +105,10 @@ that decides whether anyone ever sees the text.
 | endpoint | `POST requests/{rfc}/actions` | `POST requests/{rfc}/tasks` |
 | body | wrapped | **flat** at the root |
 | born | **open** — work still to do | **ended** — work reported |
-| in the UI | pending row, text **not** shown | history entry **with** its text |
+| in the UI | pending row, text **not** shown | history entry **with** its `description` |
 | needs ending | yes | no |
-| `parent_action_id` | required for an internal-note type | not needed |
+| `parent_action_id` | needed when the ticket has 2+ open actions | not needed |
+| parent-resolved | **yes** — needs exactly one open action, or an explicit parent | no |
 | use for | work someone must still do | **comments** |
 
 ```python
@@ -111,15 +131,60 @@ mandatory; `PostTask` refuses a body missing either rather than letting the
 server answer with a 590 that names no field.
 
 **If a caller creates an action and stops**, nothing is lost — the text is
-stored — but the row renders without it until the action is ended. Ending is
-vendor-documented as `PUT actions/{rfc_number}` with an `end_action` wrapper
-and dates in the instance's `DATE_FORMAT` (`dd/mm/yyyy`, **not** ISO 8601) —
+stored — but the row renders without it until the action is ended. Use
+**`end_action`**, which wraps the vendor's `PUT actions/{rfc_number}` /
+`end_action` route —
 [docs](https://docs.easyvista.com/docs/rest-api-finish-an-action-attached-to-an-incident-request.md).
-**This package does not implement it**: every documented form returned
-`590 Action not found` on the verified instance, including for a user who could
-end the same action in the UI. That is an instance/profile restriction to raise
-with an administrator — and for comments it never arises, because a task is
-born ended.
+
+```python
+from easyvista_python_client import EasyvistaClient
+
+with EasyvistaClient.from_env() as client:
+    client.end_action(
+        "YOUR_RFC_NUMBER",
+        action_id=YOUR_ACTION_ID,
+        # Your instance's own date spelling, not ISO 8601.
+        start_date="01/09/2026 17:00:00",
+        end_date="01/09/2026 17:15:00",
+        elapsed_time=15,  # MINUTES
+    )
+    # A 200 is not a receipt on this API, and the response is href-only.
+    print(client.get_action(YOUR_ACTION_ID).model_dump(by_alias=True)["END_DATE_UT"])
+```
+
+> **Ending a workflow action advances the workflow.** Measured 2026-09-01 on
+> one instance (2/2 tickets): ending a fresh ticket's open type-20 *Traitement
+> Operation* action moved the **ticket** from *En cours* to *Résolu* and
+> spawned a new open type-1 *Validation Self Service* action. A control the
+> same day showed ending a type-94 action the caller had created left both the
+> status and the action count untouched. So ending your own action is inert;
+> ending a workflow step is a state change on the ticket. **Omitting
+> `action_id` ends every open action**, which on a ticket whose only open one
+> is its workflow step means resolving it — name the action unless you mean
+> that.
+
+> **Retraction (2026-09-01).** An earlier revision of this skill said every
+> documented form returned `590 Action not found` and called that an
+> instance/profile restriction to raise with an administrator. **That was
+> wrong.** The 590 comes from replaying the call against an action that is
+> *already ended* — the message means "no OPEN action matched", not "you may
+> not do this". Do not raise it with your administrator.
+
+Details, all measured 2026-09-01 on one instance (Service Manager 2025.3 — one
+instance, one date, may not generalise):
+
+- `end_date` takes `dd/mm/yyyy hh:mm:ss` (also `hh:mm`; a bare date lands at
+  midnight). **ISO 8601 is rejected** with `590 "Invalid End Date"`.
+- `elapsed_time` is in **minutes**.
+- Send `start_date` explicitly. Left to derive it, the server returns
+  `START_DATE_UT` early by the instance's UTC offset — confirmed with a
+  DST control, so it is the offset and not a fixed constant. An explicit
+  `start_date` is stored faithfully.
+- The path segment is the **RFC number**, not an action id, despite the route
+  living under `/actions`; `PUT actions/{action_id}` answers 404 even with the
+  id also in the body.
+
+For comments none of this arises, because a task is born ended.
 
 ## Visibility is by action TYPE, and the labels say which
 
@@ -196,8 +261,16 @@ with EasyvistaClient.from_env() as client:
 ## Editing an action
 
 `update_action(action_id, ActionUpdate(description=...))` edits an existing
-action's note (`comment` is also available, for a deployment configured the
-other way round). Two asymmetries worth knowing:
+action's note — **including one that has already been ended**, where the new
+text replaces what the history shows (measured 2026-09-01, one instance). That
+is how to correct or extend a note visibly after the fact.
+
+**Write `description`, not `comment`.** `ActionUpdate` exposes both, but
+`description` shadows `comment` in the UI (see above), so an
+`ActionUpdate(comment=...)` on an action that already has a description returns
+200, re-reads cleanly through the API, and changes nothing a person sees.
+
+Two asymmetries worth knowing:
 
 - Unlike `create_action`/`list_actions`, which are ticket-scoped
   (`rfc_number`), `update_action` is keyed on the **action id alone** — it
@@ -263,10 +336,11 @@ with the EasyVista administrator, then pin the ids in your own configuration.
    b. `create_action(rfc, PostAction(action_type_id=..., group_id=..., description=...))`.
       Use it **only** for work still to be done. The action is created *open*,
       and an open action renders in the UI as a pending row with its text NOT
-      shown, which reads as though the note was lost. Ending it afterwards
-      needs `PUT actions/{rfc_number}`, which returned `590 Action not found`
-      for every documented form on the verified instance — so an action you
-      create is one you may not be able to end from the API.
+      shown, which reads as though the note was lost. Finish it with
+      `end_action(rfc, action_id=...)` (see the section above for the fields
+      and for what ending a *workflow* action does to the ticket). Note the
+      create route is parent-resolved: it needs exactly one open action on the
+      ticket, or an explicit `parent_action_id` naming an open one.
 4. To address the action or task you just created, diff `list_actions` across
    the call — the create response cannot give you the id (see Gotchas).
 5. To read note text, either call `get_action` and resolve the memo href with
@@ -294,8 +368,8 @@ with EasyvistaClient.from_env() as client:
 ```
 
 Only when the work is genuinely still to be done, an **action** instead. It is
-born open, so its text does not render in the history until it is ended — and
-ending it is 590-blocked on the verified instance:
+born open, so its text does not render in the history until it is ended —
+finish it with `end_action` (above) once the work is done:
 
 ```python
 from easyvista_python_client import EasyvistaClient, PostAction
@@ -401,6 +475,22 @@ with EasyvistaClient.from_env() as client:
   alone has empty bodies.
 - `action.description` and `action.comment` are `str | dict | None`. Check
   the type before treating either as text.
+- **A non-empty `description` hides `comment` from the UI.** The history shows
+  one text field per action — `DESCRIPTION`, falling back to `COMMENT` only
+  when `DESCRIPTION` is empty (measured 2026-09-01, one instance, 2025.3). So a
+  resolution written to `comment` beside a populated `description` is stored,
+  API-readable and unread. To reproduce what a person saw, take
+  `description or comment` — which is what `get_ticket_context` and
+  `TicketContext.to_markdown` now do, resolving the `COMMENT` memo only when
+  `DESCRIPTION` comes back empty.
+- **`create_action` resolves an implicit parent** and needs exactly **one** open
+  action on the ticket: zero gives `590 "Parent action not found or incorrect"`,
+  two or more gives `590 "Ambiguous query : many parent actions found"`, and an
+  explicit `parent_action_id` naming an **open** action succeeds either way (an
+  ended one is refused). A fresh ticket carries exactly one open workflow action,
+  and every `set_status` drains the open set to zero — so in practice a bare
+  `create_action` works only on a ticket nobody has moved yet. `create_task` is
+  not parent-resolved and is unaffected.
 - `action.action_type` is a nested object on the live API, not a string. Use
   `action.reference("ACTION_TYPE").display` for the label.
 - Resolving every body costs two extra requests per action (item fetch, then

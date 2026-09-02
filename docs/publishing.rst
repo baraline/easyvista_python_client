@@ -52,9 +52,10 @@ One-time setup
 Trusted Publishing
    Configure a publisher on PyPI for the project pointing at owner ``baraline``,
    repository ``easyvista_python_client``, workflow ``release.yml``, environment ``pypi``.
-   Until the project's first upload exists, this is registered as a *pending* publisher.
-   The ``pypi`` GitHub environment is also where a required-reviewer gate on the upload
-   step belongs, if the project wants one.
+   ``0.1.0`` is already on PyPI, so the project is past the *pending* publisher stage
+   this section used to describe -- a pending publisher is only needed before a project's
+   first upload exists. The ``pypi`` GitHub environment is also where a required-reviewer
+   gate on the upload step belongs, if the project wants one.
 
 Read the Docs (optional)
    The docs job self-skips when unconfigured. To enable it, set the ``READTHEDOCS_PROJECT``

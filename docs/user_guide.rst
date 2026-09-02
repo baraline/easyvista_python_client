@@ -436,12 +436,22 @@ Actions are EasyVista's followup/comment analog. Add one with a
 
    from easyvista_python_client import PostAction
 
+   # An action is born OPEN, and an open action's text is not displayed --
+   # so create and end are a pair. For a comment, use create_task instead.
+   before = {a.action_id for a in client.list_actions(ticket.rfc_number)}
    client.create_action(
        ticket.rfc_number,
        PostAction(action_type_id=94, group_id=3, description="Triaged: on it"),
    )
-   for action in client.list_actions(ticket.rfc_number):
-       print(action.action_id)
+   after = client.list_actions(ticket.rfc_number)
+   created = [a for a in after if a.action_id not in before]
+   client.end_action(
+       ticket.rfc_number,
+       action_id=created[0].action_id,
+       start_date="01/09/2026 17:00:00",
+       end_date="01/09/2026 17:15:00",
+       elapsed_time=15,
+   )
 
 .. note::
 
@@ -482,15 +492,32 @@ for the cheap "show me the recent ones" read.
    Bound it with ``max_records`` the first time you run it against a ticket
    whose action count you do not already know.
 
-Internal vs. customer-facing comments
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Two stored text fields, but only one is displayed
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An action carries **two independent text channels**, ``description`` and
+An action stores **two separate text fields**, ``description`` and
 ``comment``, each addressable afterwards as its own memo
 (``actions/{id}/description``, ``actions/{id}/comment``).
 :class:`~easyvista_python_client.PostAction` writes both, and both persist from
 a single create — verified live on 2026-08-28, each reading back with exactly
 the text sent.
+
+They are independent in storage, not in visibility.
+
+.. warning::
+
+   **A non-empty** ``description`` **hides** ``comment`` **from every reader.**
+   The UI shows one text field per action, under a header reading "comment or
+   description": it renders ``DESCRIPTION`` when that memo has text, and falls
+   back to ``COMMENT`` only when it is empty. Measured in the UI on
+   2026-09-01 against one instance (Service Manager 2025.3) — one instance,
+   one date, so it may not generalise.
+
+   Text written to ``comment`` beside a populated ``description`` is stored,
+   reads back cleanly through the API, and is never shown to anyone. There is
+   no error and no dropped field, so nothing signals the loss. ``comment`` is
+   not the private channel; it is the unread one. Visibility is carried by the
+   action **type** instead — see :ref:`tasks-vs-actions`.
 
 .. code-block:: python
 
@@ -498,9 +525,17 @@ the text sent.
 
    PostAction(
        action_type_id=94,                      # instance-specific
-       description="Visible to the requester.",
-       comment="Internal working note.",
+       # The field the history renders. Anything a person must read goes here.
+       description="The text a reader will actually see.",
+       # `comment` is a second memo on the same record. Set it only when you
+       # deliberately leave `description` empty, or mean it as API-only
+       # metadata -- with a description present, nobody reads it.
    )
+
+To fix or extend text that is already posted, write
+:class:`~easyvista_python_client.ActionUpdate` with ``description``: it applies
+to an action that has already ended, and the new text renders (measured in the
+UI on 2026-09-01, one instance).
 
 .. _tasks-vs-actions:
 
@@ -534,7 +569,7 @@ sees the text:
      - yes
      - no
    * - ``parent_action_id``
-     - required for an internal-note type
+     - resolved implicitly; needed when 0 or 2+ actions are open
      - not needed
    * - use it for
      - work someone must still do
@@ -561,14 +596,39 @@ history.
 
    **Creating an action and stopping there loses nothing but shows nothing.**
    The text is stored; the row simply renders without it until the action is
-   ended. Ending is vendor-documented as ``PUT actions/{rfc_number}`` with the
-   body wrapped in ``end_action`` and dates in your instance's ``DATE_FORMAT``
-   (``dd/mm/yyyy`` on the verified instance, **not** ISO 8601) — but this
-   package does **not** implement it, because every documented form returned
-   ``590 Action not found`` on the verified instance, including for a user who
-   could end the same action through the UI. If you need to end actions
-   programmatically, raise that with your EasyVista administrator; for
-   comments, use a task and the question does not arise.
+   ended. Finish it with :meth:`~easyvista_python_client.EasyvistaClient.end_action`.
+   An earlier revision of this guide said every documented form returned
+   ``590 Action not found`` and suggested raising it with your administrator.
+   That was wrong: the 590 is what the route answers when no *open* action
+   matches, such as replaying it against one already ended. For comments, use a
+   task and the question does not arise.
+
+.. code-block:: python
+
+   client.end_action(
+       "YOUR_RFC_NUMBER",
+       action_id=YOUR_ACTION_ID,
+       start_date="01/09/2026 17:00:00",
+       end_date="01/09/2026 17:15:00",
+       elapsed_time=15,
+   )
+
+Measured 2026-09-01 on one instance (one instance, one date, so it may not
+generalise): ``end_date`` takes your instance's ``DATE_FORMAT`` --
+``dd/mm/yyyy hh:mm:ss`` there, and ISO 8601 is refused -- ``elapsed_time`` is
+minutes, and you should send ``start_date`` explicitly because a derived one
+comes back early by your instance's UTC offset.
+
+.. warning::
+
+   **Ending a workflow action advances the workflow.** On the same instance and
+   date, ending a fresh ticket's open type-20 *Traitement Operation* action
+   moved the **ticket** from *En cours* to *Résolu* and spawned a new open
+   type-1 *Validation Self Service* action (2 tickets, 2/2); a control showed
+   ending a type-94 action the caller had created changed neither the status
+   nor the action count. Ending your own action is inert, ending a workflow
+   step is not. Omitting ``action_id`` ends **every** open action, which on a
+   ticket whose only open one is its workflow step means resolving it.
 
 .. warning::
 

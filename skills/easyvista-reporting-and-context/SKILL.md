@@ -60,9 +60,13 @@ one call, degrading around profile restrictions instead of failing.
   resolves the href-only description/comment memos and lists actions and
   documents. Missing sub-resources (404) and profile-restricted lists (403)
   degrade to `None` / `[]` rather than failing the call. Actions in the bundle
-  come back pre-resolved to a string body; for the raw list/item record shapes
-  and how to find a just-created action's id (diff `list_actions` across the
-  call), see `easyvista-ticket-actions`.
+  come back pre-resolved to a string body: **`DESCRIPTION`, falling back to
+  `COMMENT` only when the description memo is empty** — the same rule the UI
+  applies, so an exported log matches the ticket on screen. (Resolving
+  `DESCRIPTION` alone used to drop the body of exactly the actions a human
+  *can* read.) For the raw list/item record shapes and how to find a
+  just-created action's id (diff `list_actions` across the call), see
+  `easyvista-ticket-actions`.
 - `get_ticket_context(rfc, memo_fields=("description", "comment"))` names which
   Memo sub-resources to resolve. The two defaults are the ones EasyVista
   populates out of the box, but which memo carries a ticket's body is

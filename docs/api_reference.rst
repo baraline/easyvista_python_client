@@ -13,6 +13,8 @@ Configuration
 
 .. autoclass:: easyvista_python_client.config.EasyvistaConfig
 
+.. autodata:: easyvista_python_client.DEFAULT_USER_AGENT
+
 Models
 ------
 
@@ -25,6 +27,8 @@ Models
 .. autoclass:: easyvista_python_client.models.action.Action
 
 .. autoclass:: easyvista_python_client.models.action.PostAction
+
+.. autoclass:: easyvista_python_client.models.action.PostTask
 
 .. autoclass:: easyvista_python_client.models.action.ActionUpdate
 
@@ -49,6 +53,8 @@ Models
 .. autoclass:: easyvista_python_client.pagination.SearchResult
 
 .. autoclass:: easyvista_python_client.context.TicketContext
+
+.. autodata:: easyvista_python_client.DEFAULT_MARKDOWN_FIELDS
 
 .. autoclass:: easyvista_python_client.directory.DepartmentContext
 
