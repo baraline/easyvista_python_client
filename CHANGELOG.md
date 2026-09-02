@@ -4,10 +4,123 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-While the package is pre-1.0, breaking changes may land between minor versions;
-a deprecation policy will follow the 1.0 release.
+While the package is pre-1.0, breaking changes may land between **minor**
+versions; a deprecation policy will follow the 1.0 release. A patch release
+never carries one. Each breaking change is marked `**BREAKING**` in its section
+with the reasoning, so read the section for the version you are moving to.
+
+**The git tag is what defines a version.** Where a section's narrative or date
+disagrees with the tree its tag points at, the tag is authoritative and the prose
+is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-09-02
+
+Makes the task-vs-action distinction inspectable. A GLPI comment corresponds to
+an EasyVista **task**, not an action; actions carry effort and cost, so a
+timeline mirrored without that distinction imports time-tracking and workflow
+rows as conversation.
+
+**Upgrading.** One breaking change, in `Action` (see `### Changed`). The minor
+bump is deliberate: a dependant pinned `>=0.2.0,<0.3` does **not** pick this up,
+and must widen its constraint on purpose — which is the point, because the
+retyping below can change an answer silently rather than raise.
+
+Before widening, check whether you read `action.ELAPSED_TIME`, `TIME_COST`,
+`CONTRACTUAL_COST`, `START_DATE_UT` or `END_DATE_UT` off `model_extra`, or read
+those keys out of a `model_dump(by_alias=True)` and treated them as strings. Both
+change here. Nothing on the write side moves: `PostAction`, `PostTask` and
+`ActionUpdate` are untouched.
+
+### Added
+
+- Five columns declared on `Action` with real types: `elapsed_time` (minutes,
+  `int | None`), `time_cost` and `contractual_cost` (exact `Decimal | None`,
+  parsed from the API's French decimal comma), `start_date_ut` and
+  `end_date_ut` (aware `datetime | None`). They previously arrived only as
+  untyped `extra="allow"` strings.
+
+  **The `""` sentinel and `"0"` stay different answers.** `""` means the column
+  does not apply to this record and maps to `None`; `"0"` / `"0,00"` means it
+  applies and is zero, and maps to `0` / `Decimal("0.00")`. Collapsing the two
+  destroys the only signal that says whether a record tracks effort. Measured
+  over 1500 live rows: `ELAPSED_TIME` was `""` on 384 and `"0"` on 895.
+- `Action.is_workflow_generated` — whether `WORKFLOW_ID` is set, i.e. whether
+  the workflow engine owns the row. Clean on 1500/1500 measured rows, and the
+  one structural fact in this area that holds.
+
+  It is **not** an `is_task()`, and the package deliberately does not ship one:
+  nothing on an action record says which route created it, and the
+  effort-shape heuristic that looks like it should is wrong in both directions
+  — 173 of 1500 rows had a `WORKFLOW_ID` with an empty `ELAPSED_TIME`, and 39
+  of 49 public comments carried a non-empty one, one of them with a real
+  `TIME_COST` of `99,00`. Which action types count as conversation is
+  per-deployment policy and stays with the caller.
+- `scripts/tests/test_no_private_instance_identifiers.py` — a guard refusing any
+  private EasyVista instance identifier (hostname, domain, real catalog GUID or
+  code) in a tracked file. `.gitignore` has always stated that policy in prose;
+  it had no enforcement, and preparing this release put a real preprod hostname
+  into `docs/vendor-api-reference.md` — a tracked file that also ships in the
+  sdist — with all five gates passing, because none of them reads prose for
+  this. Both a public push and a PyPI upload are irreversible, so the check is
+  now mechanical. It carries its own negative control, and deliberately does
+  **not** refuse the illustrative account number or the synthetic
+  `EAZ_INC_000` stand-in the tracked tests already use.
+- `models.common.OptionalDecimal`, the annotated type behind the two cost
+  columns. Accepts either decimal separator, so a dot-configured deployment
+  needs no setting, and **refuses a grouping separator** rather than guessing
+  — `'1.234,56'` and `'1,234.56'` are the same amount under opposite
+  conventions. Not exported from the package root.
+
+### Changed
+
+- **BREAKING** — `ELAPSED_TIME`, `TIME_COST`, `CONTRACTUAL_COST`,
+  `START_DATE_UT` and `END_DATE_UT` are now declared fields on `Action` instead
+  of `extra="allow"` extras. Three consequences:
+  - `action.ELAPSED_TIME` (extra attribute access) raises `AttributeError`; use
+    `action.elapsed_time`. The same for the other four.
+  - They are gone from `action.model_extra`, and
+    `model_dump(by_alias=True)["ELAPSED_TIME"]` is now an `int | None` rather
+    than a `str`.
+  - `classify_fields()` bucketing is **unchanged** — none of the five starts
+    with `E_`, so all five have always landed in `.official`. What changed is
+    *presence*: `.official` (and the dump) now always carries all five keys,
+    `None` included, where previously a key the API did not return was simply
+    absent. Code that iterates `.official` sees five more keys on a default
+    `list_actions` row.
+  - **`None` is now ambiguous.** These columns are not on the default
+    `list_actions` projection, so on a default row every one reads `None`,
+    meaning *not returned* — not the `""` that means *does not apply*. The two
+    are indistinguishable once validated. Project them explicitly or read
+    item-level before reading meaning into a `None`.
+  - A `Decimal` in a dump is not JSON-serialisable, so
+    `json.dumps(action.model_dump(by_alias=True))` raises where a cost is
+    populated. Use `model_dump(mode="json")`, which renders the amount as a
+    string with a `.` decimal point rather than the `,` the API sent.
+  - A malformed value now raises where it previously passed through as a
+    string. This is the same trade `OptionalDateTime` already makes — a wrong
+    number is worse than a loud failure — and it carries the same blast radius:
+    the descriptor validates a page in a list comprehension, so one bad value
+    fails a whole `list_actions` call. See `O-COSTGROUP` in
+    `docs/vendor-api-reference.md`.
+
+### Documentation
+
+- `docs/vendor-api-reference.md` records, as tier 2 read on two 2025.3
+  deployments on 2026-09-02, that `/requests/{rfc_number}/tasks` is **POST
+  only** and that **no task read route exists** under any spelling — the only
+  timeline reads are `GET /actions`, `/actions/{id}` and
+  `/actions/{id}/{comment}`. A task is written as a task and read back as an
+  action, which is why there is no `list_tasks`/`iter_tasks` and why
+  `create_task` returns an `Action`. `create_task`'s docstring now says so
+  where a reader meets it.
+- Same file, tier 4: the effort-column measurements above, and two side
+  findings. `ACTION_LABEL_*` is the label of the workflow **step**, not the
+  name of the action type — type 20 appeared under six different labels — so
+  it is a stable type name only for the non-workflow types. And types 14, 27
+  and 28 have an empty label in every language column at both list and item
+  level, so those ids cannot be named through the API at all (`O-ACTIONTYPE28`).
 
 ## [0.2.0] - 2026-09-02
 
@@ -1002,6 +1115,13 @@ the release is additive.
 
 Initial public release.
 
+> **The tag is authoritative, and it disagrees with this date.** The `0.1.0` tag
+> points at `3216a33` (2026-08-04), roughly 150 commits after `6df6a75`, the
+> commit this section was written to describe. Per the policy above, `0.1.0`
+> **is** the tree at `3216a33`; the date on this heading and the scope below
+> under-describe it. The tag is published, so it is not being moved — this note
+> exists so the discrepancy is recorded rather than rediscovered.
+
 ### Added
 
 - Synchronous `EasyvistaClient` and asynchronous `AsyncEasyvistaClient` over the
@@ -1022,6 +1142,7 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...v0.2.0
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/baraline/easyvista_python_client/compare/0.2.0...0.3.0
+[0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/baraline/easyvista_python_client/releases/tag/0.1.0

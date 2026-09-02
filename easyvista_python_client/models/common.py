@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Annotated, Any
 
 from pydantic import (
@@ -35,6 +37,88 @@ def _empty_str_to_none(value: Any) -> Any:
 
 OptionalInt = Annotated[int | None, BeforeValidator(_empty_str_to_none)]
 """An ``int | None`` field that treats the API's ``""`` sentinel as ``None``."""
+
+
+# An optional sign, digits, then at most one separator and one or two fraction
+# digits. Deliberately refuses a grouping separator -- see the validator.
+_EV_DECIMAL = re.compile(r"^[+-]?\d+(?:[.,]\d{1,2})?$")
+
+
+def _parse_ev_decimal(value: Any) -> Any:
+    """Parse EasyVista's locale-formatted money column into an exact ``Decimal``.
+
+    The instance renders a currency column with its own decimal separator: on
+    the verified deployment ``TIME_COST`` and ``CONTRACTUAL_COST`` come back as
+    ``'0,00'`` / ``'99,00'`` — a **comma** — which is why this exists rather
+    than the column being a plain ``float``. Both separators are accepted, so a
+    dot-configured deployment needs no setting; the separator is a deployment's
+    locale, not an EasyVista constant.
+
+    ``""`` maps to ``None`` and that is load-bearing: ``""`` means the column
+    does **not apply** to this record, while ``'0,00'`` means it applies and is
+    zero. Collapsing the two — to ``0`` or to ``None`` — destroys the only
+    signal that says whether a record tracks cost at all. See
+    :class:`~easyvista_python_client.models.action.Action` for what that signal
+    is worth and what it does **not** prove.
+
+    **Two shapes raise rather than being guessed at**, both of them formats this
+    parser has never seen live:
+
+    * **A grouping separator.** ``'1.234,56'`` and ``'1,234.56'`` are the same
+      amount under opposite conventions, and ``'9,999'`` is either ``9.999`` or
+      ``9999`` with nothing in the value to say which.
+    * **Three or more fraction digits.** ``'1,234'`` is refused for the same
+      reason — it is indistinguishable from a comma-grouped ``1234`` — which
+      also means a genuinely 3-decimal currency is refused here.
+
+    Note what is **not** a trigger: magnitude. ``'1000,00'`` parses fine, because
+    it carries no grouping separator. An earlier revision of this docstring said
+    "an amount above 999 is the case to watch", which was wrong — what matters is
+    the *format*, not the size.
+
+    Every amount observed live carried exactly two fraction digits and no
+    grouping (1500 rows, 2026-09-02: ``'0,00'``, ``'99,00'``, ``'129,00'``).
+    Refusing is the same trade :func:`_empty_str_to_none_datetime` makes — a
+    wrong number is worse than a loud failure — and it carries the same cost:
+    ``resources/descriptor.py`` validates a page in a list comprehension, so one
+    unparseable amount fails the whole ``list_actions`` call rather than that
+    row. See ``O-COSTGROUP`` in ``docs/vendor-api-reference.md``.
+
+    ``Decimal``, not ``float``, because these are money: ``Decimal('0.10') +
+    Decimal('0.20') == Decimal('0.30')`` and the float equivalent does not.
+    A non-string value (an ``int``, ``float`` or ``Decimal`` handed in
+    directly) passes through to pydantic's own ``Decimal`` validator untouched.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if not _EV_DECIMAL.match(text):
+            raise ValueError(
+                f"{value!r} is not an EasyVista amount. Expected digits with at "
+                "most one decimal separator ('.' or ',') and ONE OR TWO "
+                "fraction digits, e.g. '0,00' or '99.00'. Refused, rather than "
+                "guessed at: a grouping separator (because '1.234,56' and "
+                "'1,234.56' are the same amount under opposite conventions), and "
+                "three or more fraction digits (because '1,234' is "
+                "indistinguishable from a comma-grouped 1234). Magnitude is not "
+                "a trigger -- '1000,00' parses. If this instance really formats "
+                "amounts this way, that is a finding worth recording -- report "
+                "the value."
+            )
+        return Decimal(text.replace(",", "."))
+    return value
+
+
+OptionalDecimal = Annotated[Decimal | None, BeforeValidator(_parse_ev_decimal)]
+"""An exact ``Decimal | None`` for an EasyVista currency column.
+
+Accepts either decimal separator and maps the ``""`` sentinel to ``None``,
+which is **not** the same answer as ``Decimal('0.00')`` — see
+:func:`_parse_ev_decimal`.
+"""
 
 
 def _parse_with_context_formats(value: Any, info: ValidationInfo) -> datetime | None:

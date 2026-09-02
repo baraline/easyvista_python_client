@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
   package: easyvista-python-client
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -129,6 +129,43 @@ Verified live 2026-08-28: tasks came back with `END_DATE_UT` and
 `action_type_id` and one of `group_id` / `group_name` / `group_mail` are
 mandatory; `PostTask` refuses a body missing either rather than letting the
 server answer with a 590 that names no field.
+
+**A task is write-only as a resource.** `POST requests/{rfc}/tasks` is the only
+verb the route has, and the API declares **no task read route at all** (tier 2,
+read 2026-09-02 on two 2025.3 deployments). So `create_task` returns an
+`Action`, there is no `Task` read model and no `list_tasks` — a task is written
+as a task and read back through `list_actions` like any other row. A GET against
+the tasks path answers 403, which on this API proves nothing either way.
+
+**No action-record column observed so far says which route created it**, so do
+not try to reconstruct the distinction on the read side. In particular the effort
+columns do not: measured over 1500 live rows 2026-09-02, 39 of 49
+`Commentaire [Public]` comments carried a non-empty `ELAPSED_TIME` (one with
+`TIME_COST='99,00'`), while 173 workflow rows carried an empty one. To pick
+conversation out of a timeline, filter on an `action_type_id` allowlist your
+administrator confirms, and use `action.is_workflow_generated` to drop the
+workflow engine's own rows.
+
+**`is_workflow_generated` needs `WORKFLOW_ID` projected, or it is always
+`False`.** It reads that one column, and the column is NOT on the default
+`list_actions` projection — so on default rows the filter silently drops nothing
+and every workflow row survives. The same applies to all five effort columns:
+unprojected they read `None`, which is indistinguishable from the `''` that means
+"does not apply". Ask for them:
+
+```python
+actions = client.iter_actions(
+    "YOUR_RFC_NUMBER",
+    fields=[
+        "ACTION_ID", "ACTION_TYPE_ID", "WORKFLOW_ID",
+        "ELAPSED_TIME", "START_DATE_UT", "END_DATE_UT",
+    ],
+)
+conversation = [
+    a for a in actions
+    if not a.is_workflow_generated and a.action_type_id in YOUR_COMMENT_TYPE_IDS
+]
+```
 
 **If a caller creates an action and stops**, nothing is lost — the text is
 stored — but the row renders without it until the action is ended. Use
@@ -532,3 +569,20 @@ with EasyvistaClient.from_env() as client:
   columns. `getattr(record, "last_update")` raises `AttributeError` on an
   `Action`; for code spanning record types, go through `classify_fields()` or
   `.reference()`, where the wire alias is uniform.
+- **On the effort columns, `''` and `'0'` are different answers.**
+  `elapsed_time` (minutes), `time_cost`, `contractual_cost`, `start_date_ut` and
+  `end_date_ut` are declared as of 0.3.0. `''` means the column does not apply
+  to this record and reads as `None`; `'0'` / `'0,00'` means it applies and is
+  zero, and reads as `0` / `Decimal("0.00")`. Do not normalise the two together
+  — that erases the only signal saying whether a record tracks effort at all.
+  The costs are exact `Decimal`s parsed from the API's decimal comma; an amount
+  with a grouping separator raises rather than being guessed at, and because a
+  page is validated all at once that fails the whole `list_actions` call.
+- **`ACTION_LABEL_*` is the workflow STEP's label, not the action type's name**
+  (measured 2026-09-02, 1500 rows). Type 20 appeared under six labels:
+  `Analyse et résolution`, `Traitement`, `Traitement du refus`, `Traitement de
+  la demande`, `test` and `notif`. For the non-workflow
+  types (94, 95, 7) it is stable and is the real type name; for workflow types
+  it varies row to row, so never key on it. Types 14, 27 and 28 have an empty
+  label in every language column at both list and item level — the API cannot
+  name them, and only the admin console can.

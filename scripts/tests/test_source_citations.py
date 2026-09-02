@@ -51,6 +51,11 @@ _SELF_EXEMPT = {
     "test_source_citations.py",
     "test_skills_contract.py",
     "generate_field_inventory.py",
+    # A third guard module, added 0.3.0. It must name the same gitignored notes
+    # in its own skip list -- otherwise it would scan one and fail on the file
+    # legitimately containing its own name -- so it is exempt here for exactly
+    # the reason this module is.
+    "test_no_private_instance_identifiers.py",
 }
 
 

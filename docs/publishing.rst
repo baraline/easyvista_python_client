@@ -27,11 +27,23 @@ Cutting a release
 #. Move the ``CHANGELOG.md`` ``[Unreleased]`` entries under the new version and update the
    compare links at the bottom of the file.
 #. Merge to ``main`` and let CI go green.
-#. Publish a GitHub release whose tag is the version, ``v``-prefixed --
-   ``v0.2.0`` for version ``0.2.0``. (The workflow strips a leading ``v`` before comparing,
-   so an unprefixed tag also passes. The only tag that exists today, ``0.1.0``, is
-   **unprefixed** -- ``v``-prefixing starts at ``v0.2.0``, which is why the
-   ``CHANGELOG.md`` link for ``0.1.0`` points at the bare tag.)
+#. Publish a GitHub release whose tag is the version, **unprefixed** -- ``0.3.0``
+   for version ``0.3.0``, never ``v0.3.0``.
+
+   .. warning::
+
+      This step previously ordered a ``v``-prefixed tag and said "``v``-prefixing
+      starts at ``v0.2.0``". That never happened: **both tags that exist are
+      bare** -- ``0.1.0`` and ``0.2.0`` -- so following the old instruction would
+      have produced a repository with two tag conventions. It also left the
+      ``CHANGELOG.md`` compare links pointing at a ``v0.2.0`` that does not
+      exist, so two of them 404ed until 0.3.0 fixed them.
+
+      **The tag is what defines a version**; the prose is corrected to match the
+      tags, not the other way round. Keep every tag bare, and keep the
+      ``CHANGELOG.md`` links bare with it. (The release workflow strips a leading
+      ``v`` before comparing, so a prefixed tag would still *build* -- which is
+      exactly why this drifted unnoticed.)
 
 The workflow then runs the test matrix (3.10--3.14) and the quality gates -- Ruff, mypy,
 the generated-``_sync``-tree check, the hand-written-twin lint and a warnings-as-errors

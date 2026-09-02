@@ -44,7 +44,7 @@ exclude = [
 
 [project]
 name = "easyvista-python-client"
-version = "0.2.0"
+version = "0.3.0"
 description = "Typed Python client for the EasyVista Service Manager REST API"
 readme = "README.md"
 requires-python = ">=3.10"

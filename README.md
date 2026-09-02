@@ -11,7 +11,10 @@ Typed Python client for the EasyVista Service Manager REST API. Sync + async,
 Pydantic models, Bearer or Basic auth.
 
 While the package is preparing for 1.0, breaking changes may land between
-minor versions; a deprecation policy will follow the 1.0 release.
+**minor** versions; a deprecation policy will follow the 1.0 release. A patch
+release never carries one. Each breaking change is marked `**BREAKING**` in its
+`CHANGELOG.md` section with the reasoning, so read the section for the version
+you are moving to.
 
 ## Documentation
 
