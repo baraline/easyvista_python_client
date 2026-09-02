@@ -39,6 +39,11 @@ from typing import Any
 _FRACTION_RE = re.compile(r"\.(\d+)")
 
 
+#: EasyVista sends the extended calendar date; the ISO basic forms that 3.11+
+#: also accepts are not its format on any interpreter. See parse_ev_datetime.
+_EXTENDED_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def parse_ev_datetime(value: Any) -> datetime | None:
     """Parse an EasyVista timestamp to a timezone-aware ``datetime``, or ``None``.
 
@@ -48,12 +53,35 @@ def parse_ev_datetime(value: Any) -> datetime | None:
     6 digits — EasyVista sends 3, which 3.10 rejects outright. Unparseable input
     returns ``None`` rather than raising, so a single malformed column never
     fails a whole record.
+
+    **A value must start with an extended ISO date** (``YYYY-MM-DD``) or it is
+    refused, on every interpreter. From 3.11 ``fromisoformat`` also accepts the
+    ISO *basic* forms — ``"20260817"``, ``"20260817T154041.610"``, week dates
+    like ``"2026W331"`` — which 3.10 rejects, so without this rule the same wire
+    value parsed to an instant on four of the five supported Pythons and raised
+    on the fifth. CI found it precisely that way: 3.10 green, 3.11 and 3.12 red.
+
+    The rule is stated positively because the reject-list version of it was
+    wrong: "digits only" catches ``"20260817"`` and misses both a basic
+    date-time (it has a ``.``) and a week date (it has a ``W``). EasyVista's
+    format always carries separators, so none of these is one of its timestamps
+    on any interpreter, and accepting one would let a genuine format change
+    through as a plausible instant. A deployment that really sends such a form
+    names it through ``EasyvistaConfig(datetime_input_formats=("%Y%m%d",))``,
+    which is tried after this returns ``None``.
     """
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if not isinstance(value, str) or not value.strip():
         return None
     text = value.strip()
+    # Require the extended (separator-bearing) calendar date ISO 8601 mandates
+    # for EasyVista's own format. Stated positively on purpose: enumerating the
+    # basic forms to reject misses them -- week dates ("2026W331") and basic
+    # date-times ("20260817T154041.610") are not digit-only, and 3.11+ parses
+    # both. See the docstring for why this cannot be left to fromisoformat.
+    if not _EXTENDED_DATE_RE.match(text):
+        return None
     if text.endswith(("Z", "z")):
         text = text[:-1] + "+00:00"
     match = _FRACTION_RE.search(text)
