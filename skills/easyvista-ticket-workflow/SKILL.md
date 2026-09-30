@@ -221,6 +221,18 @@ with EasyvistaClient.from_env() as client:
   deployment actually populates is a per-instance configuration choice. Read
   it back with `resolve_memo("requests/{rfc}/comment")`, or take
   `TicketContext.comment`, which resolves it for you.
+- **A memo stores exactly what you send, and nothing renders Markdown for
+  you.** Measured 2026-09-30 on one instance (tier 4, may not generalise): a
+  ticket memo written through the API with HTML was stored byte for byte, and
+  the web UI rendered it as rich text. So send HTML when the text has
+  structure, and expect HTML back from `resolve_memo`. The optional `content`
+  extra (`pip install "easyvista-python-client[content]"`) converts both ways:
+  `EasyvistaContentConverter.to_transport(markdown)` before the write,
+  `EasyvistaContentConverter.from_transport(memo)` on what `resolve_memo`
+  returns. It lives in the `easyvista_python_client.content` subpackage, not
+  the package root, so it is not imported unless you ask for it. It sanitises
+  nothing: raw HTML and `javascript:` link targets in the Markdown go out
+  live, so neutralise both in Markdown you did not write.
 - A `description` passed to **`PostRequest`** at create time was not readable
   back through either memo on the verified instance. Follow the create with
   an `update_ticket` when the body must be retrievable.

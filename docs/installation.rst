@@ -14,6 +14,13 @@ From PyPI
 
    pip install easyvista-python-client
 
+To convert memo text between HTML and Markdown, add the optional ``content`` extra, which brings
+``beautifulsoup4``, ``markdown`` and ``markdownify`` (see :doc:`content`):
+
+.. code-block:: bash
+
+   pip install "easyvista-python-client[content]"
+
 From source
 -----------
 
@@ -27,7 +34,8 @@ Development and documentation tooling
 -------------------------------------
 
 The optional ``dev`` extra installs the linters, type-checker, and test tooling; the ``docs`` extra
-installs Sphinx and the theme used to build this site.
+installs Sphinx and the theme used to build this site. Both also install the ``content`` extra's
+three packages, because the unit suite tests the converter and the API reference imports it.
 
 .. code-block:: bash
 

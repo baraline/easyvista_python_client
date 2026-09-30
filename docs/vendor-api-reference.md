@@ -308,7 +308,24 @@ catalog GUID cannot be discovered from this route — build with `catalog_code`.
 The vendor documents `catalog_guid` as the *preferred* identifier (tier 1) and
 `close_ticket` accepts one; you simply cannot read one back.
 
+## Memo content (tier 4)
+
+Measured 2026-09-30 on one instance, may not generalise: a ticket's `COMMENT`
+memo written through the API with HTML -- `<p>` paragraphs, an `<a>` anchor and
+character references -- was stored byte for byte and read back identically
+(the `DESCRIPTION` memo stayed empty), and the web UI rendered the `<p>`
+elements as paragraphs. So a memo's format is whatever its writer sent, and the
+API altered nothing in that sample. No vendor documentation of the memo format
+is recorded here. `easyvista_python_client.content` converts memo HTML to and
+from Markdown; see open item O-MEMOFORMAT for what is not yet known.
+
 ## Open items
+
+* **O-MEMOFORMAT** -- the memo format rests on the one tier-4 sample above.
+  Not yet known: what the web UI's own editor writes into a memo; whether the
+  UI shows the newlines python-markdown puts between blocks as the whitespace
+  HTML makes of them; and what the UI shows for a memo holding raw markup, a
+  `<script>` or an unknown tag. Look for the vendor documentation first.
 
 * **O-URG** — `PUT /requests/{rfc_number}` declares `Urgency_ID` as a
   **string** (tier 3). This package sent an **int** when it measured the 590

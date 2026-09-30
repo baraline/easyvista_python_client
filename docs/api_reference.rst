@@ -137,6 +137,15 @@ custom field (per EasyVista); official ``E_``-columns like ``E_MAIL`` stay offic
 because they are declared model fields. Resolve a link's text with
 ``client.resolve_memo(href)``.
 
+Rich-text content
+-----------------
+
+The optional ``content`` extra, ``pip install "easyvista-python-client[content]"``:
+Markdown to and from the HTML a memo holds. See :doc:`content` for what each
+direction does, what survives a round trip, and why it is not a sanitiser.
+
+.. autoclass:: easyvista_python_client.content.EasyvistaContentConverter
+
 Exceptions
 ----------
 

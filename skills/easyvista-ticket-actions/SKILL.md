@@ -520,6 +520,17 @@ with EasyvistaClient.from_env() as client:
   `description or comment` — which is what `get_ticket_context` and
   `TicketContext.to_markdown` now do, resolving the `COMMENT` memo only when
   `DESCRIPTION` comes back empty.
+- **Note text is stored as sent, and nothing renders Markdown for you.** A
+  memo holds the HTML it was written with (measured 2026-09-30 on a ticket
+  memo, one instance, tier 4, may not generalise), so a resolved note may be
+  HTML, and Markdown written as-is is stored as-is. The optional `content`
+  extra (`pip install "easyvista-python-client[content]"`) converts both ways:
+  `EasyvistaContentConverter.to_transport(markdown)` for the `description` you
+  write, `EasyvistaContentConverter.from_transport(memo)` on what
+  `resolve_memo` returns. Import it from the `easyvista_python_client.content`
+  subpackage. It sanitises nothing: raw HTML and `javascript:` link targets go
+  out live, so neutralise both in Markdown you did not write — a comment sync
+  relaying another ITSM's text is exactly that case.
 - **`create_action` resolves an implicit parent** and needs exactly **one** open
   action on the ticket: zero gives `590 "Parent action not found or incorrect"`,
   two or more gives `590 "Ambiguous query : many parent actions found"`, and an

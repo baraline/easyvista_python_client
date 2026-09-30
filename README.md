@@ -29,6 +29,13 @@ Build it locally with `pip install -e ".[docs]"` then
 pip install easyvista-python-client
 ```
 
+To read and write memo text as Markdown, add the optional `content` extra, which
+brings a Markdown <-> HTML converter, `easyvista_python_client.content`:
+
+```bash
+pip install "easyvista-python-client[content]"
+```
+
 ## Usage (sync)
 
 ```python
