@@ -4,9 +4,10 @@ Rich-text content
 =================
 
 EasyVista keeps a ticket's and an action's text in *memo* fields, and a memo
-holds the HTML it was sent. The optional ``content`` extra converts between that
-HTML and Markdown in both directions, so a caller can read memos as Markdown and
-write Markdown to them without handling HTML itself.
+holds whatever it was sent -- rich-text HTML, where that was measured (see
+below). The optional ``content`` extra converts between that HTML and Markdown
+in both directions, so a caller can read memos as Markdown and write Markdown to
+them without handling HTML itself.
 
 .. code-block:: bash
 
@@ -54,6 +55,8 @@ where you want Markdown:
        markdown = EasyvistaContentConverter.from_transport(memo)
 
        # Write Markdown to it: render first, because a memo stores what it is sent.
+       # RequestUpdate.description is what writes the COMMENT memo on the
+       # instance this was verified against -- see the user guide.
        html = EasyvistaContentConverter.to_transport("The printer is **offline**.")
        client.update_ticket(rfc_number, RequestUpdate(description=html))
 
@@ -61,8 +64,9 @@ Reading: ``from_transport``
 ---------------------------
 
 :meth:`~easyvista_python_client.content.EasyvistaContentConverter.from_transport`
-returns ``""`` for an empty memo and a memo with no real HTML element unchanged,
-so plain text and Markdown pass through. The test is the element *name*, not the
+returns ``""`` for an empty memo, and a memo with no real HTML element as it is,
+less leading and trailing whitespace, so plain text and Markdown pass through.
+The test is the element *name*, not the
 presence of angle brackets: ``use the <Enter> key`` and ``if x<y then z>0`` are
 text, because neither ``Enter`` nor ``y`` is an HTML element.
 
@@ -133,12 +137,12 @@ accents and query strings. The exceptions, each pinned by a test:
   a live unknown tag and does not come back;
 * ``&lt;`` comes back as a raw ``<``, which renders the same;
 * an e-mail autolink comes back as an inline ``mailto:`` link;
-* a no-break space or hard break at the edge of a paragraph is dropped.
+* a no-break space or hard break at the end of a paragraph is dropped.
 
 Past the first cycle, a second changes nothing more, except for the nested list
 and the angle-bracket text above. That is the property a two-way sync relies on:
-after the first write, reading back what was written gives exactly the Markdown
-that was written.
+once a text has made one trip, writing what was read back and reading it again
+gives exactly the same Markdown.
 
 Where it comes from
 -------------------
@@ -147,8 +151,9 @@ The converter is a port of ``glpi_python_client``'s
 ``content/conversion.py`` at commit ``0d43528``, with the same options, the same
 extensions and the same edge-case handling, and **the two should move
 together**: the hard part of both is the behaviour of the same three libraries,
-not anything either ITSM does. The only difference in code is that the three
-libraries are an optional extra here rather than dependencies. One measurement
+not anything either ITSM does. Names and error messages aside, the only
+difference in code is that the three libraries are an optional extra here
+rather than dependencies. One measurement
 differs from the one recorded there: the ``beautifulsoup4`` defect that dropped
 the text after a ``<br />`` in a body also using ``<br>`` no longer reproduces
 on 4.15.0 (measured 2026-09-30); the converter keeps its workaround because the

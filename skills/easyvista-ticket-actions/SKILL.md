@@ -521,9 +521,10 @@ with EasyvistaClient.from_env() as client:
   `TicketContext.to_markdown` now do, resolving the `COMMENT` memo only when
   `DESCRIPTION` comes back empty.
 - **Note text is stored as sent, and nothing renders Markdown for you.** A
-  memo holds the HTML it was written with (measured 2026-09-30 on a ticket
-  memo, one instance, tier 4, may not generalise), so a resolved note may be
-  HTML, and Markdown written as-is is stored as-is. The optional `content`
+  memo holds what it was written with -- HTML written through the API was
+  stored byte for byte (measured 2026-09-30 on a ticket memo, one instance,
+  tier 4, may not generalise) -- so a resolved note may be HTML, and Markdown
+  written as-is is stored as-is. The optional `content`
   extra (`pip install "easyvista-python-client[content]"`) converts both ways:
   `EasyvistaContentConverter.to_transport(markdown)` for the `description` you
   write, `EasyvistaContentConverter.from_transport(memo)` on what

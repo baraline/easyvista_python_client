@@ -224,8 +224,9 @@ with EasyvistaClient.from_env() as client:
 - **A memo stores exactly what you send, and nothing renders Markdown for
   you.** Measured 2026-09-30 on one instance (tier 4, may not generalise): a
   ticket memo written through the API with HTML was stored byte for byte, and
-  the web UI rendered it as rich text. So send HTML when the text has
-  structure, and expect HTML back from `resolve_memo`. The optional `content`
+  the web UI rendered its `<p>` elements as paragraphs. So what `resolve_memo`
+  returns is whatever was written -- HTML, plain text, or Markdown nobody
+  rendered -- and Markdown you write is stored as Markdown. The optional `content`
   extra (`pip install "easyvista-python-client[content]"`) converts both ways:
   `EasyvistaContentConverter.to_transport(markdown)` before the write,
   `EasyvistaContentConverter.from_transport(memo)` on what `resolve_memo`

@@ -59,7 +59,8 @@ class EasyvistaContentError(EasyvistaError):
     Raised by
     :class:`~easyvista_python_client.content.EasyvistaContentConverter`, in
     either direction, when a parser fails for any reason other than the
-    memo being nested too deeply; the underlying fault is always attached as
+    memo being nested too deeply -- or when the caller's stack is too short
+    even to strip a memo's tags; the underlying fault is always attached as
     ``__cause__``. The converter is the optional ``content`` extra, but this
     class is part of the core package, so ``except EasyvistaContentError``
     works whether or not the extra is installed.

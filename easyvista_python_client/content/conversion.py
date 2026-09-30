@@ -170,7 +170,8 @@ _CANDIDATE_TAG = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)\b[^<>]*>")
 #: documentation marks ``:meta private:`` -- and the subset invariant is
 #: asserted against a real parse in the unit tests, so a future ``bs4``
 #: cannot quietly break it. The two sets held the same 24 names when
-#: glpi_python_client copied them.
+#: glpi_python_client copied them, and still do on ``beautifulsoup4`` 4.15.0
+#: (checked 2026-09-30).
 _VOID_ELEMENTS = frozenset(
     """
     area base basefont bgsound br col command embed frame hr image img
@@ -672,8 +673,9 @@ class EasyvistaContentConverter:
 
         The HTML path is taken only when :func:`_looks_like_html` finds a
         real element, and both directions of that decision matter, because
-        a memo is not always HTML: text a caller wrote through the API
-        without rendering it is stored as it was sent. Text sent down the
+        a memo is not always HTML: a memo holds what it was sent (tier 4,
+        see the module docstring), so text a caller wrote through the API
+        without rendering it is plain text or Markdown. Text sent down the
         HTML path loses whatever the parser does not recognise, and Markdown
         sent down it comes back escaped.
 
@@ -736,10 +738,11 @@ class EasyvistaContentConverter:
         Raises
         ------
         EasyvistaContentError
-            The parser failed for some reason other than depth. The original
-            exception is attached as ``__cause__``. Nothing is expected to
-            reach this -- it is here so a parser fault cannot escape
-            ``except EasyvistaError`` as a bare builtin.
+            The parser failed for some reason other than depth, or the
+            caller's stack was too short even to strip the tags. The
+            original exception is attached as ``__cause__``. Nothing is
+            expected to reach this -- it is here so a parser fault cannot
+            escape ``except EasyvistaError`` as a bare builtin.
         """
 
         content = str(value or "")
