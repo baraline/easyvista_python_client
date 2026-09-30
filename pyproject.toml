@@ -91,13 +91,13 @@ Source = "https://github.com/baraline/easyvista_python_client"
 content = [
     "beautifulsoup4>=4.12",
     "markdown>=3.6",
-    "markdownify>=0.13",
+    "markdownify>=1.2",
 ]
 
 dev = [
     "beautifulsoup4>=4.12",
     "markdown>=3.6",
-    "markdownify>=0.13",
+    "markdownify>=1.2",
     "build>=1.2",
     "mypy>=1.11",
     "numpydoc>=1.8",
@@ -138,7 +138,7 @@ dev = [
 docs = [
     "beautifulsoup4>=4.12",
     "markdown>=3.6",
-    "markdownify>=0.13",
+    "markdownify>=1.2",
     "numpydoc>=1.8",
     "sphinx>=7.2,<8.2",
     "sphinx-rtd-theme>=2.0",

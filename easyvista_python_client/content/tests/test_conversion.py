@@ -1,12 +1,14 @@
 """Unit tests for :mod:`easyvista_python_client.content.conversion`.
 
 Most of this module is a port of ``glpi_python_client``'s
-``content/tests/test_conversion.py`` at commit ``0d43528``: the tests of the
-converter that module ports. The two converters drive the same three libraries
-(``beautifulsoup4``'s ``html.parser`` tree builder, ``markdownify`` and
-``python-markdown``), so every edge case found there is an edge case here, and
-the tests move with the code. Where a ported docstring cited something only
-true of GLPI, it now says whose measurement it was.
+``content/tests/test_conversion.py`` at commit ``0d43528``, brought up to
+``4fc3bed`` with the converter: the tests of the converter that module ports.
+The two converters drive the same three libraries (``beautifulsoup4``'s
+``html.parser`` tree builder, ``markdownify`` and ``python-markdown``), so every
+edge case found there is an edge case here, and the tests move with the code.
+Where a ported docstring cited something only true of GLPI, it now says whose
+measurement it was. The literal-text property -- what a memo displays, the
+Markdown displays -- is ``test_literal_text.py``, ported whole.
 
 Three sections are new: the link and literal-text regressions that motivated
 the port (a GLPI description synced to EasyVista on 2026-09-30 arrived with
@@ -64,6 +66,19 @@ def _prose(text: str) -> str:
     """
 
     return _NOT_PROSE.sub("", _DESTINATION.sub("]", text))
+
+
+def _displayed(markdown: str) -> str:
+    """Return the text a reader is shown of the converting path's Markdown.
+
+    That path escapes literal text -- ``&lt;!--``, ``\\_`` -- so its
+    Markdown is not the text it says: rendering it, as every reader does,
+    is what gives the text back to compare. The degraded path hands back
+    plain text, which :func:`_strip_tags` returns as it is.
+    """
+
+    rendered = EasyvistaContentConverter.to_transport(markdown)
+    return BeautifulSoup(rendered, "html.parser").get_text()
 
 
 def _is_subsequence(needle: str, haystack: str) -> bool:
@@ -134,7 +149,7 @@ def assert_the_degraded_path_says_no_less(shallow: str) -> None:
 
     assert PROBE_TARGET in converted, "the body must reach the converting path"
 
-    assert _is_subsequence(_prose(converted), _prose(degraded)), (
+    assert _is_subsequence(_prose(_displayed(converted)), _prose(degraded)), (
         f"the degraded path said less than the converting one\n"
         f"  converted: {converted!r}\n  degraded:  {degraded!r}"
     )
@@ -335,14 +350,14 @@ def test_a_literal_less_than_renders_escaped_exactly_once(markdown: str) -> None
 
 
 def test_a_literal_less_than_reads_back_as_the_character() -> None:
-    """Inbound, the reference is resolved: the Markdown carries a raw ``<``.
+    """Inbound, a ``<`` that opens nothing comes back as a raw ``<``.
 
     Worth pinning because it is the opposite of the spelling a caller may
-    use for its own pivot. ``markdownify`` does not escape a ``<`` in text,
-    so a ``<`` that EasyVista displays as text comes back raw -- and a
-    downstream renderer with raw HTML enabled would read ``<script>`` in that
-    position as markup. That hygiene is the caller's; see the module
-    docstring.
+    use for its own pivot. The reader escapes a ``<`` only where
+    python-markdown would read one -- before a letter, ``/``, ``!`` or ``?``,
+    or opening an e-mail autolink -- so ``a < b`` is left as it is, and a
+    ``<script>`` a memo displays as text comes back as ``&lt;script>``
+    (:func:`test_text_a_memo_displays_as_markup_comes_back_as_text`).
     """
 
     assert EasyvistaContentConverter.from_transport("<p>si a &lt; b alors a</p>") == (
@@ -415,10 +430,12 @@ def test_the_memo_the_defect_stored_reads_back_as_text_and_a_titled_link() -> No
     """What an already-synced memo reads as, and what writing it back sends.
 
     The HTML below is the ``COMMENT`` memo EasyVista stored on 2026-09-30,
-    host replaced (tier 4: that memo, on one instance). Reading it through
-    this converter keeps the escaped autolink as the *text* it was displayed
-    as, and turns the broken ``href`` -- the title fused into the target --
-    back into a link and a title, so the next write of that Markdown sends a
+    host replaced (tier 4: that memo, on one instance). It *displays* the
+    characters ``&lt;`` in front of the URL, and reading it through this
+    converter keeps exactly that text: the ``&`` would start a reference, so
+    it is spelled ``&amp;``, and writing the Markdown back sends the very
+    paragraph the memo holds. The broken ``href`` -- the title fused into
+    the target -- reads back as a link and a title, so the next write sends a
     working titled link. The first link stays text: what EasyVista displayed
     was literal text, and literal text is what reads back.
     """
@@ -431,10 +448,10 @@ def test_the_memo_the_defect_stored_reads_back_as_text_and_a_titled_link() -> No
 
     markdown = EasyvistaContentConverter.from_transport(stored)
 
-    assert markdown == f'Test !\n\n&lt;{PASTED_URL}>\n\n[url]({PASTED_URL} "url")'
+    assert markdown == (f'Test !\n\n&amp;lt;{PASTED_URL}>\n\n[url]({PASTED_URL} "url")')
     assert EasyvistaContentConverter.to_transport(markdown) == (
         "<p>Test !</p>\n"
-        f"<p>&lt;{PASTED_URL}&gt;</p>\n"
+        f"<p>&amp;lt;{PASTED_URL}&gt;</p>\n"
         f'<p><a href="{PASTED_URL}" title="url">url</a></p>'
     )
 
@@ -498,7 +515,9 @@ def test_memo_shapes_read_as_markdown(memo: str, expected: str) -> None:
 # converter behaves the same way, by design: the Markdown is the caller's own.
 # A caller relaying Markdown it did not write -- a sync between two ITSMs, for
 # one -- has to neutralise raw HTML and executable link schemes itself before
-# rendering, and these four are what it has to cover.
+# rendering, and the first three are what it has to cover. The fourth is the
+# one thing the inbound direction does now: text a memo displays is literal,
+# and comes back spelled as text.
 
 
 def test_raw_html_in_markdown_is_rendered_verbatim() -> None:
@@ -525,22 +544,24 @@ def test_an_executable_scheme_in_angle_brackets_is_not_made_a_link() -> None:
     )
 
 
-def test_text_a_memo_displays_as_markup_comes_back_as_markup() -> None:
-    """Read and written back, escaped markup becomes live markup.
+def test_text_a_memo_displays_as_markup_comes_back_as_text() -> None:
+    """Read and written back, text that looks like markup stays text.
 
-    ``markdownify`` resolves ``&lt;`` and does not escape the ``<`` it
-    produces, so a memo *showing* the text ``<script>...`` reads as Markdown
-    holding a raw ``<script>`` element, which the outbound direction then
-    passes through.
+    This used to be the other way round: ``markdownify`` resolved ``&lt;``
+    and did not escape the ``<`` it produced, so a memo *showing* the text
+    ``<script>...`` read as Markdown holding a raw ``<script>`` element, which
+    the outbound direction then passed through. A ``<`` that python-markdown
+    would read as a tag is spelled ``&lt;`` now, so the memo is written back
+    showing what it showed.
     """
 
     markdown = EasyvistaContentConverter.from_transport(
         "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>"
     )
 
-    assert markdown == "<script>alert(1)</script>"
+    assert markdown == "&lt;script>alert(1)&lt;/script>"
     assert EasyvistaContentConverter.to_transport(markdown) == (
-        "<script>alert(1)</script>"
+        "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>"
     )
 
 
@@ -610,10 +631,6 @@ LOSSY = {
         "a hard break (two trailing spaces). Semantically equivalent, and "
         "stable after one cycle."
     ),
-    "nested-list": (
-        "markdownify indents nested items by 2 spaces; python-markdown needs "
-        "4 to keep the nesting, so a second cycle flattens it."
-    ),
     "fence-with-language": (
         "fenced_code emits class='language-python' and markdownify drops the "
         "class, so the language tag cannot survive."
@@ -640,16 +657,10 @@ LOSSY = {
         "paragraph are whitespace markdownify drops at a paragraph's edge. The "
         "text and both links survive."
     ),
-    "defect-readback": (
-        "the text &lt;URL> reads back as <URL>, an autolink: what a memo "
-        "displayed as a literal URL in angle brackets becomes a working link "
-        "after one cycle."
-    ),
 }
 
 #: Cases a second cycle still changes, and why.
 UNSETTLED = {
-    "nested-list": LOSSY["nested-list"],
     "angle-bracket-text": LOSSY["angle-bracket-text"],
 }
 
@@ -756,29 +767,13 @@ def test_one_cycle_reaches_a_fixed_point(markdown: str) -> None:
             ),
         ),
         pytest.param(
-            "<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>",
-            id="nested-list",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "a nested list reads back with its items indented by 2 "
-                    "spaces, which python-markdown does not nest, so the first "
-                    "write flattens it."
-                ),
-            ),
+            "<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>", id="nested-list"
         ),
         pytest.param(
             "<p>Test !</p>"
             f"<p>&amp;lt;{PASTED_URL}&gt;</p>"
             f'<p><a href="{PASTED_URL} &quot;url&quot;">url</a></p>',
             id="defect-memo",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "the literal &lt;URL> text reads back as an autolink after "
-                    "the first write, as in the defect-readback round trip."
-                ),
-            ),
         ),
     ],
 )
@@ -865,34 +860,38 @@ def test_the_degraded_path_resolves_entities_and_block_boundaries() -> None:
 
 
 @pytest.mark.parametrize(
-    ("construct", "kept"),
+    ("construct", "converted_keeps", "degraded_keeps"),
     [
-        pytest.param("<!-- SECRET -->", False, id="resolved-comment"),
-        pytest.param("<!DOCTYPE SECRET>", False, id="doctype"),
-        pytest.param("<!SECRET>", False, id="bogus-declaration"),
-        pytest.param("<script>SECRET</script>", True, id="script-body"),
-        pytest.param("<style>SECRET</style>", True, id="style-body"),
-        pytest.param("<![CDATA[SECRET]]>", True, id="marked-section"),
-        pytest.param("<![CDATA[SECRET>", True, id="unterminated-marked-section"),
-        pytest.param("<?php SECRET ?>", True, id="processing-instruction"),
+        pytest.param("<!-- SECRET -->", False, False, id="resolved-comment"),
+        pytest.param("<!DOCTYPE SECRET>", False, False, id="doctype"),
+        pytest.param("<!SECRET>", False, False, id="bogus-declaration"),
+        pytest.param("<script>SECRET</script>", False, True, id="script-body"),
+        pytest.param("<style>SECRET</style>", False, True, id="style-body"),
+        pytest.param("<![CDATA[SECRET]]>", True, True, id="marked-section"),
+        pytest.param("<![CDATA[SECRET>", True, True, id="unterminated-marked-section"),
+        pytest.param("<?php SECRET ?>", True, True, id="processing-instruction"),
     ],
 )
-def test_the_degraded_path_keeps_exactly_what_the_converter_keeps(
-    construct: str, kept: bool
+def test_the_degraded_path_keeps_at_least_what_the_converter_keeps(
+    construct: str, converted_keeps: bool, degraded_keeps: bool
 ) -> None:
     """Parity, construct by construct, and not one of these was a guess.
 
     Each expectation here was read off the converting path rather than
-    reasoned about, and three came back the opposite way round from the
-    obvious answer -- a ``<script>`` body is *kept*, because
-    ``markdownify``'s ``strip=`` removes an element's markup and still
-    walks its children; so is a ``CDATA`` body; and so is the inside of
+    reasoned about, and two came back the opposite way round from the
+    obvious answer -- a ``CDATA`` body is *kept*, and so is the inside of
     any construct the parser could not resolve. Each of those was a silent
     deletion in glpi_python_client's degraded path until it was measured.
 
+    A ``<script>`` or ``<style>`` body is where the two paths part, in the
+    one direction allowed. The converting path used to keep it --
+    ``markdownify``'s ``strip=`` removed the element's markup and still
+    walked its children -- and now drops it, as a browser does; the
+    degraded path still keeps it.
+
     The bar is that a body must not say less because of the path it took,
-    so a divergence here is a bug even when the dropped text is
-    JavaScript.
+    so a divergence the other way would be a bug even if the text it lost
+    were JavaScript.
     """
 
     shallow = f"<p>a</p>{construct}<p>b</p>"
@@ -901,12 +900,12 @@ def test_the_degraded_path_keeps_exactly_what_the_converter_keeps(
     converted = EasyvistaContentConverter.from_transport(shallow)
     degraded = EasyvistaContentConverter.from_transport(deep)
 
-    # ``kept`` records what was measured, and is asserted only where the
-    # running parser still agrees with the measurement -- the reading of a
-    # malformed construct moves between CPython patch releases, and it is
-    # the parity below, not the snapshot, that this module promises.
-    if ("SECRET" in converted) is kept:
-        assert ("SECRET" in degraded) is kept
+    # What was measured is asserted only where the running parser still
+    # agrees with the measurement -- the reading of a malformed construct
+    # moves between CPython patch releases, and it is the superset below,
+    # not the snapshot, that this module promises.
+    if ("SECRET" in converted) is converted_keeps:
+        assert ("SECRET" in degraded) is degraded_keeps
     assert not ("SECRET" in converted and "SECRET" not in degraded)
 
 
@@ -925,7 +924,7 @@ def test_an_unterminated_raw_text_element_reads_the_same_on_both_paths() -> None
     )
 
 
-@pytest.mark.parametrize("depth", [1, 100, 200, 250, 300])
+@pytest.mark.parametrize("depth", [1, 100, 200, 250])
 def test_a_document_the_stack_can_hold_is_converted_in_full(depth: int) -> None:
     """Everything that fits must convert, and structure has to survive.
 
@@ -933,11 +932,12 @@ def test_a_document_the_stack_can_hold_is_converted_in_full(depth: int) -> None:
     earlier design predicted the depth and degraded past a fixed 200,
     which flattened every body between 200 and the real cliff to text, with
     no error to notice and no way for a caller to ask for better; the 250
-    and 300 cases are the ones that came back as prose. 300 is also as deep
-    as this can go and still hold on every supported interpreter: CPython
-    3.10 spends about three frames per level where 3.12 and later spend
-    two, so its cliff is 328 levels from a shallow stack (measured
-    2026-09-30), and pytest's own frames come off that.
+    case is one that came back as prose. It is also as deep as this goes,
+    so that it holds on every supported interpreter with room to spare:
+    CPython 3.10 spends about three frames per level where 3.12 and later
+    spend two, so its cliff is 328 levels from a shallow stack (measured
+    2026-09-30), pytest's own frames come off that, and a 300-level case
+    left 14 levels of margin.
     """
 
     html = "<div>" * depth + "<strong>offline</strong>" + "</div>" * depth
@@ -1562,8 +1562,11 @@ def test_a_document_the_parser_rejects_degrades_instead_of_raising() -> None:
 
     assert "SECRET" in EasyvistaContentConverter.from_transport(html)
     if _parser_rejects(html):
-        # The converting path cannot run at all, so the answer is the text.
-        assert EasyvistaContentConverter.from_transport(html) == _strip_tags(html)
+        # The converting path cannot run at all, so the answer is the text,
+        # spelled as the Markdown that renders as it.
+        assert EasyvistaContentConverter.from_transport(html) == (
+            conversion._literal_markdown(_strip_tags(html))
+        )
 
 
 def test_the_text_after_a_construct_the_parser_rejects_is_still_kept() -> None:
