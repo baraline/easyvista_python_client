@@ -1,0 +1,836 @@
+"""Content conversion between EasyVista memo HTML and canonical Markdown.
+
+**This module is a port.** It is ``glpi_python_client/content/conversion.py``
+from `glpi_python_client <https://github.com/baraline/glpi_python_client>`_
+at commit ``0d43528``, and **the two should move together**: a defect fixed in
+one is almost certainly present in the other, because the hard part of both is
+the behaviour of the same three libraries -- ``beautifulsoup4``'s
+``html.parser`` tree builder and ``markdownify`` inbound, ``python-markdown``
+outbound -- and not anything either ITSM does. The code is that file's, helper
+for helper, with the converter and its error renamed for this package
+(``GlpiContentConverter`` is :class:`EasyvistaContentConverter`,
+``GlpiContentError`` is :class:`~easyvista_python_client.EasyvistaContentError`)
+and the error messages naming EasyVista. The one other change carries a comment
+starting "Diverges from glpi_python_client", with the reason. Prose that stated
+something true only of GLPI now says whose measurement it was, and the figures
+that depend on the interpreter or on a library version were measured again
+here.
+
+What it converts
+----------------
+
+EasyVista keeps rich text in *memo* fields -- a ticket's ``COMMENT`` and
+``DESCRIPTION``, an action's ``DESCRIPTION`` -- which the client reads with
+``resolve_memo``. A memo holds the HTML it was sent: measured 2026-09-30 on
+one instance, a memo written through the API was stored byte for byte, and
+the web UI rendered its ``<p>`` elements as paragraphs. That is tier 4 -- one
+instance, one date, and it may not generalise; no vendor documentation of the
+memo format is recorded in ``docs/vendor-api-reference.md``. Nothing forces a
+memo to be HTML either, since a caller can write plain text, so
+:meth:`EasyvistaContentConverter.from_transport` takes both: HTML is converted
+and plain text comes back as it was.
+
+Neither direction sanitises, exactly as in glpi_python_client. Raw HTML
+inside the Markdown passes through :meth:`~EasyvistaContentConverter.to_transport`
+untouched, a ``javascript:`` link target is rendered as a live ``href``, and
+inbound, text that a memo *displays* as markup -- ``&lt;script&gt;`` -- comes
+back as a raw ``<script>``. Markdown a caller did not write needs those
+neutralised before it is rendered, and that is the caller's job.
+
+Nesting depth
+-------------
+
+Neither *parse* recurses -- ``html.parser`` is an iterative scanner -- but
+``markdownify`` walks the finished tree recursively, so inbound conversion has
+a nesting ceiling. Measured 2026-09-30 from a shallow stack against the
+default 1000-frame limit, with ``markdownify`` 1.2.3 and ``beautifulsoup4``
+4.15.0: the deepest ``<div>`` document that converts is 493 levels on CPython
+3.12, 3.13 and 3.14, and 328 on CPython 3.10, where each level costs about
+three frames instead of two. (glpi_python_client recorded 494 for ``<div>``,
+``<p>``, ``<blockquote>`` and ``<table><tr><td>``.) The per-level cost is
+what differs between interpreters, which is one more reason the number is not
+something to build on.
+
+**The ceiling is discovered rather than predicted.** Inbound conversion is
+attempted, and a ``RecursionError`` is caught and answered by stripping the
+document to its text instead -- see
+:meth:`EasyvistaContentConverter.from_transport`. glpi_python_client's
+earlier design estimated the depth up front and degraded past a fixed bound,
+and it was wrong in both directions: it degraded bodies that would have
+converted, because the bound had to assume the worst about the caller's
+remaining stack, and three rounds of review found seven ways for the estimate
+to come in *under* the real tree, each of which put a document through
+``markdownify`` and into the ``RecursionError`` the bound existed to prevent.
+Trying the conversion cannot be wrong about whether the conversion fits.
+
+Anything else that goes wrong in either direction surfaces as
+:class:`~easyvista_python_client.EasyvistaContentError`, so no parser fault
+escapes the package's exception taxonomy.
+
+**``sys.setrecursionlimit`` is deliberately not called, here or anywhere in
+the package.** It is process-global state that belongs to the application,
+not to a library an application imported; and raising the limit past what the
+C stack can hold turns a catchable ``RecursionError`` into a hard interpreter
+crash -- on Windows, an access violation with no traceback. It moves the
+cliff and makes falling off it worse. Degrading the one body that does not fit
+is the answer that does not. Running the walk in a thread with a larger stack
+was considered and rejected for the same reason: the recursion limit is a
+counter rather than a measurement of the stack, so a deeper thread still needs
+the global limit raised to use it.
+"""
+
+from __future__ import annotations
+
+import re
+from html import unescape
+from html.entities import html5 as _HTML5_REFERENCES
+from html.parser import HTMLParser
+
+from easyvista_python_client.exceptions import EasyvistaContentError
+
+# Diverges from glpi_python_client: there the three libraries are hard
+# dependencies. Here they are the optional ``content`` extra, so that
+# ``import easyvista_python_client`` stays as light as it was before this
+# module existed; nothing outside this subpackage imports it. A missing one is
+# answered with the command that installs all three, rather than with a bare
+# ``No module named 'markdownify'`` that names one package and not the extra.
+try:
+    from bs4 import ParserRejectedMarkup
+    from markdown import markdown as markdown_to_html
+    from markdownify import markdownify as html_to_markdown
+except ImportError as exc:
+    raise ImportError(
+        "easyvista_python_client.content needs the optional 'content' extra "
+        "(beautifulsoup4, markdown and markdownify). Install it with: "
+        'pip install "easyvista-python-client[content]"'
+    ) from exc
+
+#: Element names that make a ``<...>`` sequence markup rather than text.
+#:
+#: The HTML5 element set, which is what the parser behind ``markdownify``
+#: will actually recognise. Anything outside it -- ``<Enter>``, ``<T>``,
+#: ``</dev/null>`` -- parses as an *unknown* tag, whose markup is dropped
+#: while its (usually empty) body is kept, so the token silently vanishes
+#: from the middle of a sentence.
+_HTML_ELEMENTS = frozenset(
+    """
+    a abbr address area article aside audio b base bdi bdo blockquote body br
+    button canvas caption cite code col colgroup data datalist dd del details
+    dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2
+    h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label
+    legend li link main map mark menu meta meter nav noscript object ol optgroup
+    option output p param picture pre progress q rp rt ruby s samp script search
+    section select slot small source span strong style sub summary sup table
+    tbody td template textarea tfoot th thead time title tr track u ul var video
+    wbr
+    """.split()
+)
+
+#: python-markdown extensions applied when rendering outbound content.
+#:
+#: ``fenced_code`` and ``tables`` are here because without them the two
+#: constructs do not survive at all. A fence rendered without
+#: ``fenced_code`` becomes inline ``<code>``, which any HTML renderer that
+#: does not style it as preformatted shows as one run-on line --
+#: glpi_python_client saw exactly that in GLPI's web UI -- and which a later
+#: read writes back as inline code, so a pasted log degrades a little more on
+#: every edit. A table without ``tables`` renders as literal pipe characters.
+#:
+#: A language tag is still lost: ``markdownify`` drops the
+#: ``class="language-python"`` that ``fenced_code`` emits, so ```` ```python ````
+#: comes back as a bare fence. That is a limitation of the pair of
+#: libraries, not something an extension list can fix.
+_MARKDOWN_EXTENSIONS = ["nl2br", "sane_lists", "fenced_code", "tables"]
+
+#: One candidate tag: ``<`` or ``</`` immediately followed by a name.
+#:
+#: The ``<`` must abut the name, matching what an HTML parser accepts. That
+#: is what keeps ``2 < 3 > 1`` and ``x <= y`` text: a space after ``<``
+#: means no tag, so arithmetic never reaches the HTML path in the first
+#: place.
+_CANDIDATE_TAG = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)\b[^<>]*>")
+
+#: Elements that cannot contain anything, so nothing nests below them.
+#:
+#: ``html.parser`` -- the parser ``markdownify`` builds its tree with --
+#: closes these itself, so ``<br>`` a thousand times over is a thousand
+#: siblings, not a thousand levels. Measured: ``"<br>" * 5000`` parses one
+#: level deep and converts fine, while ``"<div>" * 5000`` parses 5000 deep
+#: and raises.
+#:
+#: The HTML5 void set, plus the ten legacy names ``bs4``'s HTML-parser tree
+#: builder also treats as empty. **The invariant is that this stays a
+#: subset of what the parser treats as empty**, and the direction matters:
+#: a name missing from here is counted as nesting when it does not, which
+#: costs an unnecessary degradation, while a name wrongly *in* here hides
+#: real nesting, which is a ``RecursionError``. Listing the legacy names
+#: only makes the count exact on old markup. Copied rather than imported --
+#: it lives in ``bs4.builder`` as
+#: ``HTMLTreeBuilder.DEFAULT_EMPTY_ELEMENT_TAGS``, which ``bs4``'s own
+#: documentation marks ``:meta private:`` -- and the subset invariant is
+#: asserted against a real parse in the unit tests, so a future ``bs4``
+#: cannot quietly break it. The two sets held the same 24 names when
+#: glpi_python_client copied them.
+_VOID_ELEMENTS = frozenset(
+    """
+    area base basefont bgsound br col command embed frame hr image img
+    input isindex keygen link menuitem meta nextid param source spacer
+    track wbr
+    """.split()
+)
+
+#: Elements whose boundary becomes a line break when tags are stripped.
+#:
+#: Used only by :func:`_strip_tags`. Removing a block element outright runs
+#: its neighbours together -- ``<p>a</p><p>b</p>`` becomes ``ab`` -- while
+#: putting a separator at *every* tag breaks words apart, turning
+#: ``<b>off</b>line`` into ``off line``. Splitting on the block/inline line
+#: keeps both readable. An unrecognised name counts as inline, matching how
+#: the normal path treats it: markup dropped, body kept in place.
+_BLOCK_ELEMENTS = frozenset(
+    """
+    address article aside blockquote br col dd details dialog div dl dt
+    fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup
+    hr li main menu nav ol p pre search section summary table tbody td
+    tfoot th thead tr ul
+    """.split()
+)
+
+
+#: One character reference, with or without its terminating semicolon.
+#:
+#: Resolved by :func:`_resolve_references` rather than by ``html.unescape``
+#: over the whole string. ``unescape`` implements the HTML5 rule of
+#: consuming the longest *known* name it can find, so a semicolon-less
+#: reference that is a prefix of a longer unknown word gets split --
+#: measured, ``http://x/?a=1&copyright=2`` becomes
+#: ``http://x/?a=1©right=2``, and a URL pasted into a memo is exactly
+#: where ``&copyright=`` and ``&notanentity=`` occur. The parser behind the
+#: converting path leaves those whole, so this does too.
+_CHARACTER_REFERENCE = re.compile(
+    r"&(?:\#[0-9]+;?|\#[xX][0-9a-fA-F]+;?|[A-Za-z][A-Za-z0-9]*;?)"
+)
+
+
+#: The ``/`` of a self-closing tag, with any space around it.
+_VOID_SELF_CLOSE = re.compile(r"\s*/\s*>$")
+
+
+def _resolve_references(text: str) -> str:
+    """Resolve character references the way the real parser would.
+
+    A numeric reference always resolves. A named one resolves only when
+    the whole name is known, which is the difference from
+    ``html.unescape``: that consumes the longest known *prefix*, so
+    ``&copyright=2`` loses its ``&copy`` and leaves ``right=2`` behind.
+    See :data:`_CHARACTER_REFERENCE`.
+
+    Where the two rules differ this one keeps the reference literal, which
+    is the safe direction for :func:`_strip_tags`, whose promise is that no
+    text goes missing.
+    """
+
+    def resolve(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if token[1] == "#":
+            return unescape(token)
+        return unescape(token) if token[1:] in _HTML5_REFERENCES else token
+
+    return _CHARACTER_REFERENCE.sub(resolve, text)
+
+
+def _looks_like_html(content: str) -> bool:
+    """Return whether ``content`` carries at least one real HTML element.
+
+    Deciding on the element *name* rather than on the presence of angle
+    brackets is what separates markup from prose that merely contains
+    ``<`` and ``>``. It cannot separate them perfectly: ``a<b>c`` is
+    genuinely ambiguous, because ``b`` is both a real element and a
+    plausible variable, and no probe reading the text alone can resolve
+    that. It resolves every case where the name is not an element at all,
+    which is where the silent deletions came from.
+    """
+
+    return any(
+        match.group(1).lower() in _HTML_ELEMENTS
+        for match in _CANDIDATE_TAG.finditer(content)
+    )
+
+
+class _ParserScan(HTMLParser):
+    """Walk a document with the parser that will convert it, not one like it.
+
+    Both remaining questions this module asks about raw HTML -- which
+    self-closing void tags to rewrite, and what the text is when the tree
+    will not fit the stack -- are questions about ``html.parser``'s
+    dispatch. This subclass asks ``html.parser`` instead of describing
+    it.
+
+    In glpi_python_client it replaced a regular expression that reproduced
+    that dispatch by imitation, and the imitation kept being wrong in ways
+    that showed up only after they shipped. A comment closes on
+    ``--\\s*>`` and not only on ``-->``, ``</ script>`` ends raw text,
+    ``<![IGNORE[`` opens a marked section, ``</ div foo>`` is a bogus
+    comment rather than an end tag, and ``<a href=/>`` leaves an element
+    *open* because the unquoted value swallows the ``/``. Two more were
+    cost rather than correctness: a run of whitespace inside a failing tag
+    made the attribute pattern backtrack as ``(a+)*``, and a 39-byte body
+    took 20.8 seconds.
+
+    Those seven were found as depth under-counts, back when that module
+    predicted the nesting depth instead of attempting the conversion. The
+    pattern's other two readers were wrong the same way: a derailed scan
+    meant :func:`_canonicalise_void_elements` never saw the ``<br />`` it
+    exists to rewrite, so
+    ``"<p>one<br>two</p><script>x</ script><p>three<br />TAIL</p>"`` lost
+    ``TAIL`` outright, and :func:`_strip_tags` inherited both the
+    misreadings and the backtracking.
+
+    Reading the parser's own event stream cannot be wrong about the
+    parser, so none of those remain judgement calls. It is also not a new
+    dependency nor a new risk: ``markdownify`` builds its tree with
+    ``bs4``, and ``bs4`` builds it with this same ``html.parser``, so
+    every pathology the parser has was already in the pipeline. Measured
+    by glpi_python_client on the shapes that made the pattern backtrack,
+    the ``markdownify`` call costs what this scan costs, to within a few
+    per cent.
+
+    ``convert_charrefs`` is ``False`` because that is what ``bs4`` passes
+    (in ``bs4.builder._htmlparser``), and the difference shows: with it
+    on, ``html.unescape`` consumes the longest *known* name, so
+    ``&copyright=2`` in a pasted URL loses its ``&copy``. Off, each
+    reference arrives as its own event and :func:`_resolve_references`
+    applies the whole-name rule the converting path applies.
+
+    ``collect_text`` separates the two callers: the void rewrite needs
+    only the spans, and accumulating the pieces of a 150 KB body for it
+    would be waste.
+
+    Parameters
+    ----------
+    content : str
+        The document to walk. Kept so spans can be sliced back out of it:
+        the parser reports what it found and where, and the source is the
+        only place the exact original spelling still exists.
+    collect_text : bool, optional
+        Whether to accumulate :attr:`pieces` for :func:`_strip_tags`.
+    """
+
+    def __init__(self, content: str, *, collect_text: bool = False) -> None:
+        super().__init__(convert_charrefs=False)
+        self._content = content
+        self._collect_text = collect_text
+        offsets = [0]
+        for line in content.splitlines(keepends=True):
+            offsets.append(offsets[-1] + len(line))
+        self._line_offsets = offsets
+        #: Source spans of ``<void ... />`` tags, for
+        #: :func:`_canonicalise_void_elements`.
+        self.void_spans: list[tuple[int, int]] = []
+        #: The document's text, in order, when ``collect_text`` is set.
+        self.pieces: list[str] = []
+        #: Set when ``html.parser`` gave up on the document.
+        self.rejected = False
+
+    def _at(self) -> int:
+        """Return the absolute offset of the construct being handled.
+
+        ``goahead`` calls ``updatepos`` up to the start of each construct
+        before dispatching it, so ``getpos`` addresses the construct
+        itself. It reports a line and a column, and every span sliced
+        here needs an index, which is what the line table built in
+        ``__init__`` converts between.
+        """
+
+        lineno, offset = self.getpos()
+        return self._line_offsets[lineno - 1] + offset
+
+    def _text(self, piece: str) -> None:
+        if self._collect_text:
+            self.pieces.append(piece)
+
+    def _boundary(self, tag: str) -> None:
+        """Record a block element's edge as a line break.
+
+        See :data:`_BLOCK_ELEMENTS` for why the block/inline line is the
+        one that matters here.
+        """
+
+        if self._collect_text and tag in _BLOCK_ELEMENTS:
+            self.pieces.append("\n")
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        self._boundary(tag)
+
+    def handle_startendtag(self, tag: str, attrs: object) -> None:
+        """Count a ``<foo/>`` as a leaf, and note a void one to rewrite.
+
+        This is the event :func:`_canonicalise_void_elements` needs, and
+        the one a pattern cannot identify reliably. ``html.parser``
+        reaches it only when the stripped remainder of the tag is exactly
+        ``/>``, so ``<br />`` arrives here while ``<br  /  >`` is an
+        ordinary start tag. Deciding it on the event means the workaround
+        fires on exactly the tags that trigger the ``bs4`` defect, and on
+        no others.
+        """
+
+        if tag in _VOID_ELEMENTS:
+            token = self.get_starttag_text()
+            start = self._at()
+            if token is not None and self._content.startswith(token, start):
+                self.void_spans.append((start, start + len(token)))
+        self._boundary(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        self._boundary(tag)
+
+    def handle_data(self, data: str) -> None:
+        """Keep character data, a raw-text element's body included.
+
+        A ``<script>`` or ``<style>`` body arrives here because the parser
+        is in CDATA mode, and it is kept for the reason recorded in
+        :func:`_strip_tags`: ``markdownify``'s ``strip=`` removes an
+        element's markup and still walks its children, so the body
+        reaches the converted output as text.
+        """
+
+        self._text(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self._text(self._reference_at())
+
+    def handle_charref(self, name: str) -> None:
+        self._text(self._reference_at())
+
+    def _reference_at(self) -> str:
+        """Return a character reference exactly as it was written.
+
+        The event carries the name but not whether a semicolon closed it,
+        and that is what decides whether the reference resolves -- so the
+        source is re-read rather than the token rebuilt from the name.
+        See :data:`_CHARACTER_REFERENCE`.
+        """
+
+        match = _CHARACTER_REFERENCE.match(self._content, self._at())
+        return match.group(0) if match is not None else ""
+
+    def handle_pi(self, data: str) -> None:
+        """Keep a processing instruction's body, which the converter prints.
+
+        Measured, not assumed, and the delimiters are the detail that
+        matters: ``bs4`` files the instruction as a string node, so
+        ``<p>a</p><?php SECRET ?><p>b</p>`` converts to
+        ``"a\\n\\nphp SECRET ?\\n\\nb"`` -- the body, without its ``<?``
+        and ``>``. Keeping the body alone therefore matches the
+        converting path exactly, where keeping the whole construct used
+        to leave punctuation in an output that promises none.
+        """
+
+        self._text(data)
+
+    def keep_remainder(self) -> None:
+        """Hand back the text of the region the parser stopped on.
+
+        Called only when it raised, so that the degraded path still
+        carries every word after the construct it could not read.
+        """
+
+        self._text(self._content[self._at() :])
+
+    def unknown_decl(self, data: str) -> None:
+        """Keep the body of a ``CDATA`` section or a marked section.
+
+        Counter-intuitive, and measured rather than assumed: ``bs4`` files
+        both as a string node, and ``markdownify`` prints a string node
+        that is neither a comment nor a doctype. So ``<![IGNORE[x]]>``
+        contributes ``IGNORE[x`` to the converted output, and dropping it
+        here would make the same document say less on the degraded path
+        than on the converting one.
+        """
+
+        self._text(data[6:] if data.startswith("CDATA[") else data)
+
+
+def _scan(content: str, *, collect_text: bool = False) -> _ParserScan:
+    """Run one :class:`_ParserScan` over ``content`` and hand it back.
+
+    The parser gives up on two constructs -- an unknown marked-section
+    keyword such as ``<![FOO[``, and a ``[`` where a declaration cannot
+    hold one -- by raising ``AssertionError`` from ``_markupbase``. That
+    is not a case to guess around, because ``bs4`` catches the same
+    ``AssertionError`` and re-raises it as ``ParserRejectedMarkup``: a
+    document that stops this scan is a document ``markdownify`` cannot
+    convert either. So the partial scan is kept and the remainder of the
+    source is handed to :attr:`_ParserScan.pieces` as text, which is what
+    lets :meth:`EasyvistaContentConverter.from_transport` answer that
+    rejection with the body's words instead of an exception.
+
+    Parameters
+    ----------
+    content : str
+        The document to walk.
+    collect_text : bool, optional
+        Whether the scan should accumulate the document's text.
+
+    Returns
+    -------
+    _ParserScan
+        The finished scan, whether or not the parser ran out of document.
+    """
+
+    scan = _ParserScan(content, collect_text=collect_text)
+    try:
+        scan.feed(content)
+        scan.close()
+    except AssertionError:
+        scan.rejected = True
+        scan.keep_remainder()
+    return scan
+
+
+def _strip_tags(content: str) -> str:
+    """Reduce HTML to its text without building a tree, keeping every word.
+
+    The fallback for a document ``markdownify`` could not walk -- deeper
+    than the caller's remaining stack, or refused by the parser outright.
+    One pass of :class:`_ParserScan`, then whitespace tidying. No tree,
+    no recursion and no ceiling of its own, which is what qualifies it as
+    the fallback: it answers for input of any shape and any depth, so
+    there is always something to give the caller.
+
+    It **degrades and never truncates.** The property, stated as
+    something checkable: after collapsing whitespace, every character the
+    converting path would have produced also appears here, in order. A
+    superset, not an equality -- so no body says less because of the path
+    it took, which is the only guarantee worth making about a fallback.
+
+    Establishing that meant measuring what the converting path really
+    keeps, construct by construct, rather than assuming. Three answers
+    were counter-intuitive and each was a silent deletion in
+    glpi_python_client before it was checked: a ``<script>``/``<style>``
+    body is *kept*, because ``markdownify``'s ``strip=`` removes an
+    element's markup and still walks its children; so is a ``CDATA``
+    body; and so is the inside of any ``<!``/``<?`` construct the parser
+    could not resolve, which it hands back as character data.
+
+    What it does **not** reproduce, none of which loses a character of
+    prose:
+
+    * Markup that only the converter can express: a link becomes its text
+      without the target, an image contributes nothing, and a fenced
+      block loses its fence -- so ``<pre>`` indentation is normalised
+      away with the rest. A pasted log comes back as its own lines of
+      text, not as a code block.
+    * Whitespace is normalised harder. Runs of spaces collapse, and
+      ``&nbsp;`` counts as whitespace, so ``&nbsp;``-padded column
+      alignment does not survive.
+    * Character references are resolved even inside a region the parser
+      handed back as raw data, so a broken comment's ``&amp;`` comes back
+      as ``&``. In the other direction, a handful of semicolon-less
+      references stay literal here that the converter resolves -- see
+      :func:`_resolve_references`, which errs that way on purpose.
+    * Whitespace falls differently at a markup boundary, in both
+      directions: the converter joins ``a<b>c`` as ``a**c**`` where this
+      joins it as ``ac``, and this breaks a line at a block edge the
+      converter runs together. Which is why the property is about the
+      order of the characters of prose and not about where the spaces
+      land.
+
+    Parameters
+    ----------
+    content : str
+        Raw HTML.
+
+    Returns
+    -------
+    str
+        The document's text, block boundaries preserved as line breaks
+        and character references resolved.
+    """
+
+    if ">" not in content:
+        # No ``>`` means no markup to skip, so the whole document is the
+        # text the parser would flush on ``close()``. Answering it here
+        # also keeps the scan away from the one shape that costs
+        # ``html.parser`` more than linear time: with no ``>`` to finish a
+        # tag, ``close()`` advances one character at a time and rescans
+        # the tail, and 32 KB of an unfinished tag takes 13 seconds
+        # (measured by glpi_python_client).
+        text = _resolve_references(content)
+    else:
+        text = _resolve_references("".join(_scan(content, collect_text=True).pieces))
+    text = re.sub(r"[^\S\n]*\n[^\S\n]*", "\n", text)
+    text = re.sub(r"[^\S\n]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _canonicalise_void_elements(content: str) -> str:
+    """Rewrite ``<br />`` as ``<br>``, so the text after it is not lost.
+
+    A workaround for a ``beautifulsoup4`` defect, reachable from ordinary
+    editor output and silent when it fires. glpi_python_client measured it
+    on 4.14.3. **It no longer reproduces on 4.15.0** (measured 2026-09-30 on
+    CPython 3.10, 3.12, 3.13 and 3.14, every shape below); the workaround
+    stays because the ``content`` extra accepts ``beautifulsoup4`` 4.12 and
+    later, and on current releases it changes no output.
+
+    ``bs4``'s ``html.parser`` builder auto-closes a bare ``<br>`` and
+    records the name in ``already_closed_empty_element``, a list keyed by
+    name alone, so a later ``</br>`` can be ignored as redundant. If no
+    ``</br>`` ever arrives the entry simply stays there. The next
+    ``<br />`` -- which reaches the builder as ``handle_startendtag`` --
+    opens a real element and then closes it itself, and *that* close
+    finds the stale entry, treats the element as already closed, and
+    leaves it open. Every following sibling becomes a child of the
+    ``<br>``.
+
+    ``get_text`` still walks those children, which is why the tree looks
+    intact, but ``markdownify``'s ``convert_br`` ignores an element's
+    children and returns a line break. The text is gone:
+    ``"<p>line1<br>line2</p><p>para2<br />line4</p>"`` converted to
+    ``"line1  \\nline2\\n\\npara2"`` on 4.14.3 -- and note the two
+    spellings are in different paragraphs, because a name once recorded
+    poisons the rest of the document. ``<img>`` and ``<hr>`` lose text the
+    same way; they are the other two converters that discard children. One
+    bare ``<br>`` anywhere before one ``<br />`` is the whole precondition,
+    and a memo is written by more than one client -- the web UI and every
+    API caller.
+
+    Rewriting to the bare spelling removes the ``handle_startendtag``
+    path for void elements, which is where the asymmetry lives; both
+    spellings already build the same node, so nothing else about the
+    output moves. Only the names in :data:`_VOID_ELEMENTS` are touched,
+    and only where the parser really reports ``handle_startendtag``: a
+    self-closed ``<div/>`` is left alone, and cannot be affected anyway,
+    since only a void name is ever recorded.
+
+    Which tags those are is the parser's answer rather than this
+    module's, and that is not cosmetic. Deciding it by pattern meant
+    inheriting every way the pattern could be derailed, and a derailed
+    scan reinstates the very defect this works around: measured by
+    glpi_python_client,
+    ``"<p>one<br>two</p><script>x</ script><p>three<br />TAIL</p>"``
+    lost ``TAIL`` outright, because ``</ script>`` ends raw text for the
+    parser but not for the pattern, so the ``<br />`` after it was never
+    seen and never rewritten. ``<img>`` and ``<hr>`` lost their tails the
+    same way.
+
+    Parameters
+    ----------
+    content : str
+        Raw HTML.
+
+    Returns
+    -------
+    str
+        The same HTML with self-closing void tags written bare.
+    """
+
+    if "/>" not in content:
+        return content
+    spans = _scan(content).void_spans
+    if not spans:
+        return content
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        pieces.append(content[cursor:start])
+        pieces.append(_VOID_SELF_CLOSE.sub(">", content[start:end]))
+        cursor = end
+    pieces.append(content[cursor:])
+    return "".join(pieces)
+
+
+class EasyvistaContentConverter:
+    """Convert content between EasyVista memo HTML and canonical Markdown.
+
+    Two static methods, one per direction:
+    :meth:`from_transport` reads a memo -- rich-text HTML or plain text --
+    as Markdown, and :meth:`to_transport` renders Markdown as the HTML a
+    memo is written with.
+
+    Nothing in the client calls this. The read models keep a memo exactly
+    as the API returned it, and ``TicketContext.to_markdown`` still reduces
+    memos with the package's dependency-free text reducer, so a caller
+    converts where it wants Markdown. That is also why the rules live in one
+    place: every caller converting a memo gets the same Markdown for it.
+
+    Semantics are ``glpi_python_client``'s ``GlpiContentConverter`` at
+    ``0d43528``; see the module docstring for what the port changed.
+    """
+
+    @staticmethod
+    def from_transport(value: object) -> str:
+        """Convert one EasyVista memo value into canonical Markdown.
+
+        Empty input stays empty, plain text is preserved, and HTML content
+        is normalized through ``markdownify`` with the package's preferred
+        options: ATX headings, ``-`` bullets, ``<script>``/``<style>``
+        markup stripped, and underscores and asterisks in prose left
+        unescaped so ``snake_case`` does not grow backslashes on every read.
+
+        The HTML path is taken only when :func:`_looks_like_html` finds a
+        real element, and both directions of that decision matter, because
+        a memo is not always HTML: text a caller wrote through the API
+        without rendering it is stored as it was sent. Text sent down the
+        HTML path loses whatever the parser does not recognise, and Markdown
+        sent down it comes back escaped.
+
+        There are therefore three outcomes, not two. Real HTML that fits
+        the stack is converted. Real HTML that does not is stripped to its
+        text instead: ``markdownify`` recurses two to three frames per
+        nesting level depending on the interpreter, so the conversion is
+        *attempted* and its ``RecursionError`` answered, rather than the
+        depth predicted and a bound applied. The caller gets a readable body
+        either way; **this method degrades, it does not truncate, and it
+        does not raise for depth.**
+
+        Attempting it is what makes the answer exact. The budget is not
+        1000 frames, it is whatever is left of the stack when the
+        conversion starts, and that belongs to the caller -- an application
+        converting a memo from inside a request handler, a template render
+        or a recursive walk has less of it than a script does. No bound
+        computed in advance can know that number: glpi_python_client's
+        earlier design guessed low, 200 against a measured cliff of 494,
+        and flattened bodies that would have converted.
+
+        One consequence is the price of that exactness and worth naming:
+        the outcome depends on the caller's remaining stack, so the same
+        body can convert from one call site and degrade from a deeper one.
+        Nothing is lost either way -- the degraded rendering keeps every
+        character of prose -- but a caller comparing two renderings of one
+        body should know which knob moved it.
+
+        Self-closing void tags are written bare before conversion, which
+        works around a ``beautifulsoup4`` defect that silently dropped
+        everything after the second spelling of ``<br>`` in a body that
+        used both -- see :func:`_canonicalise_void_elements`.
+
+        A document ``html.parser`` refuses outright takes the degraded
+        path as well. ``<![FOO[`` is the reachable case: an unknown
+        marked-section keyword, which ``_markupbase`` raises
+        ``AssertionError`` for and ``bs4`` re-raises as
+        ``ParserRejectedMarkup``. A caller who can read their text is
+        better off than one holding an error, and there is nothing else to
+        be done with such a body, so it is stripped too.
+
+        **Nothing is sanitised.** Text a memo displays as markup --
+        ``&lt;script&gt;`` -- comes back as a raw ``<script>``, because
+        ``markdownify`` does not escape a ``<`` in text. That Markdown is
+        safe to read and unsafe to render with raw HTML enabled; see the
+        module docstring.
+
+        Parameters
+        ----------
+        value : object
+            The memo as ``resolve_memo`` returned it: HTML, plain text or
+            ``None``. Anything else is converted with ``str`` first.
+
+        Returns
+        -------
+        str
+            The memo as Markdown, stripped of leading and trailing
+            whitespace; ``""`` for an empty memo.
+
+        Raises
+        ------
+        EasyvistaContentError
+            The parser failed for some reason other than depth. The original
+            exception is attached as ``__cause__``. Nothing is expected to
+            reach this -- it is here so a parser fault cannot escape
+            ``except EasyvistaError`` as a bare builtin.
+        """
+
+        content = str(value or "")
+        if not content.strip():
+            return ""
+        if not _looks_like_html(content):
+            return content.strip()
+        try:
+            markdown = html_to_markdown(
+                _canonicalise_void_elements(content),
+                heading_style="ATX",
+                bullets="-",
+                strip=["script", "style"],
+                escape_underscores=False,
+                escape_asterisks=False,
+            )
+        except (RecursionError, ParserRejectedMarkup):
+            # The tree is deeper than the stack left, or the parser will
+            # not build it at all. Both are answered with the text.
+            try:
+                return _strip_tags(content)
+            except RecursionError as exc:
+                # Reachable only from a caller already within a few frames
+                # of the limit, where stripping cannot run either. Named
+                # rather than allowed to escape as a bare builtin, which is
+                # what this taxonomy exists for.
+                raise EasyvistaContentError(
+                    "Could not convert EasyVista HTML content to Markdown: "
+                    "the caller's stack left too little room even to strip "
+                    "its tags."
+                ) from exc
+        except Exception as exc:
+            raise EasyvistaContentError(
+                "Could not convert EasyVista HTML content to Markdown "
+                f"({type(exc).__name__}: {exc})."
+            ) from exc
+        return str(markdown).strip()
+
+    @staticmethod
+    def to_transport(value: object) -> str:
+        """Convert one canonical Markdown value into EasyVista memo HTML.
+
+        Empty Markdown stays empty, while non-empty content is rendered
+        through python-markdown with the ``nl2br``, ``sane_lists``,
+        ``fenced_code`` and ``tables`` extensions and ``html5`` output, so a
+        lone newline becomes ``<br>``, a fence a ``<pre><code>`` block and a
+        table a ``<table>``.
+
+        There is no depth ceiling on this direction and no degraded path.
+        Inbound content is whatever EasyVista happens to hold, so it has to
+        be survivable; outbound content is what the caller just wrote, so a
+        failure is worth reporting rather than papering over. ``markdown``
+        recurses on nested constructs too -- measured, a list indented 500
+        levels raises -- so the failure is caught and named.
+
+        **Nothing is sanitised**, as in glpi_python_client: raw HTML in the
+        Markdown is passed through verbatim, and a ``javascript:`` link
+        target becomes a live ``href``. Neutralise both before calling this
+        on Markdown you did not write.
+
+        Parameters
+        ----------
+        value : object
+            Markdown, or ``None``. Anything else is converted with ``str``
+            first.
+
+        Returns
+        -------
+        str
+            The rendered HTML, stripped of leading and trailing whitespace;
+            ``""`` for empty Markdown, never ``<p></p>``.
+
+        Raises
+        ------
+        EasyvistaContentError
+            The Markdown could not be rendered. The original exception is
+            attached as ``__cause__``.
+        """
+
+        markdown = str(value or "")
+        if not markdown.strip():
+            return ""
+        try:
+            html = markdown_to_html(
+                markdown,
+                extensions=_MARKDOWN_EXTENSIONS,
+                output_format="html5",
+            )
+        except Exception as exc:
+            raise EasyvistaContentError(
+                "Could not render Markdown content as EasyVista HTML "
+                f"({type(exc).__name__}: {exc})."
+            ) from exc
+        return str(html).strip()

@@ -1,0 +1,15 @@
+"""Markdown <-> EasyVista memo HTML conversion: the optional ``content`` extra.
+
+Install it with ``pip install "easyvista-python-client[content]"``. Importing
+this subpackage without the extra raises :class:`ImportError` naming that
+command. Nothing else in the package imports it, so ``import
+easyvista_python_client`` needs none of the extra's dependencies, and
+:class:`~easyvista_python_client.EasyvistaContentError` -- the one error the
+converter raises -- lives in the core package, catchable either way.
+"""
+
+from __future__ import annotations
+
+from easyvista_python_client.content.conversion import EasyvistaContentConverter
+
+__all__ = ["EasyvistaContentConverter"]

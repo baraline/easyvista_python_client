@@ -80,7 +80,24 @@ Issues = "https://github.com/baraline/easyvista_python_client/issues"
 Source = "https://github.com/baraline/easyvista_python_client"
 
 [project.optional-dependencies]
+# The Markdown <-> memo HTML converter, `easyvista_python_client.content`.
+# Optional so the core stays httpx + pydantic + tenacity: nothing outside that
+# subpackage imports these, and importing it without them raises an
+# ImportError naming `pip install "easyvista-python-client[content]"`. The same
+# three floors as glpi_python_client, whose converter this one ports. They are
+# repeated in `dev` (CI installs `.[dev]` and runs the converter's tests) and
+# in `docs` (Read the Docs installs `.[docs]`, and autodoc imports the module);
+# testing/test_public_api.py fails if a copy drifts.
+content = [
+    "beautifulsoup4>=4.12",
+    "markdown>=3.6",
+    "markdownify>=0.13",
+]
+
 dev = [
+    "beautifulsoup4>=4.12",
+    "markdown>=3.6",
+    "markdownify>=0.13",
     "build>=1.2",
     "mypy>=1.11",
     "numpydoc>=1.8",
@@ -119,6 +136,9 @@ dev = [
 ]
 
 docs = [
+    "beautifulsoup4>=4.12",
+    "markdown>=3.6",
+    "markdownify>=0.13",
     "numpydoc>=1.8",
     "sphinx>=7.2,<8.2",
     "sphinx-rtd-theme>=2.0",

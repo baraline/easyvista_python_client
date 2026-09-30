@@ -51,3 +51,27 @@ class EasyvistaServerError(EasyvistaError):
 
 class EasyvistaConnectionError(EasyvistaError):
     """Transport-level failure (timeout, connection refused, etc.)."""
+
+
+class EasyvistaContentError(EasyvistaError):
+    """A rich-text value could not be converted between memo HTML and Markdown.
+
+    Raised by
+    :class:`~easyvista_python_client.content.EasyvistaContentConverter`, in
+    either direction, when a parser fails for any reason other than the
+    memo being nested too deeply; the underlying fault is always attached as
+    ``__cause__``. The converter is the optional ``content`` extra, but this
+    class is part of the core package, so ``except EasyvistaContentError``
+    works whether or not the extra is installed.
+
+    It exists so that no failure of the content layer escapes the package's
+    taxonomy. The conversion runs third-party parsers (``markdownify``
+    inbound, ``markdown`` outbound), and a parser fault would otherwise reach
+    the caller as a bare builtin that ``except EasyvistaError`` does not
+    catch. HTML nested too deeply to convert is not an error at all: it is
+    answered with the memo's text instead.
+
+    No request is involved, so the converter raises it with a message alone
+    and ``status_code``, ``ev_code``, ``ev_message`` and ``body`` stay
+    ``None``. Mirrors ``glpi_python_client``'s ``GlpiContentError``.
+    """

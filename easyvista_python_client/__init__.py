@@ -16,6 +16,7 @@ from .discovery import (
 from .exceptions import (
     EasyvistaAuthError,
     EasyvistaConnectionError,
+    EasyvistaContentError,
     EasyvistaError,
     EasyvistaNotFound,
     EasyvistaRateLimitError,
@@ -63,6 +64,7 @@ __all__ = [
     "EasyvistaClient",
     "EasyvistaConfig",
     "EasyvistaConnectionError",
+    "EasyvistaContentError",
     "EasyvistaError",
     "EasyvistaNotFound",
     "EasyvistaRateLimitError",

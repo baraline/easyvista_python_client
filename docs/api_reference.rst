@@ -154,6 +154,8 @@ Exceptions
 
 .. autoexception:: easyvista_python_client.exceptions.EasyvistaConnectionError
 
+.. autoexception:: easyvista_python_client.exceptions.EasyvistaContentError
+
 Resource engine
 ---------------
 
