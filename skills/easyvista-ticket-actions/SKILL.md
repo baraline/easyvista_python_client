@@ -529,7 +529,9 @@ with EasyvistaClient.from_env() as client:
   `EasyvistaContentConverter.to_transport(markdown)` for the `description` you
   write, `EasyvistaContentConverter.from_transport(memo)` on what
   `resolve_memo` returns. Import it from the `easyvista_python_client.content`
-  subpackage. It sanitises nothing: raw HTML and `javascript:` link targets go
+  subpackage. Reading spells a note's text as literal text (`__init__` comes
+  back as `\_\_init\_\_`), so render the Markdown rather than stripping its
+  backslashes. It sanitises nothing: raw HTML and `javascript:` link targets go
   out live, so neutralise both in Markdown you did not write — a comment sync
   relaying another ITSM's text is exactly that case.
 - **`create_action` resolves an implicit parent** and needs exactly **one** open

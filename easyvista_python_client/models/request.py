@@ -55,8 +55,10 @@ class Request(EasyvistaModel):
     title: str | None = Field(default=None, alias="TITLE")
     # The list view returns DESCRIPTION inline (a string); the single-ticket GET
     # expands it into an HREF reference object (``{"HREF": ".../description"}``).
-    # Accept either so both read paths validate. Whether the resolved text is
-    # HTML or plain text is still unverified (spec open item O4).
+    # Accept either so both read paths validate. The resolved text is whatever
+    # its writer sent, HTML or plain text: measured 2026-09-30 on one instance
+    # (tier 4, may not generalise), and what is still unknown is open item
+    # O-MEMOFORMAT in docs/vendor-api-reference.md.
     description: str | dict[str, Any] | None = Field(default=None, alias="DESCRIPTION")
     external_reference: str | None = Field(default=None, alias="EXTERNAL_REFERENCE")
 

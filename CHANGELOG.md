@@ -27,15 +27,32 @@ public surface, not for a break.
 
 - `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
   optional extra `easyvista-python-client[content]` (`beautifulsoup4>=4.12`,
-  `markdown>=3.6`, `markdownify>=0.13`). Two static methods:
+  `markdown>=3.6`, `markdownify>=1.2`). Two static methods:
   `from_transport(value)` reads a memo -- rich-text HTML or plain text -- as
   canonical Markdown, and `to_transport(value)` renders Markdown as the HTML a
   memo is written with.
 
-  It is a port of `glpi_python_client`'s `content/conversion.py` at `0d43528`,
-  with the same options, extensions and edge-case handling, so with the same
-  library versions the two produce the same Markdown from the same HTML. **The
-  two should move together.** The only code divergence is the optional extra.
+  It is a port of `glpi_python_client`'s `content/conversion.py` at `4fc3bed`,
+  the literal-safe converter, with the same rules, extensions and edge-case
+  handling, so with the same library versions the two produce the same
+  Markdown from the same HTML. **The two should move together.** The only code
+  divergence is the optional extra.
+
+  **Text in a memo is literal, and the Markdown spells it so**: a character is
+  escaped exactly where python-markdown, with the four extensions
+  `to_transport` uses, would otherwise read it as syntax -- a typed `__init__`
+  reads as `\_\_init\_\_`, `\\serveur` as `\\\serveur`, `#4521` at a line start
+  as `\#4521`, `<Entrée>` as `&lt;Entrée>` -- and nowhere else, so ordinary
+  prose such as `fichier_de_test_v2.xlsx` or `R&D` comes back as typed.
+  Rendering the Markdown displays what the memo displayed, and reading that
+  back gives the same Markdown: both are tested with an HTML parser over
+  realistic memos and a seeded fuzzer. Nested lists nest and keep their
+  numbers, `<script>`, `<style>` and `<title>` bodies are dropped, and the
+  obsolete elements (`<font>`, `<center>`, ...) make a memo HTML. The
+  `markdownify` floor is 1.2 because the converter subclasses
+  `MarkdownConverter` and relies on its 1.x hooks, which 0.13 does not have.
+  A memo holding one real HTML element is read as HTML throughout, so
+  Markdown syntax beside it is kept as literal characters.
 
   Why it is here: until now this package could only strip HTML to plain text,
   so a downstream GLPI-to-EasyVista sync wrote its own converter. Measured
@@ -51,9 +68,9 @@ public surface, not for a break.
   `RecursionError` answered with the memo's words, and the cliff is measured
   at 493 levels on CPython 3.12-3.14 but 328 on 3.10. And **it is not a
   sanitiser**: raw HTML and `javascript:` link targets in the Markdown go out
-  live, and text a memo displays as markup (`&lt;script&gt;`) reads back as
-  raw markup. A caller relaying Markdown it did not write must neutralise
-  both.
+  live. A caller relaying Markdown it did not write must neutralise both. Text
+  a memo *displays* as markup (`&lt;script&gt;`) reads back escaped, as the
+  text it is.
 
   Importing `easyvista_python_client.content` without the extra raises an
   `ImportError` naming `pip install "easyvista-python-client[content]"`.
@@ -80,13 +97,16 @@ public surface, not for a break.
 
 ### Notes
 
-- The round-trip inventory is a test, not a promise: eight Markdown shapes do
+- The round-trip inventory is a test, not a promise: six Markdown shapes do
   not survive one write-then-read cycle exactly, each a strict xfail with the
   measured reason -- among them a lone newline, which comes back as a hard
-  break, and a nested list, which a second cycle flattens. Past the first
-  cycle a second changes nothing more, except for that nested list and for
+  break. Past the first cycle a second changes nothing more, except for
   angle-bracket text such as `use the <Enter> key`, which is sent as a live
-  unknown tag and lost.
+  unknown tag and lost. What Markdown cannot carry at all when a memo is read
+  -- strikethrough, adjacent lists merging, two `<br>` in a row, a line break
+  in a table cell, a `<pre>` opening a list item -- is a second inventory,
+  `test_what_markdown_cannot_carry`, each case asserted to stabilise after
+  one cycle.
 - The `beautifulsoup4` defect glpi_python_client works around -- text after a
   `<br />` dropped in a body that also used `<br>` -- no longer reproduces on
   4.15.0 (measured 2026-09-30, CPython 3.10 and 3.12-3.14). The workaround

@@ -231,7 +231,12 @@ with EasyvistaClient.from_env() as client:
   `EasyvistaContentConverter.to_transport(markdown)` before the write,
   `EasyvistaContentConverter.from_transport(memo)` on what `resolve_memo`
   returns. It lives in the `easyvista_python_client.content` subpackage, not
-  the package root, so it is not imported unless you ask for it. It sanitises
+  the package root, so it is not imported unless you ask for it. Reading
+  spells a memo's text as literal text -- a typed `__init__` comes back as
+  `\_\_init\_\_`, `#4521` at a line start as `\#4521`, `<Entrée>` as
+  `&lt;Entrée>` -- so render the Markdown to display it rather than
+  stripping the backslashes, and write a memo as HTML or as Markdown, not
+  both: one real HTML element makes the whole value HTML. It sanitises
   nothing: raw HTML and `javascript:` link targets in the Markdown go out
   live, so neutralise both in Markdown you did not write.
 - A `description` passed to **`PostRequest`** at create time was not readable

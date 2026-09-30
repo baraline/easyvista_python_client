@@ -70,12 +70,35 @@ The test is the element *name*, not the
 presence of angle brackets: ``use the <Enter> key`` and ``if x<y then z>0`` are
 text, because neither ``Enter`` nor ``y`` is an HTML element.
 
-Real HTML goes through ``markdownify`` with ATX headings, ``-`` bullets,
-``<script>`` and ``<style>`` markup stripped, and underscores and asterisks in
-prose left unescaped, so ``snake_case`` does not grow a backslash on every read.
-An anchor whose text is its own URL -- a pasted link -- reads as the autolink
-``<https://...>``; a ``title`` attribute reads as a link title,
+Real HTML goes through ``markdownify``, and **the text in it is literal**: the
+Markdown spells it so that rendering it -- with ``to_transport``, or any
+python-markdown using the same four extensions -- displays what the memo
+displayed. Markdown has one spelling for a ``__init__`` a user typed and for
+bold ``init``, so a character is escaped exactly where python-markdown would
+otherwise read it as syntax, and nowhere else:
+
+.. code-block:: python
+
+   EasyvistaContentConverter.from_transport(
+       "<p>Voir __init__ et \\\\serveur\\partage</p><p># pas un titre</p>"
+   )
+   # 'Voir \\_\\_init\\_\\_ et \\\\\\serveur\\partage\n\n\\# pas un titre'
+
+Ordinary prose carries no escape at all -- ``fichier_de_test_v2.xlsx``,
+``C:\Temp``, ``R&D``, ``snake_case``, a ``#`` or a ``-`` mid-sentence come back
+exactly as typed -- and the Markdown is a fixed point: rendering it and reading
+it back gives the same Markdown again. A backslash is used wherever
+python-markdown removes one; ``<``, ``&``, ``=`` and ``~`` are spelled as
+character references (``&lt;``) where they would be read, since no backslash
+escapes them. Nested lists nest, at four spaces, and keep their numbers;
+``<script>``, ``<style>`` and ``<title>`` bodies are dropped, as a browser drops
+them. An anchor whose text is its own URL -- a pasted link -- reads as the
+autolink ``<https://...>``; a ``title`` attribute reads as a link title,
 ``[text](https://... "title")``.
+
+A memo holding a single real HTML element is read as HTML throughout, so
+Markdown syntax in the same memo -- ``**bold** <b>x</b>`` -- is read as the
+literal characters it is: write a memo as HTML or as Markdown, not both.
 
 **Deep nesting degrades, it does not raise.** ``markdownify`` walks the document
 recursively, so a deeply nested memo can exhaust the interpreter's stack: from a
@@ -105,53 +128,69 @@ reported -- and a list nested around 500 levels deep raises
 It is not a sanitiser
 ---------------------
 
-Neither direction neutralises anything, by design, exactly as in
-``glpi_python_client``: the Markdown is the caller's own. So:
+Spelling literal text as text is not sanitising, and the writing direction
+neutralises nothing, by design, exactly as in ``glpi_python_client``: the
+Markdown is the caller's own. So:
 
 * raw HTML in the Markdown is rendered verbatim -- ``<script>alert(1)</script>``
   goes out as a live ``<script>``;
 * a ``javascript:`` link target is rendered as a live ``href``;
 * ``<javascript:alert(1)>`` is not made a link (python-markdown autolinks
   ``http``, ``https``, ``ftp`` and ``ftps`` only) but passes through as raw
-  markup;
-* text a memo *displays* as markup, ``&lt;script&gt;``, reads back as a raw
-  ``<script>`` -- which the writing direction would then emit live.
+  markup.
+
+What the reading direction does is keep text a memo *displays* as text:
+``&lt;script&gt;`` reads back as ``&lt;script>``, and is written back as the
+same ``&lt;script&gt;``. It used to read back as a raw ``<script>``, which the
+writing direction then emitted live.
 
 A caller relaying Markdown it did not write -- a sync between two ITSMs, for one
--- must neutralise raw HTML and executable link schemes before calling
+-- must still neutralise raw HTML and executable link schemes before calling
 ``to_transport``.
 
 What survives a round trip
 --------------------------
 
 Markdown written and read back is the same Markdown for paragraphs, emphasis,
-headings, lists, block quotes, fences, tables, links -- titled ones and URLs
-containing parentheses included -- autolinks, underscores, lone asterisks,
-accents and query strings. The exceptions, each pinned by a test:
+headings, lists -- nested ones included -- block quotes, fences, tables, links
+-- titled ones and URLs containing parentheses included -- autolinks,
+underscores, lone asterisks, accents, query strings and escaped literal text.
+The exceptions, each pinned by a test:
 
 * a lone newline comes back as a hard break (two trailing spaces);
-* a nested list comes back indented by two spaces, which python-markdown does
-  not nest, so a second cycle flattens it;
 * a fence's language tag is dropped;
 * text in angle brackets that is not a URL, ``use the <Enter> key``, is sent as
   a live unknown tag and does not come back;
-* ``&lt;`` comes back as a raw ``<``, which renders the same;
+* a ``&lt;`` that opens no tag, ``a &lt; b``, comes back as a raw ``<``, which
+  renders the same;
 * an e-mail autolink comes back as an inline ``mailto:`` link;
 * a no-break space or hard break at the end of a paragraph is dropped.
 
-Past the first cycle, a second changes nothing more, except for the nested list
-and the angle-bracket text above. That is the property a two-way sync relies on:
-once a text has made one trip, writing what was read back and reading it again
-gives exactly the same Markdown.
+Past the first cycle, a second changes nothing more, except for the
+angle-bracket text above. That is the property a two-way sync relies on: once
+a text has made one trip, writing what was read back and reading it again gives
+exactly the same Markdown.
+
+The other direction -- a memo read, written back and read again -- is held to
+more: what the Markdown displays is what the memo displayed, compared with an
+HTML parser over realistic memos and a seeded fuzzer, and the Markdown is a
+fixed point from the first read. A few structures have no Markdown spelling,
+and the inventory in ``test_literal_text.py`` records each: struck-through and
+underlined text keep their words and lose the line, adjacent lists or quotes
+merge, two ``<br>`` in a row become a paragraph break, adjacent code spans
+merge, strong inside emphasis loses its bold, a table without a header row
+gains an empty one, a table cell or a heading holds one line, and a ``<pre>``
+that opens a list item or directly follows a list inside the same item keeps
+its lines as text rather than as code.
 
 Where it comes from
 -------------------
 
 The converter is a port of ``glpi_python_client``'s
-``content/conversion.py`` at commit ``0d43528``, with the same options, the same
-extensions and the same edge-case handling, and **the two should move
-together**: the hard part of both is the behaviour of the same three libraries,
-not anything either ITSM does. Names and error messages aside, the only
+``content/conversion.py`` at commit ``4fc3bed``, the literal-safe converter,
+with the same rules, the same extensions and the same edge-case handling, and
+**the two should move together**: the hard part of both is the behaviour of the
+same three libraries, not anything either ITSM does. Names and error messages aside, the only
 difference in code is that the three libraries are an optional extra here
 rather than dependencies. One measurement
 differs from the one recorded there: the ``beautifulsoup4`` defect that dropped
