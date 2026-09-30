@@ -15,6 +15,83 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-30
+
+Adds Markdown <-> memo HTML conversion, as an optional extra. **Nothing moves
+for a caller who does not install it**: the core package imports none of the
+extra's dependencies, no existing call or model changes, and the one new name
+at the package root is an exception class. The minor bump is for the new
+public surface, not for a break.
+
+### Added
+
+- `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
+  optional extra `easyvista-python-client[content]` (`beautifulsoup4>=4.12`,
+  `markdown>=3.6`, `markdownify>=0.13`). Two static methods:
+  `from_transport(value)` reads a memo -- rich-text HTML or plain text -- as
+  canonical Markdown, and `to_transport(value)` renders Markdown as the HTML a
+  memo is written with.
+
+  It is a port of `glpi_python_client`'s `content/conversion.py` at `0d43528`,
+  with the same options, extensions and edge-case handling, so with the same
+  library versions the two produce the same Markdown from the same HTML. **The
+  two should move together.** The only code divergence is the optional extra.
+
+  Why it is here: until now this package could only strip HTML to plain text,
+  so a downstream GLPI-to-EasyVista sync wrote its own converter. Measured
+  2026-09-30 (tier 4, one instance), a GLPI description holding a pasted URL
+  and a titled link reached EasyVista with neither link clickable: EasyVista
+  stored exactly the HTML it was sent, and that converter had escaped `&lt;` a
+  second time, fused the link title into the `href`, cut a URL at its first
+  `)`, and would read two lone asterisks as emphasis. Every one of those is a
+  regression test here.
+
+  Two properties worth knowing before relying on it. **Deep nesting degrades
+  to text and never raises for depth**: the conversion is attempted and a
+  `RecursionError` answered with the memo's words, and the cliff is measured
+  at 493 levels on CPython 3.12-3.14 but 328 on 3.10. And **it is not a
+  sanitiser**: raw HTML and `javascript:` link targets in the Markdown go out
+  live, and text a memo displays as markup (`&lt;script&gt;`) reads back as
+  raw markup. A caller relaying Markdown it did not write must neutralise
+  both.
+
+  Importing `easyvista_python_client.content` without the extra raises an
+  `ImportError` naming `pip install "easyvista-python-client[content]"`.
+- `EasyvistaContentError`, a subclass of `EasyvistaError` exported at the
+  package root: raised for any converter fault other than depth, with the
+  parser's exception as `__cause__`. It lives in the core package, so it can
+  be caught whether or not the extra is installed.
+- The `dev` and `docs` extras now install the `content` extra's three
+  packages, since CI runs the converter's tests and the API reference imports
+  it. `testing/test_public_api.py` fails if the copies drift.
+
+### Documentation
+
+- `docs/content.rst`, a user-guide page for the converter: what a memo holds,
+  what each direction does, what survives a round trip, and what it does not
+  sanitise. The API reference gains a "Rich-text content" section.
+- `docs/vendor-api-reference.md` records the memo format as tier 4 (above) and
+  opens `O-MEMOFORMAT` for what is not yet known: what the web UI's own editor
+  writes, how it treats the newlines between blocks, and what it shows for raw
+  markup.
+- The `easyvista-ticket-workflow` and `easyvista-ticket-actions` skills each
+  gain a gotcha: a memo stores what it is sent, and nothing renders Markdown
+  for you.
+
+### Notes
+
+- The round-trip inventory is a test, not a promise: eight Markdown shapes do
+  not survive one write-then-read cycle exactly, each a strict xfail with the
+  measured reason -- among them a lone newline, which comes back as a hard
+  break, and a nested list, which a second cycle flattens. Past the first
+  cycle a second changes nothing more, except for that nested list and for
+  angle-bracket text such as `use the <Enter> key`, which is sent as a live
+  unknown tag and lost.
+- The `beautifulsoup4` defect glpi_python_client works around -- text after a
+  `<br />` dropped in a body that also used `<br>` -- no longer reproduces on
+  4.15.0 (measured 2026-09-30, CPython 3.10 and 3.12-3.14). The workaround
+  stays, because the extra accepts 4.12 and later.
+
 ## [0.3.0] - 2026-09-02
 
 Makes the task-vs-action distinction inspectable. A GLPI comment corresponds to
@@ -1142,7 +1219,8 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/baraline/easyvista_python_client/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/baraline/easyvista_python_client/releases/tag/0.1.0
