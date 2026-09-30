@@ -491,6 +491,312 @@ def test_memo_shapes_read_as_markdown(memo: str, expected: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# What this converter does not do: sanitise
+# ---------------------------------------------------------------------------
+#
+# Pinned so that nobody mistakes it for a sanitiser. glpi_python_client's
+# converter behaves the same way, by design: the Markdown is the caller's own.
+# A caller relaying Markdown it did not write -- a sync between two ITSMs, for
+# one -- has to neutralise raw HTML and executable link schemes itself before
+# rendering, and these four are what it has to cover.
+
+
+def test_raw_html_in_markdown_is_rendered_verbatim() -> None:
+    assert EasyvistaContentConverter.to_transport("<script>alert(1)</script>") == (
+        "<script>alert(1)</script>"
+    )
+
+
+def test_a_javascript_link_target_is_rendered_live() -> None:
+    assert EasyvistaContentConverter.to_transport("[x](javascript:alert(1))") == (
+        '<p><a href="javascript:alert(1)">x</a></p>'
+    )
+
+
+def test_an_executable_scheme_in_angle_brackets_is_not_made_a_link() -> None:
+    """python-markdown autolinks ``http``, ``https``, ``ftp`` and ``ftps`` only.
+
+    Anything else in angle brackets passes through as raw markup, which a
+    browser reads as an unknown element: inert, and invisible.
+    """
+
+    assert EasyvistaContentConverter.to_transport("<javascript:alert(1)>") == (
+        "<p><javascript:alert(1)></p>"
+    )
+
+
+def test_text_a_memo_displays_as_markup_comes_back_as_markup() -> None:
+    """Read and written back, escaped markup becomes live markup.
+
+    ``markdownify`` resolves ``&lt;`` and does not escape the ``<`` it
+    produces, so a memo *showing* the text ``<script>...`` reads as Markdown
+    holding a raw ``<script>`` element, which the outbound direction then
+    passes through.
+    """
+
+    markdown = EasyvistaContentConverter.from_transport(
+        "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>"
+    )
+
+    assert markdown == "<script>alert(1)</script>"
+    assert EasyvistaContentConverter.to_transport(markdown) == (
+        "<script>alert(1)</script>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round trips
+# ---------------------------------------------------------------------------
+#
+# ``from_transport(to_transport(m)) == m`` is the property the converter would
+# like to hold. It does not hold universally, and cannot: the two libraries
+# either side of the wire disagree about a handful of constructs, and no
+# option on either fixes them. So, as in glpi_python_client, the corpus is an
+# inventory rather than a property test. Every case is listed, the lossy ones
+# carry ``xfail(strict=True)``, and that strictness is the point -- fixing one
+# turns its xfail into an XPASS and fails the suite, which forces the
+# inventory to be updated rather than quietly drifting out of date.
+#
+# The weaker property is the one a sync depends on: whatever one cycle does,
+# a second changes nothing more. That is checked over the same corpus, with
+# its own, shorter list of exceptions.
+
+#: Markdown a caller writes, by case name.
+ROUND_TRIP_CORPUS = {
+    "plain": "The printer is offline.",
+    "bold": "The printer is **offline**.",
+    "italic": "This is *emphasis*.",
+    "inline-code": "Run `systemctl restart` now.",
+    "heading": "# Title\n\nBody text.",
+    "subheading": "## Section\n\nBody text.",
+    "paragraphs": "First para.\n\nSecond para.",
+    "hard-break": "line one  \nline two",
+    "bullets": "- alpha\n- beta\n- gamma",
+    "numbered": "1. one\n2. two",
+    "blockquote": "> quoted text",
+    "link": "See [the doc](https://example.org/doc).",
+    "fence": "```\nx = 1\n```",
+    "table": "| a | b |\n| --- | --- |\n| 1 | 2 |",
+    "underscore": "The snake_case name.",
+    "asterisk": "5 * 3 = 15",
+    "mixed": "# Title\n\n- alpha\n- beta\n\nClosing **note**.",
+    "autolink": f"<{PASTED_URL}>",
+    "titled-link": f'[url]({PASTED_URL} "url")',
+    "parenthesised-url": "[wiki](https://example.org/wiki/Test_(informatique))",
+    "lone-asterisks": "prix 5*3 et note * importante",
+    "accents": "Le serveur ne répond plus, merci de vérifier.",
+    "query-string": "[doc](https://example.org/doc?a=1&b=2)",
+    "raw-less-than": "si a < b alors a",
+    "inner-nbsp": "Texte\xa0suite",
+    "soft-newline": "line one\nline two",
+    "nested-list": "- alpha\n    - inner\n- beta",
+    "fence-with-language": "```python\nx = 1\n```",
+    "angle-bracket-text": "use the <Enter> key",
+    "escaped-less-than": "si a &lt; b alors a",
+    "email-autolink": "<someone@example.org>",
+    "synced-description": (
+        f'Test !\xa0  \n  \n<{PASTED_URL}>  \n  \n[url]({PASTED_URL} "url")'
+    ),
+    "defect-readback": f'Test !\n\n&lt;{PASTED_URL}>\n\n[url]({PASTED_URL} "url")',
+}
+
+#: Cases one write-then-read cycle does not reproduce exactly, and why.
+#:
+#: Each reason was read off the converter, 2026-09-30, python-markdown 3.10.3
+#: and markdownify 1.2.3; the first four were recorded by glpi_python_client.
+LOSSY = {
+    "soft-newline": (
+        "nl2br renders a lone newline as <br>, which markdownify reads back as "
+        "a hard break (two trailing spaces). Semantically equivalent, and "
+        "stable after one cycle."
+    ),
+    "nested-list": (
+        "markdownify indents nested items by 2 spaces; python-markdown needs "
+        "4 to keep the nesting, so a second cycle flattens it."
+    ),
+    "fence-with-language": (
+        "fenced_code emits class='language-python' and markdownify drops the "
+        "class, so the language tag cannot survive."
+    ),
+    "angle-bracket-text": (
+        "to_transport does not escape raw markup, so the text reaches EasyVista "
+        "as a live unknown tag, and the inbound direction drops an unknown "
+        "tag's markup. The word is gone after one cycle and the doubled space "
+        "it leaves after two. How EasyVista's UI renders such a tag was not "
+        "measured."
+    ),
+    "escaped-less-than": (
+        "markdownify resolves &lt; and does not escape the < it produces, so "
+        "the reference reads back as a raw <. Both spellings render the same "
+        "HTML, so this is a change of spelling only."
+    ),
+    "email-autolink": (
+        "python-markdown renders <user@host> as an entity-obfuscated mailto: "
+        "anchor, whose text is not its href, so markdownify writes it as an "
+        "inline [user@host](mailto:user@host) link. Same link."
+    ),
+    "synced-description": (
+        "the trailing no-break space and the hard breaks that end each "
+        "paragraph are whitespace markdownify drops at a paragraph's edge. The "
+        "text and both links survive."
+    ),
+    "defect-readback": (
+        "the text &lt;URL> reads back as <URL>, an autolink: what a memo "
+        "displayed as a literal URL in angle brackets becomes a working link "
+        "after one cycle."
+    ),
+}
+
+#: Cases a second cycle still changes, and why.
+UNSETTLED = {
+    "nested-list": LOSSY["nested-list"],
+    "angle-bracket-text": LOSSY["angle-bracket-text"],
+}
+
+
+def _inventory(known: dict[str, str]) -> list[object]:
+    """The corpus as parameters, each case in ``known`` a strict xfail."""
+
+    return [
+        pytest.param(
+            markdown,
+            id=name,
+            marks=[pytest.mark.xfail(strict=True, reason=known[name])]
+            if name in known
+            else [],
+        )
+        for name, markdown in ROUND_TRIP_CORPUS.items()
+    ]
+
+
+def test_the_inventories_name_only_cases_in_the_corpus() -> None:
+    """A misspelt name would silently un-mark a lossy case, so check them.
+
+    And every unsettled case is lossy: a case one cycle reproduces exactly
+    is, by that token, already settled.
+    """
+
+    assert set(LOSSY) <= set(ROUND_TRIP_CORPUS)
+    assert set(UNSETTLED) <= set(LOSSY)
+
+
+@pytest.mark.parametrize("markdown", _inventory(LOSSY))
+def test_round_trip_corpus(markdown: str) -> None:
+    """Markdown survives one write-then-read cycle through memo HTML."""
+
+    html = EasyvistaContentConverter.to_transport(markdown)
+
+    assert EasyvistaContentConverter.from_transport(html) == markdown
+
+
+@pytest.mark.parametrize("markdown", _inventory(UNSETTLED))
+def test_one_cycle_reaches_a_fixed_point(markdown: str) -> None:
+    """Whatever one cycle changes, a second cycle changes nothing more.
+
+    This is what keeps a two-way sync from rewriting a memo on every pass:
+    after the first write, reading back what was written gives exactly the
+    Markdown that was written.
+    """
+
+    once = EasyvistaContentConverter.from_transport(
+        EasyvistaContentConverter.to_transport(markdown)
+    )
+    twice = EasyvistaContentConverter.from_transport(
+        EasyvistaContentConverter.to_transport(once)
+    )
+
+    assert twice == once
+
+
+@pytest.mark.parametrize(
+    "memo",
+    [
+        pytest.param(
+            "<p>Bonjour,</p><p>Le serveur ne r&eacute;pond plus.<br />"
+            "Merci de regarder.</p>",
+            id="paragraphs-entity-and-br",
+        ),
+        pytest.param(
+            '<div><span style="font-family: Arial">Texte</span>&nbsp;suite</div>',
+            id="styled-span-and-nbsp",
+        ),
+        pytest.param("<ul><li>un</li><li>deux</li></ul>", id="list"),
+        pytest.param(
+            "<p>ligne 1<br>ligne 2</p><p>para 2<br />ligne 4</p>",
+            id="both-br-spellings",
+        ),
+        pytest.param(
+            "<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>",
+            id="table",
+        ),
+        pytest.param("<pre>ligne 1\n  ligne 2</pre>", id="preformatted"),
+        pytest.param("<h2>Titre</h2><p>corps</p>", id="heading"),
+        pytest.param(
+            "Bonjour,\r\nle serveur ne répond plus.",
+            id="plain-text-crlf",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "a plain-text memo is returned as it is, lone newline "
+                    "included; the first write renders that newline as <br>, "
+                    "which reads back as a hard break. Stable after that."
+                ),
+            ),
+        ),
+        pytest.param(
+            "Appuyer sur <Entrée> puis valider",
+            id="plain-text-angle-brackets",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "the plain-text memo is returned as it is, and the first "
+                    "write sends <Entrée> as a live unknown tag, which reads "
+                    "back as nothing: the word is lost."
+                ),
+            ),
+        ),
+        pytest.param(
+            "<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>",
+            id="nested-list",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "a nested list reads back with its items indented by 2 "
+                    "spaces, which python-markdown does not nest, so the first "
+                    "write flattens it."
+                ),
+            ),
+        ),
+        pytest.param(
+            "<p>Test !</p>"
+            f"<p>&amp;lt;{PASTED_URL}&gt;</p>"
+            f'<p><a href="{PASTED_URL} &quot;url&quot;">url</a></p>',
+            id="defect-memo",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "the literal &lt;URL> text reads back as an autolink after "
+                    "the first write, as in the defect-readback round trip."
+                ),
+            ),
+        ),
+    ],
+)
+def test_a_memo_read_and_written_back_reads_the_same(memo: str) -> None:
+    """Reading a memo, writing that Markdown back and reading it again.
+
+    The memo-side twin of the fixed point: if this holds, the first sync of
+    an already-populated memo is the last one to change it. The exceptions
+    are the memos whose first write is itself lossy.
+    """
+
+    markdown = EasyvistaContentConverter.from_transport(memo)
+    written = EasyvistaContentConverter.to_transport(markdown)
+
+    assert EasyvistaContentConverter.from_transport(written) == markdown
+
+
+# ---------------------------------------------------------------------------
 # Nesting depth
 # ---------------------------------------------------------------------------
 #
