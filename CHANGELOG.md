@@ -17,14 +17,38 @@ is the error. Tags carry no `v` prefix.
 
 ## [0.4.0] - 2026-09-30
 
-Adds Markdown <-> memo HTML conversion, as an optional extra. **Nothing moves
-for a caller who does not install it**: the core package imports none of the
-extra's dependencies, no existing call or model changes, and the one new name
-at the package root is an exception class. The minor bump is for the new
-public surface, not for a break.
+Adds Markdown <-> memo HTML conversion as an optional extra, and **stops a
+ticket's workflow changing by accident -- which is a breaking release.**
+`set_status` is gone (it was the vendor close request under a name that hid
+it), `close_ticket` requires an explicit opt-in, and every write the package
+can tell may change a ticket's workflow is refused before it is sent unless the
+call says so. What it cannot tell is not covered (see *Notes*). Read
+*Upgrading* below.
+
+The converter is purely additive: the core package imports none of the extra's
+dependencies. Every breaking change is in the workflow guard, and is marked
+`**BREAKING**` in `### Changed` or `### Removed`.
 
 ### Added
 
+- **The workflow guard.** `WorkflowEffect` (`INTERRUPTS`, `ADVANCES`,
+  `UNKNOWN`) and `EasyvistaWorkflowEffectRefused`, both exported at the package
+  root, and `easyvista_python_client.workflow` (`workflow_triggers`,
+  `classify_workflow_effects`), which names what a write may do to a ticket's
+  workflow. `EasyvistaWorkflowEffectRefused` is a `ValueError`, **not** an
+  `EasyvistaError`: the refused write is never sent, so there is no status code
+  and nothing transient, and it carries `effects` and `triggers` (what named
+  them). A ticket's status follows its workflow -- "Advancing through the steps
+  of a workflow changes the status of a ticket." (tier 1) -- so a write that
+  touches workflow state is not a bookkeeping write.
+- An `allow_workflow_effect=` keyword, taking one `WorkflowEffect` or an
+  iterable of them, on `send`, `update_ticket`, `create_action`, `create_task`,
+  `update_action` and `end_action` (default: allows nothing), and **required**
+  on `close_ticket`. `RequestSpec.allow_workflow_effect` and
+  `RequestSpec.allowing()` carry the same opt-in for a caller driving the
+  `resources.*.build_*` functions through its own transport.
+- `resources.actions.build_get_action(..., fields=...)` projects the item read,
+  as the list builders already did.
 - `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
   optional extra `easyvista-python-client[content]` (`beautifulsoup4>=4.12`,
   `markdown>=3.6`, `markdownify>=1.2`). Two static methods:
@@ -82,8 +106,138 @@ public surface, not for a break.
   packages, since CI runs the converter's tests and the API reference imports
   it. `testing/test_public_api.py` fails if the copies drift.
 
+### Changed
+
+- **BREAKING** `close_ticket` requires `allow_workflow_effect=`, keyword-only
+  with no default: leaving it out is a `TypeError`, and a value that does not
+  include `WorkflowEffect.INTERRUPTS` is refused with
+  `EasyvistaWorkflowEffectRefused` before any request is made. The vendor
+  documents the close request as interrupting the workflow (tier 1, see
+  *Removed*), so the call site now says that it means to.
+- **BREAKING** `end_action` is guarded. Unless `allow_workflow_effect` includes
+  `WorkflowEffect.ADVANCES` it first reads the action (one item read projecting
+  `ACTION_ID` and `WORKFLOW_ID`) and refuses, with no end request sent, when
+  the action is a workflow step (`WORKFLOW_ID` set), when the record comes back
+  without a `WORKFLOW_ID` column (which cannot be told from a step), or when
+  the read returns a different `ACTION_ID` than the one asked for. `end_all=True`
+  always needs `ADVANCES`. Ending an action you created yourself needs no
+  opt-in. If the read fails, its error propagates and nothing is ended.
+  Ending a workflow step moves the workflow on -- vendor-documented only by the
+  UI's Finish wizard, and measured on one instance on 2026-09-01 (2 of 2), so
+  it may not generalise.
+- **BREAKING** `end_action`'s explicit `action_id` must be a positive integer.
+  `0`, negatives, blanks, RFC numbers, floats and booleans now raise
+  `ValueError` before any request, and a numeric string is sent as an integer
+  (`"123"` goes out as `123`). `action_id=None` is still refused unless
+  `end_all=True`.
+- **BREAKING** `update_ticket`, `update_action`, `create_action`, `create_task`
+  and `send` refuse a body or route that may change the workflow unless the call
+  passes `allow_workflow_effect=`. Named: the workflow-control bodies `closed`,
+  `end_action`, `suspended` and `restarted` as a top-level key in any casing on
+  any path; on a ticket, the status, catalog and parent-request columns and a
+  `DELETE`; on an existing action, the end date, type, parent, ticket and
+  workflow, stage and step columns (creating an action or a task names a
+  narrower set); every ticket sub-route that is a command rather than a record
+  (`close`, `suspend`, `restart`, `workflowstart`, ...) and
+  `requests/without-workflow`. What the typed models declare needs no opt-in,
+  and neither do text, owner, group, done-by, impact or urgency. The exact
+  lists are in `docs/vendor-api-reference.md`, "Ticket workflow". **This is a
+  deny-list, and a deny-list of columns cannot be complete**: what is not named
+  is unclassified, not proven neutral.
+- **BREAKING** `update_action` refuses an action id that is not a positive
+  integer, `None` included: `PUT actions/{rfc_number}` is the end-action route
+  on the same path, so an RFC number would not edit an action.
+- **BREAKING** The transport refuses outright, with `ValueError` and whatever
+  the method or opt-in, a path containing a dot segment (`.` or `..`), a
+  percent-encoded slash or backslash, or a raw backslash: the HTTP client
+  collapses a dot segment, and a server may read the others as a separator, so
+  the request could reach a route other than the one that was checked. No API
+  route needs one. Whether this server reads them as separators is not
+  measured; the check fails closed.
+- A request is treated as a read only when its method **and** the value of
+  every method-override header (`X-HTTP-Method-Override`, `X-HTTP-Method`,
+  `X-Method-Override`) are reads, so an override header cannot hide a write
+  behind a `GET`. Whether this API honours those headers is not recorded.
+- A write that names a workflow effect and is allowed is sent **once**, never
+  retried, whatever `max_retries` says: each close inserts another anticipated
+  closing action and each end ends whatever is open, so a resend after a lost
+  response is not a repeat of the same request. This includes `end_action`,
+  your own action's included. Every other request keeps its retries.
+
+### Removed
+
+- **BREAKING** `EasyvistaClient.set_status` / `AsyncEasyvistaClient.set_status`
+  and `resources.requests.build_set_status`. They sent the vendor CLOSE request,
+  which the vendor close page documents (tier 1, re-read 2026-10-02) as
+  interrupting the workflow, setting the final status, ending or deleting the
+  unfinished actions and inserting an anticipated closing action, none of it
+  conditional on the status sent. The page documents final statuses only, so
+  for a non-final one that is an extrapolation it neither exempts nor covers.
+  A synchroniser that used `set_status` to mirror an intermediate status ended
+  each ticket's initial workflow action, which is how it closed tickets early:
+  the root cause was read from its code on 2026-10-01/02 and from the vendor
+  page, and the drain of the open action across such a write was measured once,
+  on 2026-09-01, on one ticket on one instance (tier 4, so it may not
+  generalise). There is no status setter on this API: a ticket's status follows
+  its workflow. `close_ticket` and `resources.requests.build_close_ticket`
+  remain.
+
+### Upgrading
+
+- `client.set_status(rfc, status_guid=g)` -- delete it; nothing replaces it,
+  because there is no way to set a status that leaves the workflow alone. To
+  move a ticket through its workflow, end the step's open action with
+  `end_action(rfc, action_id=..., allow_workflow_effect=WorkflowEffect.ADVANCES)`.
+  The status that follows is the workflow's, not yours to choose. This is not
+  documented on the REST page, which is silent about the workflow; it was
+  measured on one instance on 2026-09-01 (2 of 2 tickets) and may not
+  generalise, so re-read the ticket afterwards. To close, call
+  `close_ticket(rfc, allow_workflow_effect=WorkflowEffect.INTERRUPTS, status_guid=g)`.
+- `end_action` callers: pass the integer id of an action you read, never an RFC
+  number, `0` or a blank. Ending your own action still needs no opt-in, and now
+  costs one extra item read. Ending a workflow step, or any action whose record
+  shows no `WORKFLOW_ID`, needs `WorkflowEffect.ADVANCES`, and so does
+  `end_all=True`.
+- Code that puts a status, catalog or other named column into `extra_payload`,
+  or calls `send` with a workflow route or body, now raises until it passes
+  `allow_workflow_effect=`. `WorkflowEffect.UNKNOWN` means undocumented, not
+  harmless: read "Ticket workflow" in `docs/vendor-api-reference.md` first.
+- Catch `EasyvistaWorkflowEffectRefused` (or `ValueError`) where you record
+  per-record failures. It is a `ValueError`, **not** an `EasyvistaError`, and
+  carries no status code; it is never transient. Code that catches
+  `EasyvistaError` around a close for cleanup will NOT catch it. `ValueError`
+  also catches the other local refusals above.
+- A lost response to an allowed workflow write now surfaces as an error instead
+  of a silent resend. Re-read the ticket before repeating it.
+- The minor bump is deliberate: a dependant pinned `>=0.3.0,<0.4` does **not**
+  pick this up, and must widen its constraint on purpose.
+
 ### Documentation
 
+- `docs/vendor-api-reference.md` gains "Ticket workflow": what each documented
+  write does to a workflow, with the vendor page quoted (tier 1), the guard's
+  deny-list exactly as the code holds it, and the measurements labelled tier 4
+  with their instance and date. O-CLOSE-DEFAULT is closed at tier 1: the vendor
+  close page documents an omitted `status_GUID` as defaulting to the Closed
+  meta-status. It was not measured here.
+- The README, the user guide, the API reference and the `easyvista-client-setup`,
+  `easyvista-instance-discovery`, `easyvista-ticket-actions` and
+  `easyvista-ticket-workflow` skills describe the guard. The ticket-workflow
+  skill's first gotcha is now that `close_ticket` is not a status setter.
+- The `PostRequest.workflow_start` docstring records that the flag is a no-op
+  (tier 4: two tickets identical but for it came back byte-identical, 2026-09-01,
+  one instance), so `workflow_start=False` does not create a ticket without its
+  workflow. The vendor create page documents no such parameter and states that
+  the workflow is started; the workflow-less create is the virtual-agent route
+  `requests/without-workflow`, which the guard refuses unless allowed.
+- **Retracted:** "`set_status` reaches every status, not only terminal ones",
+  from the 0.2.0 entry below and the docstrings that repeated it. Six status
+  GUIDs were tried and each landed, but that was measured by re-reading the
+  status only: the measurement never looked at the workflow or the ticket's
+  open actions, and the vendor close page documents the close request as
+  interrupting the workflow (tier 1). A status that landed is not evidence that
+  nothing else moved, and "reaches every status" was read as "is a safe status
+  setter", which it was not. The 0.2.0 section is left as written.
 - `docs/content.rst`, a user-guide page for the converter: what a memo holds,
   what each direction does, what survives a round trip, and what it does not
   sanitise. The API reference gains a "Rich-text content" section.
@@ -97,6 +251,17 @@ public surface, not for a break.
 
 ### Notes
 
+- What the workflow guard does not establish. It is a deny-list: the vendor's
+  update pages accept every column of the ticket and action tables except a
+  short excluded list (tier 1), and a per-instance business rule can fire on
+  any write, so a write the guard does not name is unclassified, not proven
+  neutral. `end_action` tells a workflow step from your own action by
+  `WORKFLOW_ID` (1500 of 1500 rows, 2026-09-02, one instance); whether an
+  action created under a step by `create_action` carries one is unmeasured, and
+  if it does, ending it is refused too -- the safe direction. The live checks
+  in `integration_tests/test_live_workflow_guard.py` are gated: its first two
+  tests read only, and the rest write and run only when
+  `EASYVISTA_TEST_RUN_WORKFLOW_CENSUS=1` is set.
 - The round-trip inventory is a test, not a promise: six Markdown shapes do
   not survive one write-then-read cycle exactly, each a strict xfail with the
   measured reason -- among them a lone newline, which comes back as a hard
