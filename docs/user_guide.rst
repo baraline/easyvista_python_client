@@ -437,11 +437,11 @@ Three properties are worth knowing before you reach for it:
 Changing a ticket's status
 --------------------------
 
-There is no status setter. A ticket's status follows its workflow -- "Advancing
-through the steps of a workflow changes the status of a ticket." (vendor
-reference-tables page, Statuses section, tier 1:
-https://docs.easyvista.com/docs/references-tables.md) -- and the API offers
-three things that touch it:
+The vendor documents no status setter, and this package has none. A ticket's
+status follows its workflow -- "Advancing through the steps of a workflow
+changes the status of a ticket." (vendor reference-tables page, Statuses
+section, tier 1: https://docs.easyvista.com/docs/references-tables.md) -- and
+the API offers three things that touch it:
 
 * :meth:`~easyvista_python_client.EasyvistaClient.end_action` on the workflow
   step's open action moves the workflow on. The vendor's REST page for the call

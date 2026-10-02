@@ -13,8 +13,10 @@ This module WRITES. It creates up to two tickets and closes every one:
   construction"; that was wrong and leaked one ticket per live run;
 * one create with the full documented body, to prove the ids land.
 
-The ticket-creating fixture lives in ``conftest.py`` and is also used by
-``test_live_search_syntax``.
+This module creates and closes its own tickets, by marker. The shared
+ticket-creating fixtures (``rich_ticket``, ``probe_tickets``,
+``ticket_factory``) live in ``conftest.py`` and serve the other live modules,
+``test_live_search_syntax`` among them.
 
 Every assertion here is by shape, and every one routes through ``_assertions``
 or a pre-bound local (design principle P2). pytest's assertion rewriter reports

@@ -16,7 +16,10 @@ candidate values per column and stops at the first the instance accepts, some
 of which it may reject outright); ``test_live_smoke`` additionally issues one
 create the server is *expected to reject*, so no ticket persists from it. Every
 created ticket is registered for cleanup before it is asserted on, and closed
-in teardown. Point them at a preprod/test instance, never production.
+in teardown. The opt-in workflow census in ``test_live_workflow_guard.py`` adds
+up to 3 tickets and reassigns workflow steps, which may notify the target group
+or person; it runs only when ``EASYVISTA_TEST_RUN_WORKFLOW_CENSUS=1``. Point
+them at a preprod/test instance, never production.
 
 Credentials resolve from an uppercase env var first, then a lowercase file under
 ``secrets/``:

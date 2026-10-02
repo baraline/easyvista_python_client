@@ -60,12 +60,15 @@ as the preferred subject identifier. Every other field is optional.
 | `e_*` | various | Custom fields, 2018.1.183.0+ |
 
 **Not in the table above, and not vendor-documented at all: `workflow_start`**
-(tier 3, illustrative only). It appears only in the instance's own OpenAPI
-schema for this route (`components.schemas`, read 2026-08-27): boolean,
-"Optional. If true, starts the workflow for the created incident." Per the
-tier table above, that schema is example-derived and not a normative
-contract, so treat this field as unverified until tested against the
-deployment you use it on.
+(tier 3, illustrative only). The vendor create page documents no such parameter
+and states that the workflow is started (tier 1). It appears only in the
+instance's own OpenAPI schema for this route (`components.schemas`, read
+2026-08-27): boolean, "Optional. If true, starts the workflow for the created
+incident." Per the tier table above, that schema is example-derived and not a
+normative contract. Measured a no-op (tier 4, 2026-09-01, one instance, so it
+may not generalise): two tickets identical but for this flag came back
+byte-identical, so `workflow_start=False` did not create a ticket without its
+workflow there. Re-measure on the deployment you use it on.
 
 ## Create an action — `POST /requests/{rfc_number}/actions` (tier 1)
 
@@ -311,17 +314,22 @@ top-level body keys):
 | `requests/{rfc}/actions` (create an action) | body keys `end_date_ut`, `end_date`, `status_id_on_terminate`, `workflow_id`, `stage_id`, `process_step_id` | `UNKNOWN` |
 | `requests/{rfc}/tasks` (create a task) | body keys `status_id_on_terminate`, `workflow_id`, `stage_id`, `process_step_id`, `parent_action_id` | `UNKNOWN` |
 | `actions/{id}` | body keys `end_date_ut`, `end_date`, `status_id_on_terminate`, `workflow_id`, `stage_id`, `process_step_id`, `parent_action_id`, `action_type_id`, `action_type_guid`, `action_type_name`, `request_id`, `rfc_number` | `UNKNOWN` |
+| `actions/<x>`, `<x>` not an integer id (ASCII digits only) | the route itself, beside any key above: `PUT actions/{rfc_number}` is the vendor's end-action route (rest-api-finish-an-action-attached-to-an-incident-request.md), so a write to it is named whatever its body says | `ADVANCES` |
 
 So creating an action with a `parent_action_id`, a type or a ticket link needs no
 opt-in (the create-action set is narrower than the update set), and a task's end date
-is ordinary because a task is born ended. Not named anywhere: text, owner, group,
-done-by, impact, urgency. A column deny-list cannot be complete, and this one says so.
+is ordinary because a task is born ended. The column rules above apply to the
+`requests/` and `actions/` routes only; a write to any other route family is not
+classified by column. Not named anywhere: text, owner, group, done-by, impact,
+urgency. A column deny-list cannot be complete, and this one says so.
 
 * **A request counts as a read only when its method and every method-override header
   value are reads.** The method and the value of each of `X-HTTP-Method-Override`,
   `X-HTTP-Method` and `X-Method-Override` (any casing) must all be `GET`, `HEAD` or
   `OPTIONS`; otherwise it is classified as a write, so an override that says `GET`
-  cannot hide one. Whether this API honours any of those headers is not recorded here.
+  cannot hide one. The headers read are the ones that go on the wire:
+  `config.extra_headers` with the request's own laid over them. Whether this API
+  honours any of those headers is not recorded here.
 * **Refused outright, whatever the method and whatever `allow_workflow_effect` says**
   (a `ValueError`, no request sent): a path with a dot segment (`.` or `..`, also
   percent-encoded), a percent-encoded slash or backslash (`%2F`, `%5C`), or a raw

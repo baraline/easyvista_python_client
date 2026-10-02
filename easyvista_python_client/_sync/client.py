@@ -204,7 +204,9 @@ class EasyvistaClient:
         whose content may change a ticket's workflow -- a ``closed``,
         ``end_action``, ``suspended`` or ``restarted`` body on any path, a
         status or catalog column on a ticket, an end date or type on an action,
-        a ``requests/{rfc}/close``-style route -- is refused with
+        any write to ``actions/{rfc_number}`` (the vendor's end-action route; an
+        integer id addresses an action instead), a ``requests/{rfc}/close``-style
+        route -- is refused with
         :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` before
         anything is sent, unless this argument names every
         :class:`~easyvista_python_client.WorkflowEffect` it carries. See
@@ -491,10 +493,11 @@ class EasyvistaClient:
     ) -> Request:
         """Update a ticket's writable fields.
 
-        Cannot set a status: there is no flat status update on this API, and no
-        status write that leaves the workflow alone -- a ticket's status follows
-        its workflow. See :class:`RequestUpdate` for the measurements, and
-        :meth:`close_ticket` for the one request that does set a status.
+        Cannot set a status: there is no flat status update on this API (see
+        :class:`RequestUpdate` for the measurements), the vendor documents no
+        status write that leaves the workflow alone, and this package has none
+        -- a ticket's status follows its workflow. See :meth:`close_ticket` for
+        the one request the vendor documents that does set a status.
 
         A body that may change the workflow -- a status or catalog column, or a
         workflow-control body, typically put in ``extra_payload`` -- is refused
@@ -537,8 +540,9 @@ class EasyvistaClient:
         * "An anticipated closing action associated with the ticket is
           inserted." -- one per call, so every close adds a row.
 
-        **So this is not a status setter, and there is none.** A ticket's
-        status follows its workflow: "Advancing through the steps of a workflow
+        **So this is not a status setter. The vendor documents no status
+        setter, and this package has none.** A ticket's status follows its
+        workflow: "Advancing through the steps of a workflow
         changes the status of a ticket." (tier 1,
         https://docs.easyvista.com/docs/references-tables.md, Statuses section).
         A non-final status sent
@@ -909,9 +913,10 @@ class EasyvistaClient:
     ) -> Action:
         """Reassign an action to another group and/or person.
 
-        The API counterpart of the UI's reassignment of an action ("Assign
-        action" / *Réaffecter l'action*), and the way to escalate the open
-        workflow step to another group without ending it. Sends
+        The closest API equivalent of the UI's reassignment of an action (its
+        "Assign action" button, which runs a wizard that may do more than this
+        one write does), and the way to escalate the open workflow step to
+        another group without ending it. Sends
         ``PUT actions/{id}`` with the group and/or the person in charge; at
         least one is required, and both are positive integers -- ids are
         per-deployment, so look them up rather than hardcoding them. A group
@@ -926,7 +931,7 @@ class EasyvistaClient:
 
         **The vendor documents no reassignment route.** The UI's transfer is a
         wizard, and ``PUT actions/{id}`` accepts "all the fields from the
-        AM_ACTION table except" a short list that does not name these two
+        AM_ACTION table except" a list that does not name these two
         (tier 1, https://docs.easyvista.com/docs/rest-api-update-an-action.md).
         So what this write does is measured, not specified:
 

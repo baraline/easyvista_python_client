@@ -145,8 +145,8 @@ client.end_action(
 > action `create_action` creates under the workflow step carries a
 > `WORKFLOW_ID` has not been measured, and if it does, `end_action` refuses to
 > end it without `ADVANCES` (the safe direction).
-> There is no status setter: a ticket's status follows its workflow (user
-> guide, "Changing a ticket's status").
+> The vendor documents no status setter, and this package has none: a ticket's
+> status follows its workflow (user guide, "Changing a ticket's status").
 
 ## Assets and documents
 

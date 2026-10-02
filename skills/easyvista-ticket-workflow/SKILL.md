@@ -84,7 +84,8 @@ deployment needs before you build a payload for it.
    `update_ticket(rfc, RequestUpdate(description=...))`. `RequestUpdate` also
    accepts `title`, `impact_id`, `owner_id` and `external_reference` (capped at
    50 characters) after create — see the Gotchas for what it deliberately
-   omits. There is no status write: a ticket's status follows its workflow. To
+   omits. The vendor documents no status write, and this package has none: a
+   ticket's status follows its workflow. To
    complete a workflow step, end its open action with `end_action(rfc,
    action_id=..., allow_workflow_effect=WorkflowEffect.ADVANCES)` — without
    `ADVANCES`, ending a workflow step is refused (see

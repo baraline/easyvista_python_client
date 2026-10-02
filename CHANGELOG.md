@@ -45,11 +45,7 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   iterable of them, on `send`, `update_ticket`, `create_action`, `create_task`,
   `update_action` and `end_action` (default: allows nothing), and **required**
   on `close_ticket`. `RequestSpec.allow_workflow_effect` and
-  `RequestSpec.allowing()` carry the same opt-in on a request spec. A spec from
-  `resources.requests.build_close_ticket` or `resources.actions.build_end_action`
-  now needs `.allowing(...)` before this package's transport will send it, and
-  `build_end_action` and `build_update_action` refuse an action id that is not a
-  positive integer.
+  `RequestSpec.allowing()` carry the same opt-in on a request spec.
 - `resources.actions.build_get_action(..., fields=...)` projects the item read,
   as the list builders already did.
 - `reassign_action(action_id, *, group_id=None, done_by_id=None)` on both
@@ -146,12 +142,16 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   and `send` refuse a body or route that may change the workflow unless the call
   passes `allow_workflow_effect=`. Named: the workflow-control bodies `closed`,
   `end_action`, `suspended` and `restarted` as a top-level key in any casing on
-  any path; on a ticket, the status, catalog and parent-request columns and a
-  `DELETE`; on an existing action, the end date, type, parent, ticket and
-  workflow, stage and step columns (creating an action or a task names a
-  narrower set); every ticket sub-route that is a command rather than a record
-  (`close`, `suspend`, `restart`, `workflowstart`, ...) and
-  `requests/without-workflow`. What the typed models declare needs no opt-in,
+  any path; on a `requests/{rfc}` route, the status, catalog and parent-request
+  columns and a `DELETE`; on an existing `actions/{id}` route, the end date,
+  type, parent, ticket and workflow, stage and step columns (creating an action
+  or a task names a narrower set); a write to `actions/<x>` where `<x>` is not an
+  integer id, which is the vendor's end-action route `PUT
+  actions/{rfc_number}`, whatever the body says; every ticket sub-route that is
+  a command rather than a record (`close`, `suspend`, `restart`,
+  `workflowstart`, ...) and `requests/without-workflow`. The column rules apply
+  to the `requests/` and `actions/` routes only: a route of any other family is
+  not classified by column. What the typed models declare needs no opt-in,
   and neither do text, owner, group, done-by, impact or urgency. The exact
   lists are in `docs/vendor-api-reference.md`, "Ticket workflow". **This is a
   deny-list, and a deny-list of columns cannot be complete**: what is not named
@@ -159,6 +159,13 @@ dependencies. Every breaking change is in the workflow guard, and is marked
 - **BREAKING** `update_action` refuses an action id that is not a positive
   integer, `None` included: `PUT actions/{rfc_number}` is the end-action route
   on the same path, so an RFC number would not edit an action.
+- **BREAKING** The spec builders changed with the guard. A spec from
+  `resources.requests.build_close_ticket` or `resources.actions.build_end_action`
+  names a workflow effect, so this package's transport refuses it until it is
+  passed through `.allowing(...)`; code that builds one and sends it itself must
+  say so. And `resources.actions.build_end_action` and `build_update_action`
+  now raise `ValueError` at build time for an action id that is not a positive
+  integer, where they formerly passed the id through as given.
 - **BREAKING** `send()` -- the path every typed method and the client's own
   `send` go through -- refuses outright, with `ValueError` and whatever the
   method or opt-in, a path containing a dot segment (`.` or `..`), a
@@ -168,12 +175,15 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   route needs one. Whether this server reads them as separators is not
   measured; the check fails closed. Document downloads (`get_bytes`,
   `stream_bytes`) are reads and are never gated.
-- A request is treated as a read only when its method **and** the value of
-  every method-override header (`X-HTTP-Method-Override`, `X-HTTP-Method`,
-  `X-Method-Override`) passed on the request are reads, so such a header cannot
-  hide a write behind a `GET`. A header added through `config.extra_headers` is
-  merged in later and is **not** classified: a known gap. Whether this API
-  honours these headers is not recorded.
+- **BREAKING** A request is treated as a read only when its method **and** the
+  value of every method-override header (`X-HTTP-Method-Override`,
+  `X-HTTP-Method`, `X-Method-Override`) on the request are reads, so such a
+  header cannot hide a write behind a `GET`: a request whose override header
+  names a write is classified as that write, and refused if it names a workflow
+  effect and the call did not allow it, whatever method it is sent as. The
+  headers read are the ones that go on the wire, `config.extra_headers` with
+  the request's own laid over them. Whether this API honours these headers is
+  not recorded.
 - **BREAKING** A write that names a workflow effect and is allowed is sent
   **once**, never retried: `close_ticket` and `end_action` formerly retried a
   429, a 5xx or a connection error when `max_retries` was above its default of
@@ -225,6 +235,10 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   or calls `send` with a workflow route or body, now raises until it passes
   `allow_workflow_effect=`. `WorkflowEffect.UNKNOWN` means undocumented, not
   harmless: read "Ticket workflow" in `docs/vendor-api-reference.md` first.
+- Code that builds a close or end-action spec with `build_close_ticket` or
+  `build_end_action` and sends it through the transport itself: pass the spec
+  through `.allowing(...)` first, and pass `build_end_action` and
+  `build_update_action` an integer action id, never an RFC number.
 - Catch `EasyvistaWorkflowEffectRefused` (or `ValueError`) where you record
   per-record failures. It is a `ValueError`, **not** an `EasyvistaError`, and
   carries no status code; it is never transient. Code that catches
@@ -264,8 +278,8 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   status only: the measurement never looked at the workflow or the ticket's
   open actions, and the vendor close page documents the close request as
   interrupting the workflow (tier 1). A status that landed is not evidence that
-  nothing else moved, and that finding was read as "this is a safe status
-  setter", which it was not. The 0.2.0 section is left as written.
+  nothing else moved, and that finding was read as a safe status setter, which
+  it was not. The 0.2.0 section is left as written.
 - `docs/content.rst`, a user-guide page for the converter: what a memo holds,
   what each direction does, what survives a round trip, and what it does not
   sanitise. The API reference gains a "Rich-text content" section.

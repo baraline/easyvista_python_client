@@ -72,13 +72,19 @@ def test_the_projected_item_read_names_workflow_id_on_both_kinds_of_action(
     step, other = _one_of_each(live_client)
     step_row = _probe(live_client, step)
     other_row = _probe(live_client, other)
-    assert "workflow_id" in step_row.model_fields_set
-    assert step_row.workflow_id is not None
-    assert "workflow_id" in other_row.model_fields_set, (
-        "the projected item read omits WORKFLOW_ID on a non-workflow action: "
-        "end_action's pre-flight would refuse every caller action"
+    # Through _require, never a bare assert: on failure the rewriter would print
+    # the whole Action, href host included (P2).
+    _require(
+        "workflow_id" in step_row.model_fields_set,
+        "the projected item read omits WORKFLOW_ID on a workflow step",
     )
-    assert other_row.workflow_id is None
+    _require(step_row.workflow_id is not None, "a workflow step has no WORKFLOW_ID")
+    _require(
+        "workflow_id" in other_row.model_fields_set,
+        "the projected item read omits WORKFLOW_ID on a non-workflow action: "
+        "end_action's pre-flight would refuse every caller action",
+    )
+    _require(other_row.workflow_id is None, "a non-workflow action has a WORKFLOW_ID")
 
 
 def test_the_plain_item_read_names_workflow_id_on_both_kinds_of_action(
@@ -86,8 +92,16 @@ def test_the_plain_item_read_names_workflow_id_on_both_kinds_of_action(
 ) -> None:
     """Recorded for comparison; the guard uses the projected read."""
     step, other = _one_of_each(live_client)
-    assert "workflow_id" in live_client.get_action(step).model_fields_set
-    assert "workflow_id" in live_client.get_action(other).model_fields_set
+    step_row = live_client.get_action(step)
+    other_row = live_client.get_action(other)
+    _require(
+        "workflow_id" in step_row.model_fields_set,
+        "the plain item read omits WORKFLOW_ID on a workflow step",
+    )
+    _require(
+        "workflow_id" in other_row.model_fields_set,
+        "the plain item read omits WORKFLOW_ID on a non-workflow action",
+    )
 
 
 # --- census: WRITES, run only with the user's explicit approval ------------

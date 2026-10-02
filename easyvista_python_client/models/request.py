@@ -361,8 +361,9 @@ class RequestUpdate(EasyvistaWriteModel):
       ``extra="forbid"`` now makes ``RequestUpdate(status_id=...)`` raise at
       construction instead.
 
-      There is no status write that leaves the workflow alone: a ticket's
-      status follows its workflow, and the one request that sets a status,
+      The vendor documents no status write that leaves the workflow alone, and
+      this package has none: a ticket's status follows its workflow, and the one
+      request the vendor documents that sets a status,
       :meth:`~easyvista_python_client.EasyvistaClient.close_ticket`, interrupts
       it (tier 1: "Advancing through the steps of a workflow changes the
       status of a ticket." on
