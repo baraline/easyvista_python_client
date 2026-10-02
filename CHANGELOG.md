@@ -45,8 +45,11 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   iterable of them, on `send`, `update_ticket`, `create_action`, `create_task`,
   `update_action` and `end_action` (default: allows nothing), and **required**
   on `close_ticket`. `RequestSpec.allow_workflow_effect` and
-  `RequestSpec.allowing()` carry the same opt-in for a caller driving the
-  `resources.*.build_*` functions through its own transport.
+  `RequestSpec.allowing()` carry the same opt-in on a request spec. A spec from
+  `resources.requests.build_close_ticket` or `resources.actions.build_end_action`
+  now needs `.allowing(...)` before this package's transport will send it, and
+  `build_end_action` and `build_update_action` refuse an action id that is not a
+  positive integer.
 - `resources.actions.build_get_action(..., fields=...)` projects the item read,
   as the list builders already did.
 - `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
@@ -121,7 +124,7 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   without a `WORKFLOW_ID` column (which cannot be told from a step), or when
   the read returns a different `ACTION_ID` than the one asked for. `end_all=True`
   always needs `ADVANCES`. Ending an action you created yourself needs no
-  opt-in. If the read fails, its error propagates and nothing is ended.
+  opt-in (see *Notes*). If the read fails, its error propagates and nothing is ended.
   Ending a workflow step moves the workflow on -- vendor-documented only by the
   UI's Finish wizard, and measured on one instance on 2026-09-01 (2 of 2), so
   it may not generalise.
@@ -147,46 +150,57 @@ dependencies. Every breaking change is in the workflow guard, and is marked
 - **BREAKING** `update_action` refuses an action id that is not a positive
   integer, `None` included: `PUT actions/{rfc_number}` is the end-action route
   on the same path, so an RFC number would not edit an action.
-- **BREAKING** The transport refuses outright, with `ValueError` and whatever
-  the method or opt-in, a path containing a dot segment (`.` or `..`), a
+- **BREAKING** `send()` -- the path every typed method and the client's own
+  `send` go through -- refuses outright, with `ValueError` and whatever the
+  method or opt-in, a path containing a dot segment (`.` or `..`), a
   percent-encoded slash or backslash, or a raw backslash: the HTTP client
   collapses a dot segment, and a server may read the others as a separator, so
   the request could reach a route other than the one that was checked. No API
   route needs one. Whether this server reads them as separators is not
-  measured; the check fails closed.
+  measured; the check fails closed. Document downloads (`get_bytes`,
+  `stream_bytes`) are reads and are never gated.
 - A request is treated as a read only when its method **and** the value of
   every method-override header (`X-HTTP-Method-Override`, `X-HTTP-Method`,
-  `X-Method-Override`) are reads, so an override header cannot hide a write
-  behind a `GET`. Whether this API honours those headers is not recorded.
-- A write that names a workflow effect and is allowed is sent **once**, never
-  retried, whatever `max_retries` says: each close inserts another anticipated
-  closing action and each end ends whatever is open, so a resend after a lost
-  response is not a repeat of the same request. This includes `end_action`,
-  your own action's included. Every other request keeps its retries.
+  `X-Method-Override`) passed on the request are reads, so such a header cannot
+  hide a write behind a `GET`. A header added through `config.extra_headers` is
+  merged in later and is **not** classified: a known gap. Whether this API
+  honours these headers is not recorded.
+- **BREAKING** A write that names a workflow effect and is allowed is sent
+  **once**, never retried: `close_ticket` and `end_action` formerly retried a
+  429, a 5xx or a connection error when `max_retries` was above its default of
+  `0`, and now raise after the first attempt. Each close inserts another
+  anticipated closing action and each end ends whatever is open, so a resend
+  after a lost response is not a repeat of the same request. This includes
+  `end_action` on your own action. Every other request keeps its retries.
 
 ### Removed
 
 - **BREAKING** `EasyvistaClient.set_status` / `AsyncEasyvistaClient.set_status`
   and `resources.requests.build_set_status`. They sent the vendor CLOSE request,
   which the vendor close page documents (tier 1, re-read 2026-10-02) as
-  interrupting the workflow, setting the final status, ending or deleting the
-  unfinished actions and inserting an anticipated closing action, none of it
+  interrupting the workflow, setting the final status, deleting the unfinished
+  actions when `delete_actions` is set (otherwise, by the package's reading of
+  the page, ending them) and inserting an anticipated closing action, none of it
   conditional on the status sent. The page documents final statuses only, so
   for a non-final one that is an extrapolation it neither exempts nor covers.
-  A synchroniser that used `set_status` to mirror an intermediate status ended
-  each ticket's initial workflow action, which is how it closed tickets early:
-  the root cause was read from its code on 2026-10-01/02 and from the vendor
-  page, and the drain of the open action across such a write was measured once,
-  on 2026-09-01, on one ticket on one instance (tier 4, so it may not
-  generalise). There is no status setter on this API: a ticket's status follows
-  its workflow. `close_ticket` and `resources.requests.build_close_ticket`
-  remain.
+  A synchroniser that used `set_status` to mirror an intermediate status closed
+  tickets early. The root cause was established on 2026-10-01/02 from the
+  synchroniser's code (it sent the close request right after every create and on
+  every status push) and from the vendor page; the drain of the open workflow
+  action across such a write was measured on one ticket (2026-09-01, one
+  instance, tier 4, so it may not generalise). The vendor documents no status
+  setter and this package has none: a flat status update is excluded from the
+  vendor's ticket update body (tier 1) and was seen to return 200 while dropping
+  the status (0.2.0 entry below), and a ticket's status follows its workflow.
+  `close_ticket` and `resources.requests.build_close_ticket` remain.
 
 ### Upgrading
 
 - `client.set_status(rfc, status_guid=g)` -- delete it; nothing replaces it,
-  because there is no way to set a status that leaves the workflow alone. To
-  move a ticket through its workflow, end the step's open action with
+  because the vendor documents no status setter (a flat status update is
+  excluded from its ticket update body, and was seen to drop the status -- see
+  0.2.0) and a ticket's status follows its workflow. To move a ticket through
+  its workflow, end the step's open action with
   `end_action(rfc, action_id=..., allow_workflow_effect=WorkflowEffect.ADVANCES)`.
   The status that follows is the workflow's, not yours to choose. This is not
   documented on the REST page, which is silent about the workflow; it was
@@ -194,8 +208,8 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   generalise, so re-read the ticket afterwards. To close, call
   `close_ticket(rfc, allow_workflow_effect=WorkflowEffect.INTERRUPTS, status_guid=g)`.
 - `end_action` callers: pass the integer id of an action you read, never an RFC
-  number, `0` or a blank. Ending your own action still needs no opt-in, and now
-  costs one extra item read. Ending a workflow step, or any action whose record
+  number, `0` or a blank. Ending your own action still needs no opt-in (see
+  *Notes*), and now costs one extra item read. Ending a workflow step, or any action whose record
   shows no `WORKFLOW_ID`, needs `WorkflowEffect.ADVANCES`, and so does
   `end_all=True`.
 - Code that puts a status, catalog or other named column into `extra_payload`,
@@ -207,8 +221,9 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   carries no status code; it is never transient. Code that catches
   `EasyvistaError` around a close for cleanup will NOT catch it. `ValueError`
   also catches the other local refusals above.
-- A lost response to an allowed workflow write now surfaces as an error instead
-  of a silent resend. Re-read the ticket before repeating it.
+- If you set `max_retries` above its default of `0`, a lost response to an
+  allowed workflow write now surfaces as an error instead of a silent resend.
+  Re-read the ticket before repeating it.
 - The minor bump is deliberate: a dependant pinned `>=0.3.0,<0.4` does **not**
   pick this up, and must widen its constraint on purpose.
 
@@ -221,22 +236,26 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   close page documents an omitted `status_GUID` as defaulting to the Closed
   meta-status. It was not measured here.
 - The README, the user guide, the API reference and the `easyvista-client-setup`,
-  `easyvista-instance-discovery`, `easyvista-ticket-actions` and
-  `easyvista-ticket-workflow` skills describe the guard. The ticket-workflow
-  skill's first gotcha is now that `close_ticket` is not a status setter.
+  `easyvista-ticket-actions` and `easyvista-ticket-workflow` skills describe the
+  guard; the `easyvista-instance-discovery` skill now says `close_ticket` stops
+  the workflow and is not a way to pick an intermediate status. The
+  ticket-workflow skill's first gotcha is now that `close_ticket` is not a
+  status setter.
 - The `PostRequest.workflow_start` docstring records that the flag is a no-op
   (tier 4: two tickets identical but for it came back byte-identical, 2026-09-01,
   one instance), so `workflow_start=False` does not create a ticket without its
   workflow. The vendor create page documents no such parameter and states that
   the workflow is started; the workflow-less create is the virtual-agent route
   `requests/without-workflow`, which the guard refuses unless allowed.
-- **Retracted:** "`set_status` reaches every status, not only terminal ones",
-  from the 0.2.0 entry below and the docstrings that repeated it. Six status
+- **Retracted:** that `set_status` reaches every status, as the 0.2.0 entry
+  below put it ("a fresh ticket landed on exactly the status requested every
+  time, non-terminal ones included") and the `RequestUpdate` docstring repeated
+  it ("That route reaches **every** status, not just terminal ones"). Six status
   GUIDs were tried and each landed, but that was measured by re-reading the
   status only: the measurement never looked at the workflow or the ticket's
   open actions, and the vendor close page documents the close request as
   interrupting the workflow (tier 1). A status that landed is not evidence that
-  nothing else moved, and "reaches every status" was read as "is a safe status
+  nothing else moved, and that finding was read as "this is a safe status
   setter", which it was not. The 0.2.0 section is left as written.
 - `docs/content.rst`, a user-guide page for the converter: what a memo holds,
   what each direction does, what survives a round trip, and what it does not
@@ -252,8 +271,8 @@ dependencies. Every breaking change is in the workflow guard, and is marked
 ### Notes
 
 - What the workflow guard does not establish. It is a deny-list: the vendor's
-  update pages accept every column of the ticket and action tables except a
-  short excluded list (tier 1), and a per-instance business rule can fire on
+  update pages accept every column of the ticket and action tables except an
+  excluded list (tier 1), and a per-instance business rule can fire on
   any write, so a write the guard does not name is unclassified, not proven
   neutral. `end_action` tells a workflow step from your own action by
   `WORKFLOW_ID` (1500 of 1500 rows, 2026-09-02, one instance); whether an
