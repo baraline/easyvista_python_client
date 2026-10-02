@@ -65,13 +65,15 @@ def test_format_refuses_a_naive_datetime():
 def test_the_iso_basic_form_is_refused_on_every_python(basic):
     """Separator-less ISO input must return ``None`` regardless of interpreter.
 
-    This is a portability guard, not a formatting preference. ``fromisoformat``
-    accepts the ISO "basic" form from Python 3.11 and rejects it on 3.10, and
-    this package supports 3.10 through 3.14 -- so before the explicit refusal
-    the *same wire value* parsed to an instant on four of the five supported
+    This began as a portability guard, not a formatting preference.
+    ``fromisoformat`` accepts the ISO "basic" form from Python 3.11 and rejects
+    it on 3.10, and when this package still supported 3.10 through 3.14 the
+    *same wire value* parsed to an instant on four of the five supported
     versions and raised on the fifth. CI caught it exactly that way: the 3.10
     job was green while 3.11 and 3.12 failed
     ``test_a_numeric_shaped_value_raises_instead_of_becoming_an_epoch_instant``.
+    With 3.11 as the floor every supported interpreter accepts these, so the
+    explicit refusal is now the only thing between them and a parsed instant.
 
     EasyVista's timestamps always carry separators, so none of these is one of
     its values on any interpreter, and accepting them would let a genuine

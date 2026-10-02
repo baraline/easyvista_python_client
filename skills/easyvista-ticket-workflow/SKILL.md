@@ -2,7 +2,7 @@
 name: easyvista-ticket-workflow
 description: "Create, read, search, paginate, update and close EasyVista tickets (requests) with easyvista_python_client — PostRequest, Request, RequestUpdate, create_ticket, create_tickets, get_ticket, search_tickets, iter_tickets, count_tickets, update_ticket and close_ticket. Use for any ticket/incident/request operation, including discovering the instance-specific catalog codes and ids a create needs."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
 metadata:
   package: easyvista-python-client
   version: "0.4.0"

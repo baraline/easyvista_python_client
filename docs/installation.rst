@@ -4,7 +4,11 @@ Installation
 Requirements
 ------------
 
-* Python 3.10 or newer.
+* Python 3.11 or newer. Release 0.4.0 dropped 3.10, which reaches end of life
+  in October 2026 (PEP 619). On 3.10, ``pip`` installs 0.3.0, the last release that
+  supports it. 0.3.0 has no ``content`` extra: asked for
+  ``easyvista-python-client[content]`` on 3.10, ``pip`` warns and installs
+  0.3.0 without the converter, which needs 3.11 or newer.
 * Runtime dependencies (installed automatically): ``httpx``, ``pydantic>=2``, ``tenacity``.
 
 From PyPI

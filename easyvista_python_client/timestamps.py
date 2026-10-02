@@ -33,7 +33,7 @@ and ``filters.py`` can use it without a cycle.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 _FRACTION_RE = re.compile(r"\.(\d+)")
@@ -48,18 +48,24 @@ def parse_ev_datetime(value: Any) -> datetime | None:
     """Parse an EasyVista timestamp to a timezone-aware ``datetime``, or ``None``.
 
     Accepts a ``datetime`` (returned as-is; a naive one is treated as UTC) or an
-    ISO-8601 string. Normalizes for Python 3.10's stricter ``fromisoformat``:
-    maps a trailing ``Z`` to ``+00:00`` and pads/truncates fractional seconds to
-    6 digits — EasyVista sends 3, which 3.10 rejects outright. Unparseable input
-    returns ``None`` rather than raising, so a single malformed column never
-    fails a whole record.
+    ISO-8601 string. Before ``fromisoformat`` it maps a trailing ``Z`` or ``z``
+    to ``+00:00`` and pads/truncates fractional seconds to 6 digits. Both rules
+    date from the Python 3.10 floor, whose ``fromisoformat`` rejected
+    EasyVista's 3-digit fraction outright. From 3.11 ``fromisoformat`` takes a
+    ``Z`` and any fraction length itself but still refuses a lowercase ``z``
+    (measured 2026-10-02 on 3.11.13 and 3.14.6), so the rules are kept and the
+    set of accepted values did not move when 3.10 was dropped. Unparseable
+    input returns ``None`` rather than raising, so a single malformed column
+    never fails a whole record.
 
     **A value must start with an extended ISO date** (``YYYY-MM-DD``) or it is
-    refused, on every interpreter. From 3.11 ``fromisoformat`` also accepts the
-    ISO *basic* forms — ``"20260817"``, ``"20260817T154041.610"``, week dates
-    like ``"2026W331"`` — which 3.10 rejects, so without this rule the same wire
-    value parsed to an instant on four of the five supported Pythons and raised
-    on the fifth. CI found it precisely that way: 3.10 green, 3.11 and 3.12 red.
+    refused, on every interpreter. ``fromisoformat`` on every supported Python
+    (3.11+) also accepts the ISO *basic* forms — ``"20260817"``,
+    ``"20260817T154041.610"``, week dates like ``"2026W331"`` — so without this
+    rule each would parse to a plausible instant. The rule predates the 3.11
+    floor: 3.10 rejected those forms, so the same wire value then parsed to an
+    instant on four of the five supported Pythons and raised on the fifth, and
+    CI found it precisely that way: 3.10 green, 3.11 and 3.12 red.
 
     The rule is stated positively because the reject-list version of it was
     wrong: "digits only" catches ``"20260817"`` and misses both a basic
@@ -71,7 +77,7 @@ def parse_ev_datetime(value: Any) -> datetime | None:
     which is tried after this returns ``None``.
     """
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     if not isinstance(value, str) or not value.strip():
         return None
     text = value.strip()
@@ -92,7 +98,7 @@ def parse_ev_datetime(value: Any) -> datetime | None:
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def format_ev_datetime(value: datetime) -> str:

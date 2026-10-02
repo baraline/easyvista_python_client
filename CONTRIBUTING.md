@@ -8,6 +8,10 @@ this page is the short version.
 
 ## Development Setup
 
+The project needs Python 3.11 or newer. `requires-python` is `>=3.11` since
+0.4.0, so a `.venv` created with 3.10 refuses the editable install below:
+recreate it with a newer interpreter.
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate

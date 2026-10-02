@@ -2,7 +2,7 @@
 name: easyvista-client-setup
 description: "Create and configure the synchronous easyvista_python_client.EasyvistaClient or the asynchronous AsyncEasyvistaClient — server/account/api_version, Bearer token or HTTP Basic credentials, EasyvistaConfig.from_env, timeouts, retries, TLS verification, default page size, and the EasyvistaError hierarchy. Use before calling any EasyVista API, or when the user asks how to connect to EasyVista with easyvista_python_client."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and valid EasyVista credentials."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and valid EasyVista credentials."
 metadata:
   package: easyvista-python-client
   version: "0.4.0"

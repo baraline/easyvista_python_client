@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pydantic
 import pytest
@@ -135,8 +135,8 @@ def test_request_declares_title_and_core_scalars():
     assert req.owner_id == 14
     assert req.external_reference == "REF-1"
     # No offset in the fixture -> parse_ev_datetime treats it as UTC.
-    assert req.submit_date_ut == datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
-    assert req.last_update == datetime(2026, 1, 2, 10, 30, 0, tzinfo=timezone.utc)
+    assert req.submit_date_ut == datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
+    assert req.last_update == datetime(2026, 1, 2, 10, 30, 0, tzinfo=UTC)
 
 
 def test_request_coerces_empty_string_numerics_to_none():
@@ -220,15 +220,9 @@ def test_request_declares_the_official_time_fields():
         }
     )
     # No offset in the fixtures -> parse_ev_datetime treats them as UTC.
-    assert ticket.creation_date_ut == datetime(
-        2026, 7, 28, 9, 0, 0, tzinfo=timezone.utc
-    )
-    assert ticket.max_resolution_date_ut == datetime(
-        2026, 7, 30, 9, 0, 0, tzinfo=timezone.utc
-    )
-    assert ticket.expected_date_ut == datetime(
-        2026, 7, 29, 9, 0, 0, tzinfo=timezone.utc
-    )
+    assert ticket.creation_date_ut == datetime(2026, 7, 28, 9, 0, 0, tzinfo=UTC)
+    assert ticket.max_resolution_date_ut == datetime(2026, 7, 30, 9, 0, 0, tzinfo=UTC)
+    assert ticket.expected_date_ut == datetime(2026, 7, 29, 9, 0, 0, tzinfo=UTC)
     assert ticket.end_date_ut is None  # "" sentinel
     assert ticket.sla_id == 4
     assert ticket.time_used_to_solve_request == "3600"
@@ -431,9 +425,7 @@ def test_department_id_and_recipient_id_accept_the_documented_string() -> None:
     longer rewritten: the string reaches the wire as written, and an int
     still reaches it as an int.
     """
-    body = PostRequest(
-        catalog_code="X", department_id="9", recipient_id="42"
-    ).to_api()
+    body = PostRequest(catalog_code="X", department_id="9", recipient_id="42").to_api()
     assert body["department_id"] == "9"
     assert body["recipient_id"] == "42"
     ints = PostRequest(catalog_code="X", department_id=9, recipient_id=42).to_api()

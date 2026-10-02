@@ -16,7 +16,7 @@ Skipped automatically without credentials; never runs in CI.
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta, timezone
+from datetime import UTC, timedelta
 from itertools import pairwise
 
 import pytest
@@ -299,8 +299,8 @@ def test_only_some_timestamp_renderings_are_accepted_as_an_interval_bound(
     later = parse_ev_datetime(late)
     assert moment is not None, "split_instants did not yield a parseable literal"
     assert later is not None, "split_instants did not yield a parseable literal"
-    as_utc = moment.astimezone(timezone.utc)
-    later_utc = later.astimezone(timezone.utc)
+    as_utc = moment.astimezone(UTC)
+    later_utc = later.astimezone(UTC)
     # For the date-only rendering the second bound is the day AFTER the late
     # instant, not its own day: on an instance whose sampled stamps all fall on
     # one day the two dates would otherwise be equal and the differential empty.

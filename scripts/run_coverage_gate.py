@@ -116,7 +116,11 @@ def main() -> int:
         "Could not find an interpreter with the project's dev dependencies "
         "installed, so the coverage gate did not run. Tried:\n  "
         + "\n  ".join(str(path) for path in tried)
-        + "\n\nCreate the environment CONTRIBUTING.md describes:\n"
+        + "\n\nAn interpreter older than requires-python in pyproject.toml "
+        "(3.11) fails this probe too, even with every dependency installed: "
+        "the package itself no longer imports there.\n\n"
+        "Create the environment CONTRIBUTING.md describes, on Python 3.11 or "
+        "newer:\n"
         "  python -m venv .venv\n"
         '  .venv\\Scripts\\python.exe -m pip install -e ".[dev]"',
         file=sys.stderr,

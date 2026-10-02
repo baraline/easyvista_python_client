@@ -2,7 +2,7 @@
 name: easyvista-ticket-actions
 description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, end_action (an action is born OPEN and its text does not show until ended), list_actions, iter_actions, get_action and update_action with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
   package: easyvista-python-client
   version: "0.4.0"
