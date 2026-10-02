@@ -83,19 +83,17 @@ def build_close_ticket(
     catalog_guid: str | None = None,
     context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Request]]:
-    """Build the ``{"closed": {...}}`` PUT spec — the API's status-set route.
+    """Build the ``{"closed": {...}}`` PUT spec — the vendor's close request.
 
-    Despite the wire name, this envelope is **not limited to closing**. It is the
-    only working way to set a ticket's status, and it reaches every status:
-    handed each of six different ``STATUS_GUID``s in turn, a fresh ticket landed
-    on exactly the status requested every time -- including non-terminal ones
-    like "A prendre en compte" and "En cours". Nothing was forced to the closed
-    status.
-
-    Note the addressing: ``status_GUID``, not ``STATUS_ID``. There is no flat
-    status update on this API -- see :class:`RequestUpdate` for what happens if
-    you try one. :func:`build_set_status` is the same spec under a name that says
-    what it does.
+    This is the vendor's CLOSE request, and it is not a status setter. Per the
+    close page (tier 1, re-read 2026-10-02) it interrupts the ticket's
+    workflow, sets ``status_GUID`` as "the final status of the ticket", ends
+    or (with ``delete_actions``) deletes the unfinished actions, and inserts
+    an anticipated closing action -- none of it conditional on the status
+    sent. The client's ``close_ticket`` requires the caller to allow
+    ``WorkflowEffect.INTERRUPTS``; this builder returns a spec the transport
+    refuses until that is done. Note the addressing: ``status_GUID``, not
+    ``STATUS_ID``.
 
     ``delete_actions`` drops the ticket's actions; the vendor types it a
     **boolean** and this builder passes either spelling through unchanged, since
@@ -107,10 +105,9 @@ def build_close_ticket(
     a workaround for the ``PUT|PATCH requests/{rfc_number}/close`` path that
     also appears in an instance's OpenAPI. Every field below is tier 1, and
     every one is **optional**: omitting ``end_date`` stamps now, and omitting
-    ``status_guid`` simply leaves the key out of the body. **Where the ticket
-    then lands is not established here** -- the behaviour is not recorded in
-    ``docs/vendor-api-reference.md`` and no live test exercises the omitted
-    form (open item O-CLOSE-DEFAULT).
+    ``status_guid`` leaves the key out of the body, and the vendor documents
+    the default as the Closed meta-status (tier 1, the same page; never
+    measured here).
 
     ``catalog_guid`` requalifies the ticket as it closes -- the vendor notes it
     is needed only for that. ``end_date`` takes the instance's own date format,
@@ -142,22 +139,3 @@ def build_close_ticket(
         )
 
     return spec, parse
-
-
-def build_set_status(
-    rfc_number: str,
-    *,
-    status_guid: str,
-    comment: str | None = None,
-    context: dict[str, Any] | None = None,
-) -> tuple[RequestSpec, Callable[[Any], Request]]:
-    """Build a spec that sets ``rfc_number``'s status to ``status_guid``.
-
-    The same request :func:`build_close_ticket` builds, named for what it
-    actually does. ``status_guid`` is required here rather than optional: the
-    envelope without one is a close request with nothing to close to, and making
-    that unexpressible is the point of having this function at all.
-    """
-    return build_close_ticket(
-        rfc_number, status_guid=status_guid, comment=comment, context=context
-    )

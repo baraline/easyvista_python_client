@@ -508,7 +508,9 @@ class _StubCloseClient:
         self.closed: list[str] = []
         self._failing = failing or set()
 
-    def close_ticket(self, rfc, *, status_guid, delete_actions, comment):
+    def close_ticket(
+        self, rfc, *, allow_workflow_effect, status_guid, delete_actions, comment
+    ):
         if rfc in self._failing:
             raise EasyvistaConnectionError("connection failed")
         self.closed.append(rfc)

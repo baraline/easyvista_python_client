@@ -356,11 +356,10 @@ class RequestUpdate(EasyvistaWriteModel):
       ``extra="forbid"`` now makes ``RequestUpdate(status_id=...)`` raise at
       construction instead.
 
-      Set a status with :meth:`~easyvista_python_client.EasyvistaClient.set_status`,
-      which sends the documented ``{"closed": {"status_GUID": ...}}`` body. That
-      route reaches **every** status, not just terminal ones -- all six statuses
-      tried landed on exactly the one requested. It is addressed by
-      ``STATUS_GUID``, not by ``STATUS_ID``.
+      There is no status write that leaves the workflow alone: a ticket's
+      status follows its workflow, and the one request that sets a status,
+      :meth:`~easyvista_python_client.EasyvistaClient.close_ticket`, interrupts
+      it (tier 1, the vendor close page).
     * ``severity_id`` -- rejected with HTTP 590 (code 2013). Tier 4: measured on
       one instance, 2026-08-17.
     * ``urgency_id`` -- ``URGENCY_ID`` raised HTTP 590 *and the value still
@@ -383,7 +382,12 @@ class RequestUpdate(EasyvistaWriteModel):
 
     To send ``status_id``, ``severity_id`` or ``urgency_id`` anyway on a
     deployment where they work, use ``extra_payload`` -- and re-read the
-    ticket afterwards, because a 200 from this endpoint is not a receipt.
+    ticket afterwards, because a 200 from this endpoint is not a receipt. A
+    ``status_id`` sent that way is refused before sending unless the call
+    passes ``allow_workflow_effect=WorkflowEffect.UNKNOWN`` to
+    ``update_ticket``, because a status column holds workflow state (see
+    :mod:`easyvista_python_client.workflow`); ``severity_id`` and ``urgency_id``
+    are not refused.
     ``extra_payload`` does **not** help with priority: there is no writable
     column for it to reach.
 

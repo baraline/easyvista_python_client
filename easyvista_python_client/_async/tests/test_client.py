@@ -123,7 +123,31 @@ async def test_update_and_close_ticket(config):
     )
     async with AsyncEasyvistaClient(config) as client:
         await client.update_ticket("I1", RequestUpdate(impact_id=4))
-        await client.close_ticket("I1", comment="resolved")
+        await client.close_ticket(
+            "I1", allow_workflow_effect=WorkflowEffect.INTERRUPTS, comment="resolved"
+        )
+
+
+async def test_close_ticket_requires_the_opt_in_keyword(config):
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(TypeError):
+            await client.close_ticket("I1")  # type: ignore[call-arg]
+
+
+@respx.mock
+async def test_close_ticket_refuses_an_opt_in_that_does_not_cover_interrupting(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.close_ticket(
+                "I1", allow_workflow_effect=WorkflowEffect.ADVANCES
+            )
+    assert not route.called
+
+
+def test_set_status_is_gone():
+    """It was the vendor close request under a name that hid the close."""
+    assert not hasattr(AsyncEasyvistaClient, "set_status")
 
 
 @respx.mock
@@ -2356,7 +2380,7 @@ async def test_discover_status_populates_the_guid_from_a_ticket_sample(config):
 
     A STATUS_GUID is not searchable and no reference read returns one, but
     every ticket's nested STATUS object carries it. The GUID is what
-    ``set_status`` and ``close_ticket`` address a status by -- a STATUS_ID will
+    ``close_ticket`` addresses a status by -- a STATUS_ID will
     not work there -- so this is usually the value the caller came for.
     """
     respx.get(f"{ROOT}/status").mock(

@@ -87,6 +87,7 @@ from easyvista_python_client import (
     EasyvistaRateLimitError,
     EasyvistaServerError,
     PostRequest,
+    WorkflowEffect,
     ev_equals_filter,
     is_safe_ev_value,
 )
@@ -304,8 +305,10 @@ def live_write_client(live_config: EasyvistaConfig) -> Iterator[EasyvistaClient]
     tell a safe GET from a ``create_action``. Rather than weaken the retry that
     makes reads trustworthy, the non-idempotent verbs get their own client with
     retries off: ``create_ticket``, ``create_action`` and ``add_document``.
-    ``update_ticket`` (fixed-value PUTs) and ``close_ticket`` are idempotent and
-    stay on ``live_client``.
+    ``update_ticket`` (fixed-value PUTs) stays on ``live_client``;
+    ``close_ticket`` is not idempotent in effect (each call inserts an
+    anticipated closing action), but the transport sends an allowed close once
+    on any client.
 
     ``replace`` on a frozen dataclass re-runs ``__post_init__``, which is required
     because ``_server_normalized`` is ``field(init=False)``.
@@ -588,12 +591,15 @@ def _close_tracked(
     Error records carry the exception's TYPE and status code, never the exception
     object: ``str(exc)`` is the transport's message, which interpolates server prose
     this suite did not author (P2).
+
+    Teardown interrupts each ticket's workflow on purpose -- that is what closing is.
     """
     errors: list[tuple[str, str, int | None]] = []
     for rfc in tracked:
         try:
             client.close_ticket(
                 rfc,
+                allow_workflow_effect=WorkflowEffect.INTERRUPTS,
                 status_guid=cfg["status_guid"],
                 delete_actions=1,
                 comment=reason,

@@ -36,6 +36,7 @@ from easyvista_python_client import (
     PostRequest,
     PostTask,
     RequestUpdate,
+    WorkflowEffect,
 )
 
 #: One payload that satisfies every parser in the package.
@@ -75,8 +76,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     # The escape hatch: an arbitrary route, parsed by nobody. PAYLOAD satisfies
     # it because `send` returns the raw JSON body unchanged.
     "send": (("GET", "requests"), {}),
-    "close_ticket": (("I1",), {}),
-    "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
+    "close_ticket": (("I1",), {"allow_workflow_effect": WorkflowEffect.INTERRUPTS}),
     "count_tickets": ((), {}),
     "create_action": (("I1", PostAction(action_type_id=94, group_id=3)), {}),
     # action_id named explicitly: omitted, the vendor form ends EVERY open

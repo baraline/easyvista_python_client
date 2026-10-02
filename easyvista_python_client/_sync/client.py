@@ -483,60 +483,61 @@ class EasyvistaClient:
         )
         return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
-    def set_status(
-        self, rfc_number: str, *, status_guid: str, comment: str | None = None
-    ) -> Request:
-        """Set a ticket's status, addressed by ``STATUS_GUID``.
-
-        This is the API's only working status write, and it reaches **every**
-        status rather than only terminal ones: given six different status GUIDs
-        in turn, a fresh ticket landed on exactly the status requested every
-        time, non-terminal ones included.
-
-        It sends the documented ``{"closed": {"status_GUID": ...}}`` body -- the
-        same request :meth:`close_ticket` sends, under a name that matches what
-        it does, because "close" is what the wire calls it and not what it is
-        limited to.
-
-        Note the addressing. A ``STATUS_GUID`` is not a ``STATUS_ID``; the two
-        are different columns, and only the GUID works here. Read a status's GUID
-        off any ticket in that status (the nested ``STATUS`` object carries
-        ``STATUS_GUID``) -- they are stable per instance but are **not**
-        portable between instances.
-        """
-        spec, parse = requests_res.build_set_status(
-            rfc_number,
-            status_guid=status_guid,
-            comment=comment,
-            context=self._validation_context,
-        )
-        # Interim: keeps today's behaviour; Task 4/6 replace this with the
-        # caller's opt-in.
-        return parse(
-            self._transport.send(spec.allowing(WorkflowEffect.INTERRUPTS))
-        )
-
     def close_ticket(
         self,
         rfc_number: str,
         *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect],
         status_guid: str | None = None,
         delete_actions: int | bool | None = None,
         comment: str | None = None,
         end_date: str | None = None,
         catalog_guid: str | None = None,
     ) -> Request:
-        """Close a ticket, via the vendor's documented close route.
+        """Close a ticket early -- the vendor's close request, which stops its workflow.
 
-        Sends ``PUT requests/{rfc}`` with a ``closed`` wrapper --
+        Sends ``PUT requests/{rfc}`` with a ``closed`` body, as the vendor
+        documents it:
         https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md.
-        Every argument is optional. With no ``end_date`` the server stamps now.
-        With no ``status_guid`` this client sends no status of its own -- but
-        **where the ticket then lands is not established here**: the behaviour
-        is not recorded in ``docs/vendor-api-reference.md`` and no live test
-        exercises the omitted form, every one of them passing an explicit
-        ``status_guid``. Try it on a throwaway ticket and re-read before
-        relying on it (open item O-CLOSE-DEFAULT).
+        That page lists what the request does, and none of it depends on the
+        status passed (tier 1, re-read 2026-10-02):
+
+        * "The workflow of the ticket is interrupted."
+        * The status is set to ``status_guid``, which the page calls "the final
+          status of the ticket". Omitted, the vendor documents the default as
+          the Closed meta-status.
+        * "The unfinished actions associated with the ticket are deleted" when
+          ``delete_actions`` is true. Otherwise ``end_date`` is the "Closing date
+          of open actions associated with the ticket" -- read here as: they are
+          ended, not left open. That reading rests on the parameter row and one
+          observation (2026-09-01, one instance), not on an explicit sentence.
+        * "An anticipated closing action associated with the ticket is
+          inserted." -- one per call, so every close adds a row.
+
+        **So this is not a status setter, and there is none.** A ticket's
+        status follows its workflow: "Advancing through the steps of a workflow
+        changes the status of a ticket." (tier 1,
+        https://docs.easyvista.com/docs/workflow.md). A non-final status sent
+        here still interrupts the workflow and closes the ticket's open
+        actions -- the page documents final statuses only, and nothing exempts
+        the others. To move a ticket through its workflow, end the workflow
+        step's open action instead; see :meth:`end_action`.
+
+        That is why ``allow_workflow_effect`` is **required**: pass
+        ``WorkflowEffect.INTERRUPTS`` to say at the call site that interrupting
+        the workflow is the intent. Anything that does not include it is
+        refused with
+        :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` before
+        a request is made, and the allowed request is sent once, never
+        retried::
+
+            client.close_ticket(
+                rfc,
+                allow_workflow_effect=WorkflowEffect.INTERRUPTS,
+                status_guid=CLOSED_GUID,
+            )
+            after = client.get_ticket(rfc)
+            assert after.end_date_ut is not None  # the close actually landed
 
         **Verify the close by re-reading the status, not by the return value.**
         A status id is per-instance configuration and nothing about it is
@@ -546,11 +547,7 @@ class EasyvistaClient:
         skip a ticket it believed was already closed. Read
         ``get_ticket(rfc).status_id`` (or ``.reference("STATUS")`` for the
         label) afterwards, and compare against a status you resolved from the
-        instance rather than a constant::
-
-            client.close_ticket(rfc, status_guid=CLOSED_GUID)
-            after = client.get_ticket(rfc)
-            assert after.end_date_ut is not None  # the close actually landed
+        instance rather than a constant.
 
         ``end_date_ut`` is the more portable signal than any status id: it is
         empty while a ticket is being worked and stamped once it is finished.
@@ -564,10 +561,9 @@ class EasyvistaClient:
         distinguishes the two without resolving the status against the
         instance.
 
-        ``status_guid`` reaches **any** status, not only terminal ones -- see
-        :meth:`set_status`, which is this same request under a name that says
-        so. ``catalog_guid`` requalifies the ticket as it closes.
-        ``delete_actions`` drops its actions.
+        ``catalog_guid`` requalifies the ticket as it closes -- the vendor notes
+        it is needed only for that. ``delete_actions`` deletes the unfinished
+        actions instead of ending them.
 
         ``end_date`` takes the instance's own date format, which is not ISO 8601
         everywhere (``dd/mm/yyyy`` on the verified instance -- read
@@ -584,11 +580,7 @@ class EasyvistaClient:
             catalog_guid=catalog_guid,
             context=self._validation_context,
         )
-        # Interim: keeps today's behaviour; Task 4/6 replace this with the
-        # caller's opt-in.
-        return parse(
-            self._transport.send(spec.allowing(WorkflowEffect.INTERRUPTS))
-        )
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
     # --- actions -------------------------------------------------------------
     def create_action(
@@ -1724,7 +1716,7 @@ class EasyvistaClient:
         sweeps tickets, reads ``record["STATUS"]["STATUS_GUID"]``, and merges
         each guid onto the matching id. That costs one extra ticket sweep even
         under ``strategy="reference"``; pass ``with_guid=False`` to skip it. The
-        GUID is what :meth:`set_status` and :meth:`close_ticket` address a
+        GUID is what :meth:`close_ticket` addresses a
         status by -- a ``STATUS_ID`` will not work there -- so this is usually
         the value you came for. A status no sampled ticket currently holds keeps
         ``guid=None``: the sample cannot reach it.
