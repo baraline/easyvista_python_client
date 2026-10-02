@@ -26,18 +26,19 @@ jobs:
       fail-fast: false
       matrix:
         # Mirrors ci.yml and the `Programming Language :: Python` classifiers in
-        # pyproject.toml. requires-python is >=3.10; the upper end is bounded by
+        # pyproject.toml. requires-python is >=3.11; the upper end is bounded by
         # what the suite is verified on, not by anything in the code. The
         # generated-_sync/ gate is the reason a new interpreter is not just
         # added on faith: it is a byte-equality check whose output comes from
         # tokenize-rt re-tokenizing the source, so a tokenizer change can fail
         # it on one version alone. The suite and that gate were both run on
-        # 3.13.14 and 3.14.6 before either was listed here (600 passed, same
-        # coverage as 3.10, _sync/ regenerated identical under both).
+        # 3.13.14 and 3.14.6 before either was listed here (600 passed, the
+        # same coverage as 3.10 then gave, _sync/ regenerated identical under
+        # both).
         # These entries are minor versions, not pinned patches: setup-python
         # resolves a bare "3.14" to the newest STABLE 3.14.x and never to a
         # pre-release, which needs allow-prereleases.
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Check out repository
@@ -59,8 +60,9 @@ jobs:
       # than left to skip on absent credentials, so a leaked secret could not
       # make a release run go live. --strict-markers/--strict-config must be
       # passed here, not in addopts, where pytest 9 silently ignores them.
-      # Coverage runs implicitly: --cov lives in pyproject's addopts and
-      # [tool.coverage.report] fail_under = 95 gates it.
+      # This job does not gate coverage: pyproject has no addopts, so no
+      # --cov runs here. In CI the 95% floor is enforced only by ci.yml's
+      # `coverage` job, and locally by the pre-push hook.
       - name: Run tests
         run: python -m pytest -m "not integration" --strict-markers --strict-config
 
@@ -135,10 +137,10 @@ jobs:
       # easyvista_python_client.__version__ -- and the git tag is a third. PyPI
       # takes whatever pyproject says, so a tag that disagrees publishes a
       # release nobody can find by version, and a __version__ that disagrees
-      # misreports at runtime. Both are unfixable after upload. The repo's only
-      # existing tag, 0.1.0, is UNPREFIXED; v-prefixing starts at v0.2.0. The
-      # leading v is therefore stripped before comparing, so both forms
-      # validate.
+      # misreports at runtime. Both are unfixable after upload. Every tag so
+      # far (0.1.0, 0.2.0, 0.3.0) is unprefixed, as CHANGELOG.md says tags
+      # are. A leading v is still stripped before comparing, as a tolerance,
+      # so a v-prefixed tag validates too.
       - name: Validate release tag matches package version
         if: github.event_name == 'release'
         shell: bash
@@ -149,10 +151,7 @@ jobs:
           normalized_tag="${release_tag#v}"
           pyproject_version="$(python - <<'PY'
           from pathlib import Path
-          try:
-              from tomllib import loads as toml_loads
-          except ModuleNotFoundError:
-              from tomli import loads as toml_loads
+          from tomllib import loads as toml_loads
 
           pyproject = toml_loads(Path('pyproject.toml').read_text(encoding='utf-8'))
           print(pyproject['project']['version'])

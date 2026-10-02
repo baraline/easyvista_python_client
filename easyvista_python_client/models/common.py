@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -140,7 +140,7 @@ def _parse_with_context_formats(value: Any, info: ValidationInfo) -> datetime | 
             parsed = datetime.strptime(value.strip(), pattern)
         except (TypeError, ValueError):
             continue
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     return None
 
 
@@ -204,10 +204,13 @@ OptionalDateTime = Annotated[
 
 EasyVista returns ISO 8601 with an explicit UTC offset and millisecond
 precision (``2026-08-17T15:40:41.610+02:00``), and ``""`` for an unset date —
-verified live 2026-08-17. Python 3.10's ``fromisoformat`` rejects the 3-digit
-fraction outright, which is why this goes through
+verified live 2026-08-17. This goes through
 :func:`~easyvista_python_client.parse_ev_datetime` rather than letting pydantic
-parse the string itself. A naive ``datetime`` passed in directly (not just a
+parse the string itself because pydantic's parser is far more permissive than
+that format and turns an ISO-basic or epoch-shaped value into a plausible but
+wrong instant (see :func:`_empty_str_to_none_datetime`); the original reason,
+Python 3.10's ``fromisoformat`` rejecting the 3-digit fraction, went with the
+3.10 floor. A naive ``datetime`` passed in directly (not just a
 wire string) is normalized to aware UTC the same way, so the ``| None`` aside,
 this type's value is always timezone-aware, never naive.
 """
@@ -288,7 +291,9 @@ class EasyvistaWriteModel(BaseModel):
             "as extra_payload={...}: it merges last and reaches the wire as "
             "written. Some fields are absent here because they were measured "
             "to misbehave, not merely because they are undocumented, so "
-            "re-read afterwards -- a 200 is not a receipt on this API."
+            "re-read afterwards -- a 200 is not a receipt on this API. A key "
+            "that may change a ticket's workflow is refused before sending "
+            "unless the call passes allow_workflow_effect=."
         )
 
     custom_fields: dict[str, Any] = Field(default_factory=dict)
@@ -307,7 +312,9 @@ class EasyvistaWriteModel(BaseModel):
         measured against a single instance, and a deployment where that field
         behaves differently needs a way through that is not a fork. Because it
         bypasses the model it also bypasses the model's validation: whatever is
-        put here reaches the wire as written.
+        put here reaches the wire as written -- unless it may change a ticket's
+        workflow, in which case the transport refuses the request before
+        sending it; see :mod:`easyvista_python_client.workflow`.
 
         **The merge is case-insensitive.** The vendor documents the ticket
         create body's field names as case-insensitive (tier 1 --

@@ -2,10 +2,10 @@
 name: easyvista-document-workflow
 description: "Attach, list, download, stream and delete files on an EasyVista ticket with easyvista_python_client — add_document, list_documents, download_document, stream_document and delete_document with the Document model. Use for ticket attachments, uploading evidence or logs to a request, fetching an attachment's bytes whole or chunk by chunk without buffering a large file, or removing one."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the documents sub-resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the documents sub-resource."
 metadata:
   package: easyvista-python-client
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,

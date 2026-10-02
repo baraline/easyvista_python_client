@@ -2,10 +2,10 @@
 name: easyvista-reporting-and-context
 description: "Aggregate EasyVista tickets into counts and per-dimension breakdowns, and assemble one-call context bundles, with easyvista_python_client — count_tickets, ticket_statistics, aggregate_tickets, TicketStatistics, get_ticket_context, TicketContext.to_markdown and get_department_context. Use for ticket dashboards, per-status or per-department counts, and for exporting a ticket or a department as an LLM-ready document."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, and network access to an EasyVista Service Manager REST API."
+compatibility: "Requires Python 3.11+, easyvista-python-client, and network access to an EasyVista Service Manager REST API."
 metadata:
   package: easyvista-python-client
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,

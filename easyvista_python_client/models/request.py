@@ -55,8 +55,10 @@ class Request(EasyvistaModel):
     title: str | None = Field(default=None, alias="TITLE")
     # The list view returns DESCRIPTION inline (a string); the single-ticket GET
     # expands it into an HREF reference object (``{"HREF": ".../description"}``).
-    # Accept either so both read paths validate. Whether the resolved text is
-    # HTML or plain text is still unverified (spec open item O4).
+    # Accept either so both read paths validate. The resolved text is whatever
+    # its writer sent, HTML or plain text: measured 2026-09-30 on one instance
+    # (tier 4, may not generalise), and what is still unknown is open item
+    # O-MEMOFORMAT in docs/vendor-api-reference.md.
     description: str | dict[str, Any] | None = Field(default=None, alias="DESCRIPTION")
     external_reference: str | None = Field(default=None, alias="EXTERNAL_REFERENCE")
 
@@ -228,16 +230,21 @@ class PostRequest(EasyvistaWriteModel):
     you can read again, follow the create with
     ``update_ticket(rfc, RequestUpdate(description=...))``.
 
-    ``workflow_start`` is a boolean and is sent even when ``False``, so a
-    caller disabling the workflow is not silently overridden -- that part is
-    real and unchanged. Its provenance is not like the fields above, though:
-    it does **not** appear anywhere in the vendor's own create-body
-    documentation. It is declared only in the instance's own OpenAPI schema
-    for ``POST /requests`` -- "Optional. If true, starts the workflow for the
-    created incident." -- which makes it **tier 3, illustrative only**: that
-    schema is example-derived, not a normative contract (see
-    ``docs/vendor-api-reference.md``). Treat it as unverified until tested
-    against the deployment you use it on.
+    ``workflow_start`` is a boolean and is sent as given, ``False`` included.
+    Its provenance is not like the fields above: it does **not** appear
+    anywhere in the vendor's own create-body documentation. It is declared only
+    in the instance's own OpenAPI schema for ``POST /requests`` -- "Optional.
+    If true, starts the workflow for the created incident." -- which makes it
+    **tier 3, illustrative only**: that schema is example-derived, not a
+    normative contract (see ``docs/vendor-api-reference.md``).
+
+    Measured a no-op (tier 4, 2026-09-01, one instance: two tickets identical
+    but for this flag came back byte-identical), so ``workflow_start=False`` is
+    not a way to create a ticket without its workflow. The vendor create page
+    documents no such parameter and states the workflow is started. A
+    workflow-less create is the separate virtual-agent route,
+    ``POST requests/without-workflow``, which the workflow guard refuses unless
+    allowed (see :mod:`easyvista_python_client.workflow`).
     """
 
     catalog_guid: str | None = None
@@ -354,11 +361,14 @@ class RequestUpdate(EasyvistaWriteModel):
       ``extra="forbid"`` now makes ``RequestUpdate(status_id=...)`` raise at
       construction instead.
 
-      Set a status with :meth:`~easyvista_python_client.EasyvistaClient.set_status`,
-      which sends the documented ``{"closed": {"status_GUID": ...}}`` body. That
-      route reaches **every** status, not just terminal ones -- all six statuses
-      tried landed on exactly the one requested. It is addressed by
-      ``STATUS_GUID``, not by ``STATUS_ID``.
+      The vendor documents no status write that leaves the workflow alone, and
+      this package has none: a ticket's status follows its workflow, and the one
+      request the vendor documents that sets a status,
+      :meth:`~easyvista_python_client.EasyvistaClient.close_ticket`, interrupts
+      it (tier 1: "Advancing through the steps of a workflow changes the
+      status of a ticket." on
+      https://docs.easyvista.com/docs/references-tables.md, Statuses section,
+      and the vendor close page).
     * ``severity_id`` -- rejected with HTTP 590 (code 2013). Tier 4: measured on
       one instance, 2026-08-17.
     * ``urgency_id`` -- ``URGENCY_ID`` raised HTTP 590 *and the value still
@@ -381,7 +391,12 @@ class RequestUpdate(EasyvistaWriteModel):
 
     To send ``status_id``, ``severity_id`` or ``urgency_id`` anyway on a
     deployment where they work, use ``extra_payload`` -- and re-read the
-    ticket afterwards, because a 200 from this endpoint is not a receipt.
+    ticket afterwards, because a 200 from this endpoint is not a receipt. A
+    ``status_id`` sent that way is refused before sending unless the call
+    passes ``allow_workflow_effect=WorkflowEffect.UNKNOWN`` to
+    ``update_ticket``, because a status column holds workflow state (see
+    :mod:`easyvista_python_client.workflow`); ``severity_id`` and ``urgency_id``
+    are not refused.
     ``extra_payload`` does **not** help with priority: there is no writable
     column for it to reach.
 

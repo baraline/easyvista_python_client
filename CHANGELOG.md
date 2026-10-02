@@ -15,6 +15,456 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
+Adds Markdown <-> memo HTML conversion as an optional extra, drops Python
+3.10, and **stops a ticket's workflow changing by accident -- which is a
+breaking release.** `set_status` is gone (it was the vendor close request under
+a name that hid it), `close_ticket` requires an explicit opt-in, and every
+write the package can tell may change a ticket's workflow is refused before it
+is sent unless the call says so. What it cannot tell is not covered (see
+*Notes*).
+
+A `0.4.0` section was first prepared on 2026-09-30 around a different
+converter. It was never tagged or uploaded, and this section replaces it;
+`### Changed since the 2026-09-30 preparation` says what moved, for anyone who
+built against that branch.
+
+**Upgrading.** **Python 3.10 is no longer supported** (see `### Removed`). On
+3.10, pip keeps resolving `0.3.0`, the last release that installs there. The
+converter is purely additive: the core package imports none of the extra's
+dependencies. Every other breaking change is in the workflow guard, and each is
+marked `**BREAKING**` in `### Changed` or `### Removed`. Read `### Upgrading`
+below.
+
+### Added
+
+- **The workflow guard.** `WorkflowEffect` (`INTERRUPTS`, `ADVANCES`,
+  `UNKNOWN`) and `EasyvistaWorkflowEffectRefused`, both exported at the package
+  root, and `easyvista_python_client.workflow` (`workflow_triggers`,
+  `classify_workflow_effects`), which names what a write may do to a ticket's
+  workflow. `EasyvistaWorkflowEffectRefused` is a `ValueError`, **not** an
+  `EasyvistaError`: the refused write is never sent, so there is no status code
+  and nothing transient, and it carries `effects` and `triggers` (what named
+  them). A ticket's status follows its workflow -- "Advancing through the steps
+  of a workflow changes the status of a ticket." (tier 1) -- so a write that
+  touches workflow state is not a bookkeeping write.
+- An `allow_workflow_effect=` keyword, taking one `WorkflowEffect` or an
+  iterable of them, on `send`, `update_ticket`, `create_action`, `create_task`,
+  `update_action` and `end_action` (default: allows nothing), and **required**
+  on `close_ticket`. `RequestSpec.allow_workflow_effect` and
+  `RequestSpec.allowing()` carry the same opt-in on a request spec.
+- `resources.actions.build_get_action(..., fields=...)` projects the item read,
+  as the list builders already did.
+- `reassign_action(action_id, *, group_id=None, done_by_id=None)` on both
+  clients, with `resources.actions.build_reassign_action`: reassign an action
+  (for example, escalate the open workflow step to another group) without
+  ending it. It is not refused by the workflow guard. The vendor documents no
+  reassignment route (tier 1), so the effect was measured: 2026-10-02, one
+  instance, two tickets, so it may not generalise -- the group was stored, the
+  step stayed open, the ticket's status did not move and no new action rows
+  appeared; the ticket's owning group was read on one of the two tickets and
+  did not follow the action's. The person write (`done_by_id`) is unmeasured.
+- `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
+  optional extra `easyvista-python-client[content]`. It has two static
+  methods. `from_transport(value, *, plain_text_is_markdown=False)` reads a
+  memo, rich-text HTML or plain text, as Markdown. `to_transport(value)`
+  renders Markdown as the HTML a memo is written with.
+
+  **The Markdown is CommonMark with GFM tables.** Writing renders it with
+  `cmark-gfm`, with only its `table` extension: a newline is a line break, and
+  raw HTML passes through. Reading converts HTML with `markdownify`, then
+  re-renders the result with `mdformat`, which keeps only the escapes
+  CommonMark needs.
+
+  **Text in a memo is literal, and the Markdown spells it so.** A typed
+  `__init__` reads as `\_\_init\_\_`, `\\serveur` as `\\\serveur`, `# titre`
+  at a line start as `\# titre`, and `<Entrée>` as `\<Entrée>`. Ordinary prose
+  such as `fichier_de_test_v2.xlsx`, `C:\Temp`, `R&D` or `Ticket #4521` comes
+  back as typed. The aim is that rendering the Markdown displays what the
+  memo displayed, and that reading that back gives the same Markdown; the
+  measurements below say how far that held, and `docs/content.rst` lists the
+  shapes where it does not.
+
+  What else a reader sees:
+  - A memo with no HTML element is read as literal lines, a hard break per
+    line. Pass `plain_text_is_markdown=True` for a value that is your own
+    Markdown: it then passes through, stripped, unless it starts with `<` and
+    holds a real HTML element anywhere. So Markdown opening with an autolink
+    and carrying inline HTML further on is read as HTML, and loses the
+    autolink.
+  - A memo holding one real HTML element is read as HTML throughout, so
+    Markdown syntax beside it is kept as literal characters. The obsolete
+    elements (`<font>`, `<center>`, ...) count as HTML.
+  - Underline, highlight and strike, which CommonMark cannot spell, are kept
+    as raw `<u>`, `<mark>`, `<ins>` and `<s>`.
+  - A table nested in a table is flattened to its words, every one kept and in
+    order, and a table without a header row gains an empty one.
+  - Nested lists nest and keep their numbers. `<script>`, `<style>`,
+    `<template>` and `<title>` bodies are dropped.
+
+  Measured 2026-10-02 on 367 memos read from one preproduction instance on
+  2026-10-01 (tier 4, one instance, may not generalise): no memo changed a
+  word, and 367 of 367 readings were fixed points. 65 of them displayed
+  differently from the memo, each in a documented way that keeps its words:
+  in 62 a table gained an empty header row (61 of them a notification
+  template's flattened nested table), and 3 had no HTML element and were
+  read as literal lines. Synthetic shapes do lose words: a table row longer
+  than the first, a `|` in a cell's code or link, an image title holding a
+  `"`, and others that `docs/content.rst` lists.
+
+  It is a port of `glpi_python_client`'s `content/conversion.py` at `917f030`,
+  plus 15 fixes listed under `### Notes`. **The two should move together.**
+
+  Why it is here: until now this package could only strip HTML to plain text,
+  so a downstream GLPI-to-EasyVista sync wrote its own converter. Measured
+  2026-09-30 (tier 4, one instance), a GLPI description holding a pasted URL
+  and a titled link reached EasyVista with neither link clickable. EasyVista
+  stored exactly the HTML it was sent. That converter had escaped `&lt;` a
+  second time, fused the link title into the `href`, cut a URL at its first
+  `)`, and would read two lone asterisks as emphasis. This converter handles
+  each of those correctly (checked 2026-10-02 on synthetic equivalents): a
+  `&lt;` is escaped once, a link title stays a `title`, a URL keeps its
+  parentheses, and a lone `*` stays literal.
+
+  Two properties are worth knowing before relying on it:
+  - **Deep nesting degrades to text.** The conversion is attempted, and a
+    `RecursionError` is answered with the memo's words. From a shallow stack,
+    the deepest `<div>` document that still converts with its structure is 245
+    levels on CPython 3.11 and 327 on 3.12–3.14 (measured 2026-10-02). A caller
+    already within about 25 frames of the recursion limit still gets
+    `EasyvistaContentError`, and within the last few frames, a bare
+    `RecursionError`.
+  - **It is not a sanitiser.** Raw HTML, `javascript:` link targets and
+    `<javascript:...>` autolinks in the Markdown all go out live, and reading
+    keeps a memo's `javascript:` links. A caller relaying Markdown it did not
+    write must neutralise raw HTML and executable schemes. Text a memo
+    *displays* as markup, such as `&lt;script&gt;`, reads back escaped, as the
+    text it is.
+
+  Importing `easyvista_python_client.content` without the extra, or with any
+  one of its six packages missing, raises an `ImportError` naming
+  `pip install "easyvista-python-client[content]"`.
+- `EasyvistaContentError`, a subclass of `EasyvistaError` exported at the
+  package root. It is raised for any converter fault the text fallback does
+  not absorb, with the underlying exception as `__cause__`. It lives in the
+  core package, so it can be caught whether or not the extra is installed.
+- The `dev` and `docs` extras now install the `content` extra's packages, with
+  the same bounds, since CI runs the converter's tests and the API reference
+  imports it. `testing/test_public_api.py` fails if the copies drift, or if
+  its list of the extra's import names stops matching `pyproject.toml`.
+
+### Changed
+
+- **BREAKING** `close_ticket` requires `allow_workflow_effect=`, keyword-only
+  with no default: leaving it out is a `TypeError`, and a value that does not
+  include `WorkflowEffect.INTERRUPTS` is refused with
+  `EasyvistaWorkflowEffectRefused` before any request is made. The vendor
+  documents the close request as interrupting the workflow (tier 1, see
+  *Removed*), so the call site now says that it means to.
+- **BREAKING** `end_action` is guarded. Unless `allow_workflow_effect` includes
+  `WorkflowEffect.ADVANCES` it first reads the action (one item read projecting
+  `ACTION_ID` and `WORKFLOW_ID`) and refuses, with no end request sent, when
+  the action is a workflow step (`WORKFLOW_ID` set), when the record comes back
+  without a `WORKFLOW_ID` column (which cannot be told from a step), or when
+  the read returns a different `ACTION_ID` than the one asked for. `end_all=True`
+  always needs `ADVANCES`. Ending an action you created yourself needs no
+  opt-in (see *Notes*). If the read fails, its error propagates and nothing is ended.
+  Ending a workflow step moves the workflow on -- vendor-documented only by the
+  UI's Finish wizard, and measured on one instance on 2026-09-01 (2 of 2), so
+  it may not generalise.
+- **BREAKING** `end_action`'s explicit `action_id` must be a positive integer.
+  `0`, negatives, blanks, RFC numbers, floats and booleans now raise
+  `ValueError` before any request, and a numeric string is sent as an integer
+  (`"123"` goes out as `123`). `action_id=None` is still refused unless
+  `end_all=True`.
+- **BREAKING** `update_ticket`, `update_action`, `create_action`, `create_task`
+  and `send` refuse a body or route that may change the workflow unless the call
+  passes `allow_workflow_effect=`. Named: the workflow-control bodies `closed`,
+  `end_action`, `suspended` and `restarted` as a top-level key in any casing on
+  any path; on a `requests/{rfc}` route, the status, catalog and parent-request
+  columns and a `DELETE`; on an existing `actions/{id}` route, the end date,
+  type, parent, ticket and workflow, stage and step columns (creating an action
+  or a task names a narrower set); a write to `actions/<x>` where `<x>` is not an
+  integer id, which is the vendor's end-action route `PUT
+  actions/{rfc_number}`, whatever the body says; every ticket sub-route that is
+  a command rather than a record (`close`, `suspend`, `restart`,
+  `workflowstart`, ...) and `requests/without-workflow`. The column rules apply
+  to the `requests/` and `actions/` routes only: a route of any other family is
+  not classified by column. What the typed models declare needs no opt-in,
+  and neither do text, owner, group, done-by, impact or urgency. The exact
+  lists are in `docs/vendor-api-reference.md`, "Ticket workflow". **This is a
+  deny-list, and a deny-list of columns cannot be complete**: what is not named
+  is unclassified, not proven neutral.
+- **BREAKING** `update_action` refuses an action id that is not a positive
+  integer, `None` included: `PUT actions/{rfc_number}` is the end-action route
+  on the same path, so an RFC number would not edit an action.
+- **BREAKING** The spec builders changed with the guard. A spec from
+  `resources.requests.build_close_ticket` or `resources.actions.build_end_action`
+  names a workflow effect, so this package's transport refuses it until it is
+  passed through `.allowing(...)`; code that builds one and sends it itself must
+  say so. And `resources.actions.build_end_action` and `build_update_action`
+  now raise `ValueError` at build time for an action id that is not a positive
+  integer, where they formerly passed the id through as given.
+- **BREAKING** `send()` -- the path every typed method and the client's own
+  `send` go through -- refuses outright, with `ValueError` and whatever the
+  method or opt-in, a path containing a dot segment (`.` or `..`), a
+  percent-encoded slash or backslash, or a raw backslash: the HTTP client
+  collapses a dot segment, and a server may read the others as a separator, so
+  the request could reach a route other than the one that was checked. No API
+  route needs one. Whether this server reads them as separators is not
+  measured; the check fails closed. Document downloads (`get_bytes`,
+  `stream_bytes`) are reads and are never gated.
+- **BREAKING** A request is treated as a read only when its method **and** the
+  value of every method-override header (`X-HTTP-Method-Override`,
+  `X-HTTP-Method`, `X-Method-Override`) on the request are reads, so such a
+  header cannot hide a write behind a `GET`: a request whose override header
+  names a write is classified as that write, and refused if it names a workflow
+  effect and the call did not allow it, whatever method it is sent as. The
+  headers read are the ones that go on the wire, `config.extra_headers` with
+  the request's own laid over them. Whether this API honours these headers is
+  not recorded.
+- **BREAKING** A write that names a workflow effect and is allowed is sent
+  **once**, never retried: `close_ticket` and `end_action` formerly retried a
+  429, a 5xx or a connection error when `max_retries` was above its default of
+  `0`, and now raise after the first attempt. Each close inserts another
+  anticipated closing action and each end ends whatever is open, so a resend
+  after a lost response is not a repeat of the same request. This includes
+  `end_action` on your own action. Every other request keeps its retries.
+
+### Removed
+
+- **BREAKING** — Python 3.10. `requires-python` is now `>=3.11`, the 3.10
+  classifier is gone, and the CI and release matrices run 3.11–3.14. CPython
+  3.10 reaches end of life in October 2026 (PEP 619), and `glpi_python_client`,
+  whose converter `content` ports, dropped it in `524304a`. Two requirements
+  that existed only for 3.10 go with it: `typing-extensions` (a runtime
+  dependency on 3.10 only) and `tomli` (in `dev` and `docs`). Nothing moves on
+  3.11 and later. The timestamp parser keeps the normalisation it carried for
+  3.10, so it accepts and refuses the same values as before.
+- **BREAKING** `EasyvistaClient.set_status` / `AsyncEasyvistaClient.set_status`
+  and `resources.requests.build_set_status`. They sent the vendor CLOSE request,
+  which the vendor close page documents (tier 1, re-read 2026-10-02) as
+  interrupting the workflow, setting the final status, deleting the unfinished
+  actions when `delete_actions` is set (otherwise, by the package's reading of
+  the page, ending them) and inserting an anticipated closing action, none of it
+  conditional on the status sent. The page documents final statuses only, so
+  for a non-final one that is an extrapolation it neither exempts nor covers.
+  A synchroniser that used `set_status` to mirror an intermediate status closed
+  tickets early. The root cause was established on 2026-10-01/02 from the
+  synchroniser's code (it sent the close request right after every create and on
+  every status push) and from the vendor page; the drain of the open workflow
+  action across such a write was measured on one ticket (2026-09-01, one
+  instance, tier 4, so it may not generalise). The vendor documents no status
+  setter and this package has none: a flat status update is excluded from the
+  vendor's ticket update body (tier 1) and was seen to return 200 while dropping
+  the status (0.2.0 entry below), and a ticket's status follows its workflow.
+  `close_ticket` and `resources.requests.build_close_ticket` remain.
+
+### Changed since the 2026-09-30 preparation
+
+None of this reached PyPI, so it is not a break for anyone upgrading from
+`0.3.0`. It matters to a caller who built against the branch.
+
+- **The converter changed design.** The first preparation ported
+  `glpi_python_client` at `4fc3bed`, built on python-markdown with its
+  `nl2br`, `sane_lists`, `fenced_code` and `tables` extensions.
+  `glpi_python_client` replaced that design in `917f030` with markdownify +
+  mdformat inbound and cmark-gfm outbound, and this package follows it.
+- **The `content` extra's dependencies changed.** `markdown` is gone, and
+  `cmarkgfm`, `markdown-it-py`, `mdformat` and `mdformat-tables` are new. The
+  bounds are now `beautifulsoup4>=4.15`, `cmarkgfm>=2025.10.22`,
+  `markdown-it-py>=3.0,<4`, `markdownify>=1.2.3,<1.3`, `mdformat>=0.7.22,<0.8`
+  and `mdformat-tables>=1.0,<1.1`. The upper bounds are deliberate, because
+  the reader overrides private surfaces of `markdownify` and `mdformat`.
+  `docs/content.rst` gives the reason for each bound.
+- **The Markdown dialect is CommonMark with GFM tables**, not
+  python-markdown's. What a caller sees:
+  - A fence's language tag now survives a round trip.
+  - Strong inside emphasis keeps its bold.
+  - Two `<br>` in a row stay two line breaks.
+  - A `<pre>` opening a list item stays code.
+  - Struck text is kept as a raw `<s>` instead of losing the line.
+  - `~~text~~` is literal tildes on write, as before.
+  - `<javascript:alert(1)>` now becomes a live link, where python-markdown left
+    it as raw markup.
+- **Escapes differ.** A displayed `<` reads as `\<` rather than `&lt;`. `#4521`
+  at a line start is no longer escaped, since CommonMark needs a space after
+  `#`. A hard break reads as a trailing backslash rather than two spaces. Link
+  targets are kept in `<...>` where they need it, and a `[` or `]` in one comes
+  back percent-encoded.
+- **Plain text is read as literal lines.** A memo with no HTML element used to
+  pass through verbatim, so its text was read as Markdown and a typed
+  `__init__` rendered bold. It is now escaped, and each line kept with a hard
+  break. How EasyVista's UI displays such a memo is unverified (`O-MEMOFORMAT`).
+  `plain_text_is_markdown=True` restores pass-through for your own Markdown.
+- **The depth cliff moved.** With the old design it was measured at 493 levels
+  on CPython 3.12–3.14. With this one it is 327 there, and 245 on 3.11.
+- **The `beautifulsoup4` workaround is gone.** The old design rewrote
+  self-closing void tags to dodge a defect that dropped the text after a
+  `<br />` in a body that also used `<br>`. That defect no longer reproduced on
+  4.15.0 (measured 2026-09-30), so the floor is now 4.15 and the workaround is
+  removed.
+
+### Upgrading
+
+- `client.set_status(rfc, status_guid=g)` -- delete it; nothing replaces it,
+  because the vendor documents no status setter (a flat status update is
+  excluded from its ticket update body, and was seen to drop the status -- see
+  0.2.0) and a ticket's status follows its workflow. To move a ticket through
+  its workflow, end the step's open action with
+  `end_action(rfc, action_id=..., allow_workflow_effect=WorkflowEffect.ADVANCES)`.
+  The status that follows is the workflow's, not yours to choose. This is not
+  documented on the REST page, which is silent about the workflow; it was
+  measured on one instance on 2026-09-01 (2 of 2 tickets) and may not
+  generalise, so re-read the ticket afterwards. To close, call
+  `close_ticket(rfc, allow_workflow_effect=WorkflowEffect.INTERRUPTS, status_guid=g)`.
+- `end_action` callers: pass the integer id of an action you read, never an RFC
+  number, `0` or a blank. Ending your own action still needs no opt-in (see
+  *Notes*), and now costs one extra item read. Ending a workflow step, or any action whose record
+  shows no `WORKFLOW_ID`, needs `WorkflowEffect.ADVANCES`, and so does
+  `end_all=True`.
+- Code that puts a status, catalog or other named column into `extra_payload`,
+  or calls `send` with a workflow route or body, now raises until it passes
+  `allow_workflow_effect=`. `WorkflowEffect.UNKNOWN` means undocumented, not
+  harmless: read "Ticket workflow" in `docs/vendor-api-reference.md` first.
+- Code that builds a close or end-action spec with `build_close_ticket` or
+  `build_end_action` and sends it through the transport itself: pass the spec
+  through `.allowing(...)` first, and pass `build_end_action` and
+  `build_update_action` an integer action id, never an RFC number.
+- Catch `EasyvistaWorkflowEffectRefused` (or `ValueError`) where you record
+  per-record failures. It is a `ValueError`, **not** an `EasyvistaError`, and
+  carries no status code; it is never transient. Code that catches
+  `EasyvistaError` around a close for cleanup will NOT catch it. `ValueError`
+  also catches the other local refusals above.
+- If you set `max_retries` above its default of `0`, a lost response to an
+  allowed workflow write now surfaces as an error instead of a silent resend.
+  Re-read the ticket before repeating it.
+- The minor bump is deliberate: a dependant pinned `>=0.3.0,<0.4` does **not**
+  pick this up, and must widen its constraint on purpose.
+
+### Documentation
+
+- `docs/vendor-api-reference.md` gains "Ticket workflow": what each documented
+  write does to a workflow, with the vendor page quoted (tier 1), the guard's
+  deny-list exactly as the code holds it, and the measurements labelled tier 4
+  with their instance and date. O-CLOSE-DEFAULT is closed at tier 1: the vendor
+  close page documents an omitted `status_GUID` as defaulting to the Closed
+  meta-status. It was not measured here.
+- The README, the user guide, the API reference and the `easyvista-client-setup`,
+  `easyvista-ticket-actions` and `easyvista-ticket-workflow` skills describe the
+  guard; the `easyvista-instance-discovery` skill now says `close_ticket` stops
+  the workflow and is not a way to pick an intermediate status. The
+  ticket-workflow skill's first gotcha is now that `close_ticket` is not a
+  status setter.
+- The `PostRequest.workflow_start` docstring records that the flag is a no-op
+  (tier 4: two tickets identical but for it came back byte-identical, 2026-09-01,
+  one instance), so `workflow_start=False` does not create a ticket without its
+  workflow. The vendor create page documents no such parameter and states that
+  the workflow is started; the workflow-less create is the virtual-agent route
+  `requests/without-workflow`, which the guard refuses unless allowed.
+- **Retracted:** that `set_status` reaches every status, as the 0.2.0 entry
+  below put it ("a fresh ticket landed on exactly the status requested every
+  time, non-terminal ones included") and the `RequestUpdate` docstring repeated
+  it ("That route reaches **every** status, not just terminal ones"). Six status
+  GUIDs were tried and each landed, but that was measured by re-reading the
+  status only: the measurement never looked at the workflow or the ticket's
+  open actions, and the vendor close page documents the close request as
+  interrupting the workflow (tier 1). A status that landed is not evidence that
+  nothing else moved, and that finding was read as a safe status setter, which
+  it was not. The 0.2.0 section is left as written.
+- `docs/content.rst` is a user-guide page for the converter. It covers what a
+  memo holds, what each direction reads and writes, what text is escaped and
+  why, and what survives a round trip and what is lost. It also covers what
+  the converter does not sanitise, the dependency bounds, and the
+  CVE-2025-6069 guard. The API reference gains a "Rich-text content" section.
+- `docs/vendor-api-reference.md` records the memo format as tier 4 (above),
+  and the vendor's MEMO and TEXT AREA form objects as tier 1
+  (`docs.easyvista.com/docs/form`, read 2026-10-02). That page does not say
+  which object a ticket's or an action's memo is. A second tier-1 page
+  (`docs.easyvista.com/docs/service-manager-comment-log-creation`, read
+  2026-10-02) sets a custom comment-log field on the request form to "Text
+  area", which leans towards HTML display but is not about the built-in
+  memos. It also opens `O-MEMOFORMAT` for what is not yet known:
+  - how the UI displays a memo with no HTML element;
+  - what the web UI's own editor writes;
+  - how the UI treats the newlines between blocks;
+  - what it shows for raw markup;
+  - whether an empty table header row is visible;
+  - whether a percent-encoded link target still resolves.
+- The `easyvista-ticket-workflow` and `easyvista-ticket-actions` skills each
+  gain a gotcha: a memo stores what it is sent, nothing renders Markdown for
+  you, and the converter's dialect is CommonMark with GFM tables.
+- `docs/installation.rst`, `docs/development.rst`, `docs/publishing.rst`,
+  `README.md`, `CONTRIBUTING.md` and every skill's `compatibility` line now
+  state the Python 3.11 floor.
+
+### Notes
+
+- What the workflow guard does not establish. It is a deny-list: the vendor's
+  update pages accept every column of the ticket and action tables except an
+  excluded list (tier 1), and a per-instance business rule can fire on
+  any write, so a write the guard does not name is unclassified, not proven
+  neutral. `end_action` tells a workflow step from your own action by
+  `WORKFLOW_ID` (1500 of 1500 rows, 2026-09-02, one instance); whether an
+  action created under a step by `create_action` carries one is unmeasured, and
+  if it does, ending it is refused too -- the safe direction. The live checks
+  in `integration_tests/test_live_workflow_guard.py` are gated: its first two
+  tests read only, and the rest write and run only when
+  `EASYVISTA_TEST_RUN_WORKFLOW_CENSUS=1` is set.
+- **The 15 fixes on top of `glpi_python_client` `917f030`**, measured
+  together on this package's synthetic corpus and on the 367-memo sample, and
+  still to be proposed to `glpi_python_client`:
+  1. Escapes and character references in an image's alt text are kept.
+     markdown-it-py 3 leaves them as `text_special` tokens, which mdformat
+     rendered as nothing.
+  2. A paragraph line opening with `~~~` is escaped, because CommonMark reads
+     it as a fence.
+  3. A `!` that ends a text before a link is escaped, so it does not turn the
+     link into an image.
+  4. An alt text starting with `^` is escaped, because cmark-gfm never opens
+     an image on `![^`.
+  5. A `<` that mdformat leaves bare after an escaped one is escaped, so
+     `<<a@b.c>` no longer becomes an autolink.
+  6. A `<br>` inside inline code (`<code>`, `<kbd>`, `<samp>`) splits the
+     span, and a `|` in such a span in a table cell is escaped.
+  7. A table inside a heading or a link is flattened, as one inside a cell
+     already was.
+  8. A block inside a flattened cell stays on its link's line.
+  9. A flattened cell's edge counts as a space when deciding whether `**`
+     closes.
+  10. `<center>` is a block, as `<div>` is, except inside `<pre>`.
+  11. `<u>`, `<mark>` and `<ins>` are kept as raw tags.
+  12. Ordered items are numbered in linear time, where counting every earlier
+      item was quadratic, and `start` is read with `isdecimal`.
+  13. The pattern that splits emphasis and links into edges and content is
+      linear on runs of spaces or `<br>`. It was quadratic.
+  14. A `colspan` or `start` that is not a decimal number, such as `"²"` or
+      5,000 digits, degrades the memo to text instead of failing it.
+  15. Every `<` after a memo's last `>` is read as text. CPython's
+      `html.parser` before 3.11.14, 3.12.12 and 3.13.6 is quadratic on a run
+      of unfinished tags there (CVE-2025-6069, python/cpython#135462).
+- **What does not round-trip is documented, not hidden.** `docs/content.rst`
+  lists both sides.
+  - Markdown written and read back comes back in mdformat's canonical
+    spelling. Text in angle brackets that is not a URL is lost. An e-mail
+    autolink becomes a `mailto:` link, and `[`/`]` in a link target come back
+    percent-encoded.
+  - A memo read and written back kept every word on the 367-memo sample. A
+    nested table's grid becomes text in its cell, and a header-less table
+    gains an empty header row. The known holes, all synthetic and absent
+    from the sample, are listed too, the ones that lose words among them.
+
+  After one write-and-read cycle, a further one changes nothing more.
+- `cmarkgfm` 2025.10.22 bundles cmark-gfm `0.29.0.gfm.13`. PyPI lists no wheel
+  of that release for macOS x86_64 or Windows ARM64 (read 2026-10-02). Unless a
+  later release adds one, it builds from source there, which needs a C
+  compiler.
+- mdformat 1.x, markdown-it-py 4.x and mdformat-gfm 1.0 were tried and are not
+  adopted. markdown-it-py 4 caps the cells it fills in, which ends a ragged
+  table early and turns the rest into literal pipes. Re-measure before raising
+  those bounds.
+
 ## [0.3.0] - 2026-09-02
 
 Makes the task-vs-action distinction inspectable. A GLPI comment corresponds to
@@ -1142,7 +1592,8 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/baraline/easyvista_python_client/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/baraline/easyvista_python_client/releases/tag/0.1.0

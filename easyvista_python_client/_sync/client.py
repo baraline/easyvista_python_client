@@ -49,6 +49,7 @@ from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
     EasyvistaError,
     EasyvistaNotFound,
+    EasyvistaWorkflowEffectRefused,
 )
 from easyvista_python_client.field_model import parse_memo
 from easyvista_python_client.filters import ev_equals_filter, is_safe_ev_value
@@ -88,6 +89,7 @@ from easyvista_python_client.resources import documents as documents_res
 from easyvista_python_client.resources import employees as employees_res
 from easyvista_python_client.resources import requests as requests_res
 from easyvista_python_client.resources.discovery import SWAGGER_PATH
+from easyvista_python_client.workflow import WorkflowEffect, as_effects
 
 # Width of the action-body fan-out: a ceiling on requests in flight at once on
 # the async surface, inert on the sync one. This is the one fan-out here whose
@@ -97,6 +99,12 @@ from easyvista_python_client.resources.discovery import SWAGGER_PATH
 # limit of 8 costs nothing (19 actions took 5.31s at limit 8 vs 5.43s unbounded
 # -- the server, not the client, is the bottleneck).
 _ACTION_FANOUT = 8
+
+# The projection end_action's guard reads: just enough to tell a workflow step
+# (WORKFLOW_ID set) from a caller's own action (WORKFLOW_ID empty). Projected
+# rather than left to the default item read so that the column is asked for
+# by name -- see integration_tests/test_live_workflow_guard.py.
+_WORKFLOW_PROBE_FIELDS = ("ACTION_ID", "WORKFLOW_ID")
 
 
 def _unavailable_reason(exc: EasyvistaError) -> str:
@@ -162,6 +170,7 @@ class EasyvistaClient:
         params: Mapping[str, Any] | None = None,
         json: Any = None,
         headers: Mapping[str, str] | None = None,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
     ) -> Any:
         """Issue an arbitrary request against this instance's API root.
 
@@ -182,13 +191,26 @@ class EasyvistaClient:
         :meth:`download_document` or :meth:`stream_document`.
 
         Everything else is shared with the typed methods: ``config.max_retries``
-        attempts with the same backoff, and the same exception mapping -- 401 and
+        attempts with the same backoff (one attempt for an allowed workflow
+        write), and the same exception mapping -- 401 and
         403 to :class:`~easyvista_python_client.EasyvistaAuthError`, 404 to
         :class:`~easyvista_python_client.EasyvistaNotFound`, 400 and 590 to
         :class:`~easyvista_python_client.EasyvistaValidationError`, with 590 never
         retried because it is a rejected request rather than a transient one.
         ``config.default_params`` is merged under ``params``; ``headers`` is
         merged over the client-level ones and may not carry ``Authorization``.
+
+        ``allow_workflow_effect`` is the way past the workflow guard. A write
+        whose content may change a ticket's workflow -- a ``closed``,
+        ``end_action``, ``suspended`` or ``restarted`` body on any path, a
+        status or catalog column on a ticket, an end date or type on an action,
+        any write to ``actions/{rfc_number}`` (the vendor's end-action route; an
+        integer id addresses an action instead), a ``requests/{rfc}/close``-style
+        route -- is refused with
+        :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` before
+        anything is sent, unless this argument names every
+        :class:`~easyvista_python_client.WorkflowEffect` it carries. See
+        ``docs/vendor-api-reference.md``, "Ticket workflow".
 
         Returns the decoded JSON body, or ``{}`` when the response has none.
         Nothing is validated into a model and no envelope is unwrapped: the
@@ -206,12 +228,29 @@ class EasyvistaClient:
                 path,
                 json=json,
                 headers=dict(headers) if headers else None,
+                allow_workflow_effect=as_effects(allow_workflow_effect),
             ),
             params=params,
         )
 
     # --- tickets -------------------------------------------------------------
     def create_ticket(self, ticket: PostRequest) -> Request:
+        """Create one ticket -- which starts its workflow.
+
+        Per the vendor create page (tier 1,
+        https://docs.easyvista.com/docs/rest-api-create-an-incident-request.md):
+        a CALL action is inserted with its end date set to the ticket's
+        submission date, so it is born ended, then "3. The workflow
+        associated with the ticket is started." A fresh ticket carries one open
+        workflow-step action (tier 4, 2026-09-01, one instance).
+
+        **Do not follow the create with** :meth:`close_ticket` **to land an
+        initial status.** That interrupts the workflow you just started; read
+        the status the ticket landed on with :meth:`get_ticket` instead.
+
+        A 590 on create may still have created the row: reconcile by
+        ``EXTERNAL_REFERENCE`` rather than retrying.
+        """
         spec, parse = requests_res.build_create_ticket(
             ticket, context=self._validation_context
         )
@@ -445,67 +484,88 @@ class EasyvistaClient:
         stats.population_total = population_total
         return stats
 
-    def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
+    def update_ticket(
+        self,
+        rfc_number: str,
+        update: RequestUpdate,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Request:
         """Update a ticket's writable fields.
 
-        Cannot set a status: there is no flat status update on this API. See
-        :meth:`set_status`, and :class:`RequestUpdate` for the measurements.
+        Cannot set a status: there is no flat status update on this API (see
+        :class:`RequestUpdate` for the measurements), the vendor documents no
+        status write that leaves the workflow alone, and this package has none
+        -- a ticket's status follows its workflow. See :meth:`close_ticket` for
+        the one request the vendor documents that does set a status.
+
+        A body that may change the workflow -- a status or catalog column, or a
+        workflow-control body, typically put in ``extra_payload`` -- is refused
+        before it is sent unless ``allow_workflow_effect`` names the effect; see
+        :meth:`send`. The fields :class:`RequestUpdate` declares need no opt-in.
         """
         spec, parse = requests_res.build_update_ticket(
             rfc_number, update, context=self._validation_context
         )
-        return parse(self._transport.send(spec))
-
-    def set_status(
-        self, rfc_number: str, *, status_guid: str, comment: str | None = None
-    ) -> Request:
-        """Set a ticket's status, addressed by ``STATUS_GUID``.
-
-        This is the API's only working status write, and it reaches **every**
-        status rather than only terminal ones: given six different status GUIDs
-        in turn, a fresh ticket landed on exactly the status requested every
-        time, non-terminal ones included.
-
-        It sends the documented ``{"closed": {"status_GUID": ...}}`` body -- the
-        same request :meth:`close_ticket` sends, under a name that matches what
-        it does, because "close" is what the wire calls it and not what it is
-        limited to.
-
-        Note the addressing. A ``STATUS_GUID`` is not a ``STATUS_ID``; the two
-        are different columns, and only the GUID works here. Read a status's GUID
-        off any ticket in that status (the nested ``STATUS`` object carries
-        ``STATUS_GUID``) -- they are stable per instance but are **not**
-        portable between instances.
-        """
-        spec, parse = requests_res.build_set_status(
-            rfc_number,
-            status_guid=status_guid,
-            comment=comment,
-            context=self._validation_context,
-        )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
     def close_ticket(
         self,
         rfc_number: str,
         *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect],
         status_guid: str | None = None,
         delete_actions: int | bool | None = None,
         comment: str | None = None,
         end_date: str | None = None,
         catalog_guid: str | None = None,
     ) -> Request:
-        """Close a ticket, via the vendor's documented close route.
+        """Close a ticket early -- the vendor's close request, which stops its workflow.
 
-        Sends ``PUT requests/{rfc}`` with a ``closed`` wrapper --
+        Sends ``PUT requests/{rfc}`` with a ``closed`` body, as the vendor
+        documents it:
         https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md.
-        Every argument is optional. With no ``end_date`` the server stamps now.
-        With no ``status_guid`` this client sends no status of its own -- but
-        **where the ticket then lands is not established here**: the behaviour
-        is not recorded in ``docs/vendor-api-reference.md`` and no live test
-        exercises the omitted form, every one of them passing an explicit
-        ``status_guid``. Try it on a throwaway ticket and re-read before
-        relying on it (open item O-CLOSE-DEFAULT).
+        That page lists what the request does, and none of it depends on the
+        status passed (tier 1, re-read 2026-10-02):
+
+        * "The workflow of the ticket is interrupted."
+        * The status is set to ``status_guid``, which the page calls "the final
+          status of the ticket". Omitted, the vendor documents the default as
+          the Closed meta-status.
+        * "The unfinished actions associated with the ticket are deleted" when
+          ``delete_actions`` is true. Otherwise ``end_date`` is the "Closing date
+          of open actions associated with the ticket" -- read here as: they are
+          ended, not left open. That reading rests on the parameter row and one
+          observation (2026-09-01, one instance), not on an explicit sentence.
+        * "An anticipated closing action associated with the ticket is
+          inserted." -- one per call, so every close adds a row.
+
+        **So this is not a status setter. The vendor documents no status
+        setter, and this package has none.** A ticket's status follows its
+        workflow: "Advancing through the steps of a workflow
+        changes the status of a ticket." (tier 1,
+        https://docs.easyvista.com/docs/references-tables.md, Statuses section).
+        A non-final status sent
+        here still interrupts the workflow and closes the ticket's open
+        actions -- the page documents final statuses only, and nothing exempts
+        the others. To move a ticket through its workflow, end the workflow
+        step's open action instead; see :meth:`end_action`.
+
+        That is why ``allow_workflow_effect`` is **required**: pass
+        ``WorkflowEffect.INTERRUPTS`` to say at the call site that interrupting
+        the workflow is the intent. Anything that does not include it is
+        refused with
+        :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` before
+        a request is made, and the allowed request is sent once, never
+        retried::
+
+            client.close_ticket(
+                rfc,
+                allow_workflow_effect=WorkflowEffect.INTERRUPTS,
+                status_guid=CLOSED_GUID,
+            )
+            after = client.get_ticket(rfc)
+            assert after.end_date_ut is not None  # the close actually landed
 
         **Verify the close by re-reading the status, not by the return value.**
         A status id is per-instance configuration and nothing about it is
@@ -515,11 +575,7 @@ class EasyvistaClient:
         skip a ticket it believed was already closed. Read
         ``get_ticket(rfc).status_id`` (or ``.reference("STATUS")`` for the
         label) afterwards, and compare against a status you resolved from the
-        instance rather than a constant::
-
-            client.close_ticket(rfc, status_guid=CLOSED_GUID)
-            after = client.get_ticket(rfc)
-            assert after.end_date_ut is not None  # the close actually landed
+        instance rather than a constant.
 
         ``end_date_ut`` is the more portable signal than any status id: it is
         empty while a ticket is being worked and stamped once it is finished.
@@ -533,10 +589,9 @@ class EasyvistaClient:
         distinguishes the two without resolving the status against the
         instance.
 
-        ``status_guid`` reaches **any** status, not only terminal ones -- see
-        :meth:`set_status`, which is this same request under a name that says
-        so. ``catalog_guid`` requalifies the ticket as it closes.
-        ``delete_actions`` drops its actions.
+        ``catalog_guid`` requalifies the ticket as it closes -- the vendor notes
+        it is needed only for that. ``delete_actions`` deletes the unfinished
+        actions instead of ending them.
 
         ``end_date`` takes the instance's own date format, which is not ISO 8601
         everywhere (``dd/mm/yyyy`` on the verified instance -- read
@@ -553,10 +608,16 @@ class EasyvistaClient:
             catalog_guid=catalog_guid,
             context=self._validation_context,
         )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
     # --- actions -------------------------------------------------------------
-    def create_action(self, rfc_number: str, action: PostAction) -> Action:
+    def create_action(
+        self,
+        rfc_number: str,
+        action: PostAction,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Action:
         """Create one action on a ticket.
 
         The returned :class:`Action` carries **no usable ``action_id``**: the
@@ -599,13 +660,25 @@ class EasyvistaClient:
         refused on a ticket that accepted the same body earlier. The messages
         are literal, not a stage gate. :meth:`create_task` is not
         parent-resolved and is unaffected.
+
+        A body that would create the record already tied into the workflow --
+        ``WORKFLOW_ID``, ``STAGE_ID`` or ``STATUS_ID_ON_TERMINATE`` through
+        ``extra_payload``, an end date on an action, a parent on a task -- is
+        refused unless ``allow_workflow_effect`` names the effect; see
+        :meth:`send`.
         """
         spec, parse = actions_res.build_create_action(
             rfc_number, action, context=self._validation_context
         )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
-    def create_task(self, rfc_number: str, task: PostTask) -> Action:
+    def create_task(
+        self,
+        rfc_number: str,
+        task: PostTask,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Action:
         """Create a task on a ticket — an action that arrives already ENDED.
 
         **This is how you post a comment.** A task and an action are the same
@@ -654,11 +727,17 @@ class EasyvistaClient:
         usable ``action_id``** — the create response is an HREF naming the
         parent request. Diff :meth:`list_actions` across the call to address
         what you just created.
+
+        A body that would create the record already tied into the workflow --
+        ``WORKFLOW_ID``, ``STAGE_ID`` or ``STATUS_ID_ON_TERMINATE`` through
+        ``extra_payload``, an end date on an action, a parent on a task -- is
+        refused unless ``allow_workflow_effect`` names the effect; see
+        :meth:`send`.
         """
         spec, parse = actions_res.build_create_task(
             rfc_number, task, context=self._validation_context
         )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
     def list_actions(
         self,
@@ -775,7 +854,13 @@ class EasyvistaClient:
         )
         return parse(self._transport.send(spec, params=params))
 
-    def update_action(self, action_id: str | int, update: ActionUpdate) -> Action:
+    def update_action(
+        self,
+        action_id: str | int,
+        update: ActionUpdate,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Action:
         """Edit an existing action's note text.
 
         ``ActionUpdate`` carries two fields, ``description`` and ``comment``,
@@ -800,6 +885,14 @@ class EasyvistaClient:
         recorded for that verb is what this API answers for an absent route as
         well as a denied one, so it did not distinguish them.
 
+        ``action_id`` must be a positive integer: ``PUT actions/{rfc_number}``
+        is the vendor's end-action route on the same path, so an RFC number is
+        refused rather than sent. A body that may end, re-type, re-parent or
+        move the action (an end date, ``WORKFLOW_ID``, ``ACTION_TYPE_ID``, ...,
+        through ``extra_payload``) is refused unless ``allow_workflow_effect``
+        names the effect; see :meth:`send`. ``GROUP_ID`` and ``DONE_BY_ID`` are
+        not refused -- see :meth:`reassign_action` for reassignment.
+
         The returned :class:`Action` is the API's own echo and is **not
         verified**: the PUT's response body has never been captured, and if it
         answers empty or href-only the parser yields an ``Action`` whose fields
@@ -808,6 +901,71 @@ class EasyvistaClient:
         """
         spec, parse = actions_res.build_update_action(
             action_id, update, context=self._validation_context
+        )
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
+
+    def reassign_action(
+        self,
+        action_id: str | int,
+        *,
+        group_id: int | None = None,
+        done_by_id: int | None = None,
+    ) -> Action:
+        """Reassign an action to another group and/or person.
+
+        The closest API equivalent of the UI's reassignment of an action (its
+        "Assign action" button, which runs a wizard that may do more than this
+        one write does), and the way to escalate the open workflow step to
+        another group without ending it. Sends
+        ``PUT actions/{id}`` with the group and/or the person in charge; at
+        least one is required, and both are positive integers -- ids are
+        per-deployment, so look them up rather than hardcoding them. A group
+        id comes from :meth:`discover` or :meth:`list_reference_table` where
+        the groups table is readable to you; on the measured instance
+        (2026-10-02, one instance) ``GET groups`` answered 403, which this
+        API also answers for an absent route, so it settles nothing about why.
+        If yours does too, take the group id from your administrator, or from
+        a record that already carries one (an existing action's ``GROUP_ID``).
+        ``done_by_id`` is an employee id: find one with
+        :meth:`search_employees` or :meth:`get_employee`.
+
+        **The vendor documents no reassignment route.** The UI's transfer is a
+        wizard, and ``PUT actions/{id}`` accepts "all the fields from the
+        AM_ACTION table except" a list that does not name these two
+        (tier 1, https://docs.easyvista.com/docs/rest-api-update-an-action.md).
+        So what this write does is measured, not specified:
+
+        Measured 2026-10-02 on one instance (Service Manager 2025.3; two
+        tickets, so it may not generalise), with the body
+        ``{"group_id": <int>}``. On **both** tickets -- a service request at
+        status id 6 and a fresh incident at status id 12 (ids are
+        per-instance) -- the group was stored: ``GROUP_ID`` went 57 -> 50 on
+        the open workflow step, and read 50 on a re-read immediately and again
+        five seconds later. On both, the step stayed open (``END_DATE_UT``
+        empty), the ticket's ``STATUS_ID`` and ``END_DATE_UT`` did not move,
+        the open actions were unchanged, and no new action rows appeared. On
+        the **first ticket only** the step was recorded as a type-20 action
+        with ``WORKFLOW_ID`` set; its ``WORKFLOW_ID`` was unchanged,
+        ``DONE_BY_ID`` stayed empty, and no ticket field changed.
+        **The ticket's own ``OWNING_GROUP_ID`` does not follow the action's
+        group** -- it stayed 57 on the first ticket, the only one read for it,
+        so reassigning a step is not reassigning the ticket. The lower-case
+        key ``group_id`` was the one sent; the upper-case spelling was never
+        needed. The person (``done_by_id``) was **not measured**: the same
+        body shape is sent, but nothing here shows what the instance does
+        with it. Whether the UI wizard's notifications fire is not observable
+        from the API.
+
+        Not refused by the workflow guard: the group and the person are data
+        the workflow reads, not workflow state. Re-read with :meth:`get_action`
+        before trusting the result -- this API answers 200 while dropping a
+        field it did not store.
+        """
+        spec, parse = actions_res.build_reassign_action(
+            action_id,
+            group_id=group_id,
+            done_by_id=done_by_id,
+            context=self._validation_context,
         )
         return parse(self._transport.send(spec))
 
@@ -821,6 +979,7 @@ class EasyvistaClient:
         start_date: str | None = None,
         elapsed_time: int | str | None = None,
         doneby_mail: str | None = None,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
     ) -> Action:
         """Report an action as done — the step :meth:`create_action` leaves open.
 
@@ -855,7 +1014,9 @@ class EasyvistaClient:
            the id-less form as ending *every open action on the ticket*, which
            on a ticket whose only open action is its workflow step means
            resolving it. That form is reachable only through ``end_all=True``;
-           a bare ``action_id=None`` raises ``ValueError`` before any request.
+           a bare ``action_id=None`` raises ``ValueError`` before any request,
+           as does an ``action_id`` that is not a positive integer -- a blank, or
+           an RFC number -- which is sent as an integer when it is one.
            The guard exists because ``Action.action_id`` is legitimately
            ``None`` all over this package — :meth:`create_action`'s response
            carries no id, and a ``fields=`` projection without ``ACTION_ID``
@@ -863,6 +1024,27 @@ class EasyvistaClient:
            select the bulk form in silence. Only ``end_all=True`` was measured
            with a single open action, so *how* it behaves against several open
            at once is vendor-documented, not measured here.
+
+           **And why ending a workflow step must be asked for.** Unless
+           ``allow_workflow_effect`` includes ``WorkflowEffect.ADVANCES``, this
+           method reads the action first -- one item read projecting
+           ``ACTION_ID`` and ``WORKFLOW_ID`` -- and refuses, with
+           :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` and
+           no end request sent, when the action is a workflow step
+           (``WORKFLOW_ID`` set), when the record comes back without the
+           column at all, which cannot be told apart from a step, or when the
+           record names a different ``ACTION_ID`` than the one asked for.
+           ``WORKFLOW_ID`` is what separates the engine's rows from a caller's
+           (tier 4, 1500 of 1500 rows, 2026-09-02, one instance -- see
+           :attr:`Action.is_workflow_generated`). Whether an action created under
+           the step by :meth:`create_action` carries one is unmeasured; if it
+           does, ending it is refused too -- the safe direction. ``end_all=True``
+           is refused outright without ``ADVANCES``. Ending your own action
+           needs no opt-in. If the read fails, its error propagates and the end
+           request is not sent -- a 403 there says nothing about whether ending
+           is permitted. The end request, once sent, is never retried. Both kinds
+           of action were read with the column present (live, 2026-10-02, one
+           instance).
 
         Both dates are passed through as **strings**, because the accepted
         format follows the instance rather than a standard: it is not ISO 8601
@@ -927,7 +1109,60 @@ class EasyvistaClient:
             doneby_mail=doneby_mail,
             context=self._validation_context,
         )
-        return parse(self._transport.send(spec))
+        allowed = as_effects(allow_workflow_effect)
+        if WorkflowEffect.ADVANCES not in allowed:
+            self._refuse_ending_a_workflow_step(action_id, end_all=end_all)
+            allowed = allowed | {WorkflowEffect.ADVANCES}
+        return parse(self._transport.send(spec.allowing(allowed)))
+
+    def _refuse_ending_a_workflow_step(
+        self, action_id: str | int | None, *, end_all: bool
+    ) -> None:
+        """Raise unless one read shows ``action_id`` is not a workflow step."""
+        advances = frozenset({WorkflowEffect.ADVANCES})
+        if end_all or action_id is None:
+            raise EasyvistaWorkflowEffectRefused(
+                "end_all=True ends every open action on the ticket, its workflow "
+                "step included, which advances the ticket's workflow. Pass "
+                "allow_workflow_effect=WorkflowEffect.ADVANCES if that is the intent.",
+                effects=advances,
+                triggers=(("end_action", WorkflowEffect.ADVANCES),),
+            )
+        # end_action built the end spec first, which refused anything but a
+        # positive integer, so this conversion cannot fail and the read
+        # addresses exactly the id the end request will name.
+        wanted = int(action_id)
+        spec, parse = actions_res.build_get_action(
+            wanted, fields=_WORKFLOW_PROBE_FIELDS, context=self._validation_context
+        )
+        target = parse(self._transport.send(spec))
+        if target.action_id is not None and target.action_id != wanted:
+            raise EasyvistaWorkflowEffectRefused(
+                f"the read of action {wanted} returned a different action "
+                f"(ACTION_ID {target.action_id}), so ending it was refused rather "
+                "than risked. Pass allow_workflow_effect="
+                "WorkflowEffect.ADVANCES to end it anyway.",
+                effects=advances,
+                triggers=(("ACTION_ID mismatch", WorkflowEffect.ADVANCES),),
+            )
+        if "workflow_id" not in target.model_fields_set:
+            raise EasyvistaWorkflowEffectRefused(
+                f"could not tell whether action {wanted} is a workflow step: its "
+                "record came back without WORKFLOW_ID, so ending it was refused "
+                "rather than risked. Pass allow_workflow_effect="
+                "WorkflowEffect.ADVANCES to end it anyway.",
+                effects=advances,
+                triggers=(("WORKFLOW_ID absent", WorkflowEffect.ADVANCES),),
+            )
+        if target.workflow_id is not None:
+            raise EasyvistaWorkflowEffectRefused(
+                f"action {wanted} is a workflow step (WORKFLOW_ID "
+                f"{target.workflow_id}): ending it advances the ticket's workflow. "
+                "Pass allow_workflow_effect=WorkflowEffect.ADVANCES if that is the "
+                "intent.",
+                effects=advances,
+                triggers=(("WORKFLOW_ID", WorkflowEffect.ADVANCES),),
+            )
 
     def _resolve_action_body(self, action: Action) -> Action:
         """Return ``action`` with its note text resolved onto the memo that shows.
@@ -1649,7 +1884,7 @@ class EasyvistaClient:
         sweeps tickets, reads ``record["STATUS"]["STATUS_GUID"]``, and merges
         each guid onto the matching id. That costs one extra ticket sweep even
         under ``strategy="reference"``; pass ``with_guid=False`` to skip it. The
-        GUID is what :meth:`set_status` and :meth:`close_ticket` address a
+        GUID is what :meth:`close_ticket` addresses a
         status by -- a ``STATUS_ID`` will not work there -- so this is usually
         the value you came for. A status no sampled ticket currently holds keeps
         ``guid=None``: the sample cannot reach it.

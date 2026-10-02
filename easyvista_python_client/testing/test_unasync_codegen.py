@@ -32,6 +32,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import pathlib
+import tomllib
 
 import pytest
 
@@ -124,8 +125,8 @@ def _rewritable_names(node: ast.AST, keys: set[str]) -> list[str]:
     (``ast.MatchAs.name``), ``case [*AsyncRetrying]:`` (``ast.MatchStar.name``)
     and ``case {**aclose}:`` (``ast.MatchMapping.rest``) each bind a plain
     name the same way, and none of them is an ``ast.Name`` either. ``match``
-    is valid on this project's 3.10 floor, so it is a live construct even
-    though nothing in the tree uses it today.
+    is valid on every Python this project supports (it arrived in 3.10), so
+    it is a live construct even though nothing in the tree uses it today.
 
     The exemption for a deliberate rename is scoped to the *specific* role
     it is legitimate in -- a class name for ``AsyncEasyvistaClient``, a
@@ -262,11 +263,6 @@ def test_coverage_omits_the_generated_modules_and_nothing_else(build):
     ratio. A *hand-written* module wrongly listed in ``omit`` is measured by
     nothing, which is the defect this test was written for.
     """
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # Python 3.10
-        import tomli as tomllib
-
     config = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     omit = set(config["tool"]["coverage"]["run"]["omit"])
 

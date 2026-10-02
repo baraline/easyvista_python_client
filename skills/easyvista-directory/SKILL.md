@@ -2,10 +2,10 @@
 name: easyvista-directory
 description: "Look up and provision EasyVista departments and employees with easyvista_python_client — get_department, search_departments, iter_departments, find_departments, get_department_comment, create_department, update_department and the matching employee methods, plus Reference and FieldClassification for reading instance-specific columns. Use to resolve a department by name or code, list a department's people, read a directory memo, or create/update directory records."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the departments and employees resources (writes are additionally profile-gated)."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the departments and employees resources (writes are additionally profile-gated)."
 metadata:
   package: easyvista-python-client
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,

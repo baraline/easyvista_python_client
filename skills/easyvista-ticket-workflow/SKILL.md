@@ -2,10 +2,10 @@
 name: easyvista-ticket-workflow
 description: "Create, read, search, paginate, update and close EasyVista tickets (requests) with easyvista_python_client — PostRequest, Request, RequestUpdate, create_ticket, create_tickets, get_ticket, search_tickets, iter_tickets, count_tickets, update_ticket and close_ticket. Use for any ticket/incident/request operation, including discovering the instance-specific catalog codes and ids a create needs."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
 metadata:
   package: easyvista-python-client
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -84,14 +84,25 @@ deployment needs before you build a payload for it.
    `update_ticket(rfc, RequestUpdate(description=...))`. `RequestUpdate` also
    accepts `title`, `impact_id`, `owner_id` and `external_reference` (capped at
    50 characters) after create — see the Gotchas for what it deliberately
-   omits, and use `set_status(rfc, status_guid=...)` for a status.
+   omits. The vendor documents no status write, and this package has none: a
+   ticket's status follows its workflow. To
+   complete a workflow step, end its open action with `end_action(rfc,
+   action_id=..., allow_workflow_effect=WorkflowEffect.ADVANCES)` — without
+   `ADVANCES`, ending a workflow step is refused (see
+   `easyvista-ticket-actions`); `close_ticket` is the vendor CLOSE request and
+   needs `allow_workflow_effect=WorkflowEffect.INTERRUPTS`.
 6. Read one ticket with `get_ticket(rfc)`; search a page with
    `search_tickets(...)`, which returns a `SearchResult` carrying `.records`,
    `.record_count` (this page) and `.total_record_count` (every match on the
    server); walk every match with `iter_tickets(...)`, which yields `Request`
    objects directly and pages for you.
-7. Close with `close_ticket(rfc, status_guid=..., delete_actions=...,
-   comment=...)`.
+7. Close only when closing is the intent, with `close_ticket(rfc,
+   allow_workflow_effect=WorkflowEffect.INTERRUPTS, status_guid=...,
+   delete_actions=..., comment=...)`. The close request interrupts the
+   workflow, ends (by our reading of the page) or, with `delete_actions`,
+   deletes the unfinished actions, and inserts an anticipated closing action
+   (vendor close page, tier 1) — documented for final statuses; nothing exempts
+   the others. Then re-read the ticket: a 200 is not a receipt.
 
 ## Examples
 
@@ -165,17 +176,28 @@ with EasyvistaClient.from_env() as client:
 ```
 
 ```python
-from easyvista_python_client import EasyvistaClient
+from easyvista_python_client import EasyvistaClient, WorkflowEffect
 
 with EasyvistaClient.from_env() as client:
     closed = client.close_ticket(
         "YOUR_RFC_NUMBER",
+        # Required: the close request interrupts the ticket's workflow.
+        allow_workflow_effect=WorkflowEffect.INTERRUPTS,
         status_guid="YOUR_CLOSED_STATUS_GUID",
-        delete_actions=1,
+        delete_actions=1,  # DELETES the unfinished actions
         comment="Resolved: printer power-cycled.",
     )
     print(closed.rfc_number)
+
+    # A 200 is not a receipt on this API: re-read. end_date_ut is stamped at
+    # resolution or closure, so a value here means "resolved or closed".
+    print(client.get_ticket("YOUR_RFC_NUMBER").end_date_ut)
 ```
+
+`allow_workflow_effect` is a required keyword of `close_ticket` (leaving it out is
+a `TypeError`), and a value that does not include `WorkflowEffect.INTERRUPTS` is
+refused before any request is sent (see the first Gotcha). `WorkflowEffect` and
+`EasyvistaWorkflowEffectRefused` are both importable from the package root.
 
 ```python
 from easyvista_python_client import EasyvistaClient, PostRequest
@@ -192,6 +214,35 @@ with EasyvistaClient.from_env() as client:
 
 ## Gotchas
 
+- **`close_ticket` is not a status setter.** It stops the workflow. Using it to
+  land an intermediate status (the package's former status setter was this same
+  request) ended the ticket's initial workflow action — that is how a
+  synchroniser closed tickets early. The root cause was established on
+  2026-10-01/02 from the synchroniser's code (it sent the close request right
+  after every create and on every status push) and from the vendor close page
+  (tier 1): that page lists four processing steps, none conditional on the
+  status sent — the workflow is interrupted, the status is set, the unfinished
+  actions are deleted (or, by our reading, ended) and an anticipated closing
+  action is inserted
+  ([vendor close page](https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md)).
+  The drain of the open action across such a status write was measured on
+  2026-09-01 on one instance (one ticket censused, target status id 24 there;
+  tier 4, so it may not generalise). The page documents *final* statuses only,
+  so for a non-final one it is an extrapolation the page neither exempts nor
+  covers. Writes that may change the
+  workflow are refused unless the call passes `allow_workflow_effect=`; the
+  refusal is `EasyvistaWorkflowEffectRefused`, a `ValueError` (not an
+  `EasyvistaError`), raised before any request, and an allowed workflow write is
+  sent once, never retried.
+- **`update_ticket` cannot set a status either, and refuses the attempt.** A
+  `status_id`, `status_guid`, catalog or `parent_request_id` key smuggled in
+  through `extra_payload` raises `EasyvistaWorkflowEffectRefused` unless you
+  opt in with `allow_workflow_effect=`. The vendor's
+  [update-an-incident-request page](https://docs.easyvista.com/docs/rest-api-update-an-incident-request.md)
+  excludes `status_id`, `sd_catalog_id`, `initial_sd_catalog_id` and
+  `parent_request_id` from its body outright (tier 1, read 2026-10-02), so an
+  opt-in is permission to *send* it, not evidence the server will honour it;
+  re-read after any such write.
 - **Timestamp columns are aware `datetime`, so a record dump is not
   JSON-serialisable.** `submit_date_ut`, `creation_date_ut`,
   `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut` and `last_update`
@@ -221,6 +272,30 @@ with EasyvistaClient.from_env() as client:
   deployment actually populates is a per-instance configuration choice. Read
   it back with `resolve_memo("requests/{rfc}/comment")`, or take
   `TicketContext.comment`, which resolves it for you.
+- **A memo stores exactly what you send, and nothing renders Markdown for
+  you.** Measured 2026-09-30 on one instance (tier 4, may not generalise): a
+  ticket memo written through the API with HTML was stored byte for byte, and
+  the web UI rendered its `<p>` elements as paragraphs. So what `resolve_memo`
+  returns is whatever was written -- HTML, plain text, or Markdown nobody
+  rendered -- and Markdown you write is stored as Markdown. The optional `content`
+  extra (`pip install "easyvista-python-client[content]"`) converts both ways:
+  `EasyvistaContentConverter.to_transport(markdown)` before the write,
+  `EasyvistaContentConverter.from_transport(memo)` on what `resolve_memo`
+  returns. It lives in the `easyvista_python_client.content` subpackage, not
+  the package root, so it is not imported unless you ask for it. Its Markdown
+  is **CommonMark with GFM tables**, rendered by cmark-gfm: a newline is a
+  line break, raw HTML passes through, and no other GFM extension is on, so
+  `~~strike~~` stays literal (write `<s>...</s>`). Reading spells a memo's
+  text as literal text -- a typed `__init__` comes back as `\_\_init\_\_`,
+  `# titre` at a line start as `\# titre`, `<Entrée>` as `\<Entrée>` -- so
+  render the Markdown to display it rather than stripping the backslashes.
+  A memo with no HTML element reads as literal lines; pass
+  `plain_text_is_markdown=True` when the value is your own Markdown. Write a
+  memo as HTML or as Markdown, not both: one real HTML element makes the
+  whole value HTML. A nested table comes back as its words, and a table
+  without a header row gains an empty one. It sanitises nothing: raw HTML,
+  `javascript:` link targets and `<javascript:...>` autolinks in the Markdown
+  go out live, so neutralise them in Markdown you did not write.
 - A `description` passed to **`PostRequest`** at create time was not readable
   back through either memo on the verified instance. Follow the create with
   an `update_ticket` when the body must be retrievable.

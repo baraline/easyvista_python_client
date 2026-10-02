@@ -137,6 +137,34 @@ custom field (per EasyVista); official ``E_``-columns like ``E_MAIL`` stay offic
 because they are declared model fields. Resolve a link's text with
 ``client.resolve_memo(href)``.
 
+Rich-text content
+-----------------
+
+The optional ``content`` extra, ``pip install "easyvista-python-client[content]"``:
+Markdown to and from the HTML a memo holds. See :doc:`content` for what each
+direction does, what survives a round trip, and why it is not a sanitiser.
+
+.. autoclass:: easyvista_python_client.content.EasyvistaContentConverter
+
+Workflow guard
+--------------
+
+A write that may change a ticket's workflow is refused before it is sent unless
+the call allows the effect explicitly. See the module docstring for what is
+named and why, and ``docs/vendor-api-reference.md``, "Ticket workflow".
+
+.. automodule:: easyvista_python_client.workflow
+   :no-members:
+   :no-special-members:
+
+.. autoclass:: easyvista_python_client.workflow.WorkflowEffect
+
+.. autofunction:: easyvista_python_client.workflow.as_effects
+
+.. autofunction:: easyvista_python_client.workflow.workflow_triggers
+
+.. autofunction:: easyvista_python_client.workflow.classify_workflow_effects
+
 Exceptions
 ----------
 
@@ -153,6 +181,10 @@ Exceptions
 .. autoexception:: easyvista_python_client.exceptions.EasyvistaServerError
 
 .. autoexception:: easyvista_python_client.exceptions.EasyvistaConnectionError
+
+.. autoexception:: easyvista_python_client.exceptions.EasyvistaContentError
+
+.. autoexception:: easyvista_python_client.exceptions.EasyvistaWorkflowEffectRefused
 
 Resource engine
 ---------------

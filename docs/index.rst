@@ -10,6 +10,7 @@ asynchronous, with Pydantic models and Bearer or Basic authentication.
 
    installation
    user_guide
+   content
 
 .. toctree::
    :maxdepth: 2

@@ -2,10 +2,10 @@
 name: easyvista-asset-workflow
 description: "Create, fetch, search and iterate EasyVista assets with easyvista_python_client — create_asset, get_asset, search_assets and iter_assets with PostAsset and Asset. Use for equipment, hardware or CI records: registering a new asset, looking one up by tag, or listing a department's assets."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the assets resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the assets resource."
 metadata:
   package: easyvista-python-client
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,

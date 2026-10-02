@@ -1,11 +1,11 @@
 ---
 name: easyvista-ticket-actions
-description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, end_action (an action is born OPEN and its text does not show until ended), list_actions, iter_actions, get_action and update_action with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history."
+description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, end_action (an action is born OPEN and its text does not show until ended), list_actions, iter_actions, get_action, update_action and reassign_action (hand an action, such as the open workflow step, to another group or person without ending it) with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history, and to reassign, escalate or transfer an action."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
   package: easyvista-python-client
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -14,9 +14,10 @@ metadata:
 > `easyvista-client-setup`.
 
 Actions are EasyVista's per-ticket work log — the closest equivalent to a
-followup. Six methods: `create_action(rfc, action)`, `list_actions(rfc)`,
-`iter_actions(rfc)`, `get_action(action_id)`, `update_action(action_id,
-update)` and `end_action(rfc, action_id=...)`. The list and item shapes differ
+followup. Eight methods: `create_task(rfc, task)`, `create_action(rfc, action)`,
+`list_actions(rfc)`, `iter_actions(rfc)`, `get_action(action_id)`,
+`update_action(action_id, update)`, `reassign_action(action_id, group_id=...)`
+and `end_action(rfc, action_id=...)`. The list and item shapes differ
 substantially, which is where most mistakes come from.
 
 ## Two shapes of the same record
@@ -195,10 +196,43 @@ with EasyvistaClient.from_env() as client:
 > spawned a new open type-1 *Validation Self Service* action. A control the
 > same day showed ending a type-94 action the caller had created left both the
 > status and the action count untouched. So ending your own action is inert;
-> ending a workflow step is a state change on the ticket. **Omitting
-> `action_id` ends every open action**, which on a ticket whose only open one
-> is its workflow step means resolving it — name the action unless you mean
-> that.
+> ending a workflow step is a state change on the ticket.
+>
+> **`end_action` therefore guards it.** It makes one read first (an item read
+> projecting `ACTION_ID` and `WORKFLOW_ID`) and refuses a workflow step
+> (`WORKFLOW_ID` set), a record that comes back without `WORKFLOW_ID`, or a
+> record whose `ACTION_ID` is not the one you asked for, unless you pass
+> `allow_workflow_effect=WorkflowEffect.ADVANCES`. If that read fails, its error
+> propagates and the end request is not sent; a 403 there says nothing about
+> whether ending is permitted. Ending your own action needs no opt-in; whether
+> an action created under the step carries a `WORKFLOW_ID` is unmeasured — if it
+> does, the end is refused, and you opt in. `WORKFLOW_ID` is what separates the
+> engine's rows from a caller's (tier 4: 1500 of 1500 rows, 2026-09-02, one
+> instance, so it may not generalise). The refusal is
+> `EasyvistaWorkflowEffectRefused`, a `ValueError` (not an `EasyvistaError`),
+> raised before the end request; an allowed end is sent once, never retried.
+> `action_id` must be a positive integer.
+>
+> **`end_all=True` ends every open action, the workflow step included; it needs
+> `WorkflowEffect.ADVANCES`.** Omitting `action_id` is not that form: a bare
+> `action_id=None` is refused, because `Action.action_id` is legitimately `None`
+> on a create response or a projection without `ACTION_ID`.
+
+To end a workflow step on purpose, say so at the call site:
+
+```python
+from easyvista_python_client import EasyvistaClient, WorkflowEffect
+
+with EasyvistaClient.from_env() as client:
+    client.end_action(
+        "YOUR_RFC_NUMBER",
+        action_id=YOUR_WORKFLOW_STEP_ACTION_ID,
+        # The workflow moves on to its next step. Status ids are per instance,
+        # so read the ticket back rather than assuming where it landed.
+        allow_workflow_effect=WorkflowEffect.ADVANCES,
+    )
+    print(client.get_ticket("YOUR_RFC_NUMBER").reference("STATUS").display)
+```
 
 > **Retraction (2026-09-01).** An earlier revision of this skill said every
 > documented form returned `590 Action not found` and called that an
@@ -321,6 +355,47 @@ Two asymmetries worth knowing:
   and PATCH on `actions/{id}` — there is no DELETE verb — so there is
   deliberately no `delete_action`.
 
+## Reassign an action
+
+`reassign_action(action_id, group_id=..., done_by_id=...)` hands an action to
+another group and/or person without ending it — the way to escalate the open
+workflow step. At least one id is required; both are positive integers, and both
+are per-deployment, so look them up (next section) rather than hardcoding them. A
+group id is the one that may not be readable: on the measured instance
+(2026-10-02, one instance) `GET groups` answered 403, which this API also answers
+for an absent route, so if yours does too, take the group id from your
+administrator or from a record that already carries one. `done_by_id` is an
+employee id: find one with `search_employees` or `get_employee`.
+
+```python
+from easyvista_python_client import EasyvistaClient
+
+with EasyvistaClient.from_env() as client:
+    actions = client.iter_actions(
+        "YOUR_RFC_NUMBER",
+        fields=["ACTION_ID", "WORKFLOW_ID", "GROUP_ID", "END_DATE_UT"],
+    )
+    # The open workflow step: WORKFLOW_ID set, no end date yet.
+    step = next(a for a in actions if a.is_workflow_generated and not a.end_date_ut)
+    client.reassign_action(step.action_id, group_id=YOUR_OTHER_GROUP_ID)
+    # Re-read: this API answers 200 while dropping a field it did not store.
+    print(client.get_action(step.action_id).group_id)
+```
+
+The vendor documents no REST reassignment route (tier 1,
+`rest-api-update-an-action.md` lists no group column among its exclusions, and the
+UI's transfer is a wizard), so the effect is measured, not specified. Measured
+2026-10-02 on one instance (Service Manager 2025.3; two tickets, so it may not
+generalise): the group was stored (`GROUP_ID` 57 to 50 on the open workflow step
+of both tickets); the step stayed open and the ticket's status did not move; the
+open actions were unchanged and no new action rows appeared. **The ticket's own
+`OWNING_GROUP_ID` does not follow the action's group** (it stayed 57 on the first
+ticket, the only one read for it), so reassigning a step is not reassigning the
+ticket. Reassigning to a person (`done_by_id`) was **not measured**, and whether
+the UI wizard's notifications fire is not observable from the API.
+`reassign_action` is not refused by the workflow guard, because the group and the
+person are data the workflow reads, not workflow state.
+
 ## Discover the ids first
 
 `action_type_id` and `group_id` are instance-specific. One call finds both —
@@ -375,9 +450,14 @@ with the EasyVista administrator, then pin the ids in your own configuration.
       and an open action renders in the UI as a pending row with its text NOT
       shown, which reads as though the note was lost. Finish it with
       `end_action(rfc, action_id=...)` (see the section above for the fields
-      and for what ending a *workflow* action does to the ticket). Note the
-      create route is parent-resolved: it needs exactly one open action on the
-      ticket, or an explicit `parent_action_id` naming an open one.
+      and for what ending a *workflow* action does to the ticket).
+      `end_action` reads the action first and refuses a workflow step
+      (`WORKFLOW_ID` set) or a record without `WORKFLOW_ID` unless you pass
+      `allow_workflow_effect=WorkflowEffect.ADVANCES`; ending your own action
+      needs no opt-in, but whether an action created under a step carries a
+      `WORKFLOW_ID` is unmeasured — if it does, the end is refused, and you opt
+      in. Note the create route is parent-resolved: it needs exactly one open
+      action on the ticket, or an explicit `parent_action_id` naming an open one.
 4. To address the action or task you just created, diff `list_actions` across
    the call — the create response cannot give you the id (see Gotchas).
 5. To read note text, either call `get_action` and resolve the memo href with
@@ -397,7 +477,7 @@ with EasyvistaClient.from_env() as client:
     client.create_task(
         "YOUR_RFC_NUMBER",
         PostTask(
-            action_type_id=1,
+            action_type_id=94,
             group_id=1,
             description="Called the user back; printer power-cycled.",
         ),
@@ -406,7 +486,8 @@ with EasyvistaClient.from_env() as client:
 
 Only when the work is genuinely still to be done, an **action** instead. It is
 born open, so its text does not render in the history until it is ended —
-finish it with `end_action` (above) once the work is done:
+finish it with `end_action` (above) once the work is done; that needs no opt-in
+for an action you created, subject to the `WORKFLOW_ID` caveat above:
 
 ```python
 from easyvista_python_client import EasyvistaClient, PostAction
@@ -415,7 +496,7 @@ with EasyvistaClient.from_env() as client:
     action = client.create_action(
         "YOUR_RFC_NUMBER",
         PostAction(
-            action_type_id=1,
+            action_type_id=94,
             group_id=1,
             description="Chase the supplier for a replacement drum.",
         ),
@@ -423,9 +504,10 @@ with EasyvistaClient.from_env() as client:
     print(action.href)
 ```
 
-`action_type_id=1` and `group_id=1` above are placeholders — use the ids
-`client.discover("ACTION_TYPE")` and `client.discover("GROUP")` printed for
-your instance.
+`action_type_id=94` and `group_id=1` above are placeholders — 94 is the
+public-comment type on one measured instance, where type 1 is a workflow step
+type (measured 2026-09-01, one instance; it may not generalise). Read your own
+with `client.discover("ACTION_TYPE")` and `client.discover("GROUP")`.
 
 ```python
 from easyvista_python_client import EasyvistaClient, PostAction
@@ -436,7 +518,7 @@ with EasyvistaClient.from_env() as client:
     # The create response carries no ACTION_ID, so diff the list around it.
     before = {a.action_id for a in client.list_actions(rfc)}
     client.create_action(
-        rfc, PostAction(action_type_id=1, group_id=1, description="Triaged.")
+        rfc, PostAction(action_type_id=94, group_id=1, description="Triaged.")
     )
     after = client.list_actions(rfc)
     created = [a for a in after if a.action_id not in before]
@@ -520,14 +602,52 @@ with EasyvistaClient.from_env() as client:
   `description or comment` — which is what `get_ticket_context` and
   `TicketContext.to_markdown` now do, resolving the `COMMENT` memo only when
   `DESCRIPTION` comes back empty.
+- **Note text is stored as sent, and nothing renders Markdown for you.** A
+  memo holds what it was written with -- HTML written through the API was
+  stored byte for byte (measured 2026-09-30 on a ticket memo, one instance,
+  tier 4, may not generalise) -- so a resolved note may be HTML, and Markdown
+  written as-is is stored as-is. The optional `content`
+  extra (`pip install "easyvista-python-client[content]"`) converts both ways:
+  `EasyvistaContentConverter.to_transport(markdown)` for the `description` you
+  write, `EasyvistaContentConverter.from_transport(memo)` on what
+  `resolve_memo` returns. Import it from the `easyvista_python_client.content`
+  subpackage. Its Markdown is **CommonMark with GFM tables**: a newline you
+  write is a line break, but `~~strike~~`, bare `www.` links and `- [ ]` task
+  boxes are not extensions it enables, so write `<s>...</s>` and
+  `<https://...>` instead. An unescaped `__init__` you write renders as a bold
+  `init`. Reading spells a note's text as literal text (`__init__` comes back
+  as `\_\_init\_\_`, a displayed `<b>` as `\<b>`), so render the Markdown
+  rather than stripping its backslashes. Underline and strike come back as raw
+  `<u>` and `<s>` tags, and a note with no HTML in it reads as literal lines.
+  It sanitises nothing: raw HTML, `javascript:` link targets and
+  `<javascript:...>` autolinks go out live, and reading keeps a memo's
+  `javascript:` links, so neutralise both in Markdown you did not write — a
+  comment sync relaying another ITSM's text is exactly that case. See
+  `docs/content.rst` for what survives a round trip.
 - **`create_action` resolves an implicit parent** and needs exactly **one** open
   action on the ticket: zero gives `590 "Parent action not found or incorrect"`,
   two or more gives `590 "Ambiguous query : many parent actions found"`, and an
   explicit `parent_action_id` naming an **open** action succeeds either way (an
   ended one is refused). A fresh ticket carries exactly one open workflow action,
-  and every `set_status` drains the open set to zero — so in practice a bare
-  `create_action` works only on a ticket nobody has moved yet. `create_task` is
-  not parent-resolved and is unaffected.
+  and a close request drains the open set to zero (the vendor close page says
+  the unfinished actions are deleted, or by our reading ended — tier 1; one
+  ticket was censused on 2026-09-01 on one instance — tier 4, so it may not
+  generalise) — so in practice a bare `create_action` works only on a ticket
+  nobody has moved yet. `create_task` is not parent-resolved and is unaffected.
+- **The workflow guard covers the other action writes too.** `create_action`,
+  `create_task` and `update_action` refuse a body whose `extra_payload` ties the
+  record into the workflow — `WORKFLOW_ID`, `STAGE_ID`, `PROCESS_STEP_ID` or
+  `STATUS_ID_ON_TERMINATE`; on an action also an end date (a task is born ended,
+  so its end date is ordinary); on an update also a type, a parent or a ticket
+  link; on a task also `PARENT_ACTION_ID` — with
+  `EasyvistaWorkflowEffectRefused`, before any request, unless the call passes
+  `allow_workflow_effect=`. The fields `PostAction`, `PostTask` and
+  `ActionUpdate` declare need no opt-in. That is a deny-list of columns, and one
+  cannot be complete: the vendor's
+  [update-an-action page](https://docs.easyvista.com/docs/rest-api-update-an-action.md)
+  accepts "all the fields from the AM_ACTION table except those mentioned below"
+  (tier 1, read 2026-10-02), so a column it does not name is unclassified, not
+  proven neutral.
 - `action.action_type` is a nested object on the live API, not a string. Use
   `action.reference("ACTION_TYPE").display` for the label.
 - Resolving every body costs two extra requests per action (item fetch, then

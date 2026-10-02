@@ -6,11 +6,7 @@ from datetime import date
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 from pathlib import Path
-
-try:
-    from tomllib import loads as toml_loads
-except ModuleNotFoundError:  # Python < 3.11
-    from tomli import loads as toml_loads
+from tomllib import loads as toml_loads
 
 
 def _read_project_version() -> str:

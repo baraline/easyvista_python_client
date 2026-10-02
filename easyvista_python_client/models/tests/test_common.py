@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pydantic
 import pytest
@@ -155,7 +155,7 @@ def test_a_naive_datetime_input_comes_back_aware():
     aware -- OptionalDateTime promises "An aware `datetime | None`" for every
     accepted input, not only for strings."""
     got = _Probe.model_validate({"when": datetime(2026, 1, 1, 9, 0, 0)}).when
-    assert got == datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+    assert got == datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
 
 
 # --- the caller's own timestamp formats, opt-in and empty by default ---------
@@ -192,7 +192,7 @@ def test_a_named_format_is_accepted_and_stamped_utc():
         {"when": "17/08/2026 15:40:00"},
         context={"datetime_input_formats": ["%d/%m/%Y %H:%M:%S"]},
     ).when
-    assert got == datetime(2026, 8, 17, 15, 40, 0, tzinfo=timezone.utc)
+    assert got == datetime(2026, 8, 17, 15, 40, 0, tzinfo=UTC)
 
 
 def test_a_context_format_never_shadows_the_native_iso_form():
@@ -230,6 +230,7 @@ def test_an_unknown_field_names_itself_and_extra_payload():
     assert "ctalog_guid" in message
     assert "extra_payload" in message
     assert "a 200 is not a receipt on this API." in message
+    assert "allow_workflow_effect=" in message
 
 
 def test_a_known_field_is_not_intercepted():
@@ -254,8 +255,9 @@ def test_extra_payload_serializes_verbatim_without_prefix() -> None:
 
 def test_extra_payload_overrides_a_declared_field() -> None:
     """A caller reaching past the model wins; losing silently would be worse."""
-    payload = PostRequest(catalog_code="X", title="declared",
-                          extra_payload={"title": "override"})
+    payload = PostRequest(
+        catalog_code="X", title="declared", extra_payload={"title": "override"}
+    )
     assert payload.to_api()["title"] == "override"
 
 

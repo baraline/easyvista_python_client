@@ -261,10 +261,36 @@ def test_build_end_action_sends_a_falsy_elapsed_time(value):
     assert spec.json["end_action"]["elapsed_time"] == value
 
 
-def test_build_end_action_sends_a_falsy_action_id():
-    """``action_id=0`` must address action 0, not become the bulk form."""
-    spec, _ = a.build_end_action("I1", action_id=0)
-    assert spec.json["end_action"]["action_id"] == 0
+def test_build_end_action_never_turns_a_falsy_action_id_into_the_bulk_form():
+    """``action_id=0`` is refused, not read as "no id" and not sent.
+
+    Truthiness must not decide between naming an action and the id-less bulk
+    form (``is not None`` does); and 0 is not a valid action id at all, so it
+    is refused with the rest of the non-positive ids.
+    """
+    with pytest.raises(ValueError, match="action id"):
+        a.build_end_action("I1", action_id=0)
+
+
+@pytest.mark.parametrize("good", [42, "42", " 42 "])
+def test_build_end_action_puts_the_action_id_in_the_body_as_an_integer(good):
+    spec, _ = a.build_end_action("I1", action_id=good)
+    assert spec.json == {"end_action": {"action_id": 42}}
+    assert type(spec.json["end_action"]["action_id"]) is int
+
+
+@pytest.mark.parametrize(
+    "bad", ["I250101_00001", "", "  ", 0, -1, "-1", True, "12a", "²", 1.5]
+)
+def test_build_end_action_refuses_anything_but_a_positive_action_id(bad):
+    """The same rule as ``update_action``: an RFC number or a blank is no action id.
+
+    A blank would also make the client's pre-flight read address the
+    collection (``GET actions/``), whose first row says nothing about the
+    action being ended.
+    """
+    with pytest.raises(ValueError, match="action id"):
+        a.build_end_action("I1", action_id=bad)
 
 
 def test_build_end_action_passes_start_date_through():
@@ -274,7 +300,7 @@ def test_build_end_action_passes_start_date_through():
         end_date="01/09/2026 17:15:00", elapsed_time="15", doneby_mail="a@b.c",
     )
     assert spec.json["end_action"] == {
-        "action_id": "7",
+        "action_id": 7,
         "start_date": "01/09/2026 17:00:00",
         "end_date": "01/09/2026 17:15:00",
         "elapsed_time": "15",
@@ -298,3 +324,74 @@ def test_build_end_action_parses_the_href_only_response_without_raising():
     _, parser = a.build_end_action("I1", action_id=1)
     parsed = parser({"HREF": "https://host/api/v1/50004/requests/I1"})
     assert parsed.action_id is None
+
+
+@pytest.mark.parametrize(
+    "bad", ["I250101_00001", "", "  ", 0, -1, "-1", True, None, "12a", "²", 1.5]
+)
+def test_build_update_action_refuses_anything_but_a_positive_action_id(bad):
+    """``PUT actions/{rfc_number}`` is the end-action route on the same template.
+
+    An RFC number where an action id belongs would not edit one action: it
+    would address the end-action route, where an ``end_action`` body naming no
+    ``action_id`` ends every open action on the ticket.
+    """
+    with pytest.raises(ValueError, match="action id"):
+        build_update_action(bad, ActionUpdate(description="x"))
+
+
+@pytest.mark.parametrize("good", [60350, "60350", " 60350 "])
+def test_build_update_action_addresses_the_digit_string(good):
+    spec, _ = build_update_action(good, ActionUpdate(description="x"))
+    assert spec.path == "actions/60350"
+
+
+def test_build_get_action_can_project_fields():
+    spec, _ = build_get_action(42, fields=["ACTION_ID", "WORKFLOW_ID"])
+    assert spec.path == "actions/42"
+    assert spec.params == {"fields": "ACTION_ID,WORKFLOW_ID"}
+
+
+def test_build_reassign_action_puts_the_group_and_person():
+    spec, _ = a.build_reassign_action(60350, group_id=57, done_by_id=12)
+    assert (spec.method, spec.path) == ("PUT", "actions/60350")
+    assert spec.json == {a._REASSIGN_GROUP_KEY: 57, a._REASSIGN_DONE_BY_KEY: 12}
+
+
+def test_build_reassign_action_sends_only_what_it_was_given():
+    spec, _ = a.build_reassign_action(60350, group_id=57)
+    assert spec.json == {a._REASSIGN_GROUP_KEY: 57}
+    spec, _ = a.build_reassign_action(60350, done_by_id=12)
+    assert spec.json == {a._REASSIGN_DONE_BY_KEY: 12}
+
+
+def test_build_reassign_action_needs_a_target():
+    with pytest.raises(ValueError, match="group_id, done_by_id"):
+        a.build_reassign_action(60350)
+
+
+@pytest.mark.parametrize("bad", [0, -3, True, "57", 1.0])
+def test_build_reassign_action_refuses_a_non_positive_or_non_int_id(bad):
+    with pytest.raises(ValueError):
+        a.build_reassign_action(60350, group_id=bad)
+    with pytest.raises(ValueError):
+        a.build_reassign_action(60350, done_by_id=bad)
+
+
+def test_build_reassign_action_refuses_an_rfc_as_the_action():
+    with pytest.raises(ValueError, match="action id"):
+        a.build_reassign_action("I250101_00001", group_id=57)
+
+
+def test_build_reassign_action_parses_an_empty_echo_without_raising():
+    _, parser = a.build_reassign_action(60350, group_id=57)
+    assert parser({}).action_id is None
+    assert parser({"records": [{"ACTION_ID": 60350, "GROUP_ID": 57}]}).group_id == 57
+
+
+def test_build_reassign_action_body_is_not_a_workflow_effect():
+    """The group and person are data the workflow reads, not workflow state."""
+    from easyvista_python_client.workflow import workflow_triggers
+
+    spec, _ = a.build_reassign_action(60350, group_id=57, done_by_id=12)
+    assert not workflow_triggers(spec.method, spec.path, spec.json)

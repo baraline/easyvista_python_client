@@ -2,10 +2,10 @@
 name: easyvista-search-syntax
 description: "Write correct EasyVista server-side search expressions for search_tickets, iter_tickets, count_tickets, search_assets, search_departments and search_employees using ev_equals_filter, ev_in_filter, ev_contains_filter, ev_starts_with_filter, ev_since_filter, ev_between_filter, escape_ev_value and is_safe_ev_value. Use whenever building a search= argument, filtering EasyVista records, filtering by a date/time window, or debugging a filter that returned everything or nothing — EasyVista silently ignores conditions it cannot honour and returns the whole table."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, and network access to an EasyVista Service Manager REST API."
+compatibility: "Requires Python 3.11+, easyvista-python-client, and network access to an EasyVista Service Manager REST API."
 metadata:
   package: easyvista-python-client
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,

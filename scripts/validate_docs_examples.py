@@ -332,7 +332,13 @@ def run_offline(r: Results) -> None:
             "create_tickets": {"tickets"},
             "get_ticket": {"rfc_number"},
             "update_ticket": {"rfc_number", "update"},
-            "close_ticket": {"rfc_number", "status_guid", "delete_actions", "comment"},
+            "close_ticket": {
+                "rfc_number",
+                "allow_workflow_effect",
+                "status_guid",
+                "delete_actions",
+                "comment",
+            },
             "create_action": {"rfc_number", "action"},
             "list_actions": {"rfc_number"},
             "iter_actions": {"rfc_number", "fields", "page_size", "max_records"},
@@ -805,6 +811,7 @@ def run_live_writes(
         PostRequest,
         Request,
         RequestUpdate,
+        WorkflowEffect,
     )
 
     created_rfcs: list[str] = []
@@ -935,11 +942,13 @@ def run_live_writes(
         if autoclose and status_guid:
             for target in list(created_rfcs):
                 r.check_perm(
-                    f"close_ticket('{target}', status_guid=..., delete_actions=1,"
-                    " comment=...)",
+                    f"close_ticket('{target}',"
+                    " allow_workflow_effect=WorkflowEffect.INTERRUPTS,"
+                    " status_guid=..., delete_actions=1, comment=...)",
                     partial(
                         client.close_ticket,
                         target,
+                        allow_workflow_effect=WorkflowEffect.INTERRUPTS,
                         status_guid=status_guid,
                         delete_actions=1,
                         comment="Resolved by validation",
