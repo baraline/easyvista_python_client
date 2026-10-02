@@ -359,7 +359,8 @@ class RequestUpdate(EasyvistaWriteModel):
       There is no status write that leaves the workflow alone: a ticket's
       status follows its workflow, and the one request that sets a status,
       :meth:`~easyvista_python_client.EasyvistaClient.close_ticket`, interrupts
-      it (tier 1, the vendor close page).
+      it (tier 1: https://docs.easyvista.com/docs/workflow.md and the vendor
+      close page).
     * ``severity_id`` -- rejected with HTTP 590 (code 2013). Tier 4: measured on
       one instance, 2026-08-17.
     * ``urgency_id`` -- ``URGENCY_ID`` raised HTTP 590 *and the value still

@@ -95,9 +95,10 @@ def build_close_ticket(
     refuses until that is done. Note the addressing: ``status_GUID``, not
     ``STATUS_ID``.
 
-    ``delete_actions`` drops the ticket's actions; the vendor types it a
-    **boolean** and this builder passes either spelling through unchanged, since
-    EasyVista accepts ``true``/``false``, ``0``/``1`` and the quoted strings.
+    ``delete_actions`` deletes the ticket's unfinished actions rather than
+    ending them (tier 1, the same page); the vendor types it a **boolean** and
+    this builder passes either spelling through unchanged, since EasyVista
+    accepts ``true``/``false``, ``0``/``1`` and the quoted strings.
 
     **The route is the vendor's own.** ``PUT requests/{rfc_number}`` with a
     ``closed`` wrapper is what the documentation specifies

@@ -7,8 +7,8 @@ skips cleanly when credentials are absent, so a checkout with no ``secrets/``
 and no ``EASYVISTA_TEST_*`` environment simply skips the suite rather than
 failing it.
 
-They are not read-only. A full run creates and closes **21 tickets** (one shared
-``rich_ticket``, two ``probe_tickets``, and 18 from ``ticket_factory``), plus 8
+They are not read-only. A full run creates and closes **20 tickets** (one shared
+``rich_ticket``, two ``probe_tickets``, and 17 from ``ticket_factory``), plus 8
 actions, 5 document uploads and **6 to 14 ticket updates** (4 fixed PUTs --
 title, rename, description, external reference -- plus the ``IMPACT_ID`` /
 ``OWNER_ID`` read-back in the ticket-identity test, which tries up to 5
