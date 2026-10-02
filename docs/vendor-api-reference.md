@@ -209,7 +209,7 @@ per-step text for the workflow ones.
 `_PO`, `_SP`, `_L1`..`_L6`) on the item GET. There is no `action-types` route
 to ask, so on this deployment those ids **cannot be named through the API at
 all**. What is known about 28 is behavioural, not nominal: it is the row that
-carries the text passed to `set_status(comment=...)`, so it must not be
+carries the text passed to `close_ticket(comment=...)`, so it must not be
 filtered out of a timeline read.
 
 Also worth recording without acting on it: the instance's `POST /assets` schema
@@ -240,6 +240,77 @@ Dotted sub-field access works in both `sort` and `search`
 tokens exist (`search=field:last_week`). Neither is exposed by this package.
 
 Envelope: `HREF`, `record_count`, `total_record_count`, `records`, `@next`.
+
+## Ticket workflow — what each documented write does to it (tier 1, read 2026-10-02)
+
+"A workflow is a process that handles a type of tickets, arranged in a sequence of
+actions performed in steps." … "Advancing through the steps of a workflow changes the
+status of a ticket." — https://docs.easyvista.com/docs/workflow.md (also
+references-tables.md: "The change of a meta-status performs actions in the workflow.")
+
+| Write | Effect on the workflow | Evidence |
+| --- | --- | --- |
+| `POST /requests` (create) | **starts** it | "3. The workflow associated with the ticket is started." — rest-api-create-an-incident-request.md |
+| `POST /requests/without-workflow` (virtual agent) | does not start it | "3. The workflow associated with the ticket will not be started." — ev-service-manager-rest-api-create-ticket-via-virtual-agent.md |
+| `PUT /requests/{rfc}` `{"closed": …}` | **interrupts** it, whatever status is sent | "1. The workflow of the ticket is interrupted." (sub-bullet: "workflowstop function, with **rfc_number** passed as a parameter"); then status = "the final status of the ticket"; "The unfinished actions associated with the ticket are deleted." (`end_date_ut = NULL` iff `delete_actions = True`; otherwise `end_date` is the "Closing date of open actions"); "An anticipated closing action associated with the ticket is inserted."; "Any further modification is impossible." — rest-api-close-an-incident-request.md. An omitted `status_GUID` defaults to the Closed meta-status (same page). |
+| `PUT /actions/{rfc}` `{"end_action": …}` | **advances** it when the action is a workflow step | REST page: "If the action_id is not specified, all the ongoing actions associated with the rfc_number are ended." — rest-api-finish-an-action-attached-to-an-incident-request.md; it never mentions the workflow. UI Finish wizard: "The workflow will proceed to the next step." — action.md. Tier 4: 2026-09-01, one instance, 2/2 (step ended → ticket Résolu); a caller's own action, 3/3, no change. May not generalise. |
+| `PUT /requests/{rfc}` `{"suspended"…}` / `{"restarted"…}` | not documented | "A suspend action for the ticket is created." / "Create a reopening action for the ticket." — nothing on open actions or status. rest-api-suspend-an-incident-request.md, rest-api-reopen-an-incident-request.md |
+| Everything else (update a ticket, update/create an action or task, documents) | not documented | The update pages accept "all the fields … except" a list; no processing section. rest-api-update-an-incident-request.md, rest-api-update-an-action.md |
+
+The vendor documents no REST write that sets a ticket's status outside the rows
+above: the ticket update page excludes `status_id` from its body, with
+`sd_catalog_id`, `initial_sd_catalog_id` and `parent_request_id`
+(rest-api-update-an-incident-request.md). There is no status setter; this package
+removed `set_status` (it was the close request). Not documented is not the same as
+impossible — see the business-rule caveat below.
+
+**The vendor documents no REST route that reassigns or transfers an action.** The
+UI's "Assign action" button runs a wizard ("The action will automatically be
+transferred." — action.md). `PUT /actions/{id}` with the group and/or the person is
+allowed by the update page's "all the fields from the AM_ACTION table except those
+mentioned below" rule, and its exclusion list does not name `GROUP_ID` or `DONE_BY_ID`
+(rest-api-update-an-action.md, tier 1). This package does not refuse it, but its
+effect on the action and on the workflow is **not yet measured**: allowed by the
+documentation is not the same as shown harmless.
+
+**Business rules can fire on any write** — "On Insert/On Update" of any record
+(business-rule.md) — so a write this package does not gate is unclassified, not proven
+neutral.
+
+**The guard.** `easyvista_python_client.workflow` names what a write may do, and the
+transport refuses it, before any request is sent, unless the call passes
+`allow_workflow_effect=`. Named: the four bodies above on any path; on ticket routes,
+status and catalog columns; on action routes, end date, type, parent,
+workflow/stage/step and ticket links; ticket sub-routes other than
+`actions`/`tasks`/`documents`. Not named: text, owner, group, done-by, impact,
+urgency. A column deny-list cannot be complete, and this one says so.
+
+* **A request counts as a read only when its method and every method-override header
+  value are reads.** The method and the value of each of `X-HTTP-Method-Override`,
+  `X-HTTP-Method` and `X-Method-Override` (any casing) must all be `GET`, `HEAD` or
+  `OPTIONS`; otherwise it is classified as a write, so an override that says `GET`
+  cannot hide one. Whether this API honours any of those headers is not recorded here.
+* **Refused outright, whatever the method and whatever `allow_workflow_effect` says**
+  (a `ValueError`, no request sent): a path with a dot segment (`.` or `..`, also
+  percent-encoded), a percent-encoded slash or backslash (`%2F`, `%5C`), or a raw
+  backslash. The HTTP client collapses a dot segment, so the request would reach a
+  route other than the one checked; a server may read an encoded slash or a backslash
+  as a path separator. Whether this server does is not measured — the check fails
+  closed, and no API route needs any of them.
+* **`end_action` reads the action first.** Unless `allow_workflow_effect` includes
+  `WorkflowEffect.ADVANCES`, it makes one item read projecting `ACTION_ID` and
+  `WORKFLOW_ID`, and refuses — with no end request sent — a workflow step
+  (`WORKFLOW_ID` set), a record that comes back without the `WORKFLOW_ID` column at
+  all (which cannot be told from a step), or a record naming a different `ACTION_ID`
+  than the one asked for. `end_all=True` is refused outright without `ADVANCES`.
+  Ending a caller's own action needs no opt-in. What separates a workflow step from
+  a caller's action is `WORKFLOW_ID` (tier 4: 1500 of 1500 rows, 2026-09-02, one
+  instance). The live check that an item read of an action carries the column:
+  tier 4, 2026-10-02, one instance, may not generalise — the item read, with
+  `fields=ACTION_ID,WORKFLOW_ID` and without it, named `WORKFLOW_ID` on a workflow
+  step (set) and on a non-workflow action (present, empty). Whether an action
+  created under a step by `create_action` carries one is unmeasured; if it does,
+  ending it is refused too, the safe direction.
 
 ## Route topology (tier 2) — `GET {api_root}/swagger`, read 2026-08-27
 
@@ -332,18 +403,9 @@ from Markdown; see open item O-MEMOFORMAT for what is not yet known.
   that caused `RequestUpdate.urgency_id` to be removed. The exclusion may be a
   type mismatch we authored rather than an API limitation. Unresolved: settling
   it needs a live write. Same question for `severity_id`.
-* **O-CLOSE** — should the close route move to `PUT /requests/{rfc}/close`?
 * **O-URGPATH** — the vendor documents `GET /urgencies`; the instance spec
   declares `GET /urgency`. Both return 200 live. Which is canonical is unknown.
-* **O-CLOSE-DEFAULT** — `close_ticket` omits `status_GUID` from the body when
-  the caller omits it, and two docstrings previously stated that this closes
-  the ticket to the instance's default *Closed* meta-status, attributing it to
-  the vendor close page. **That sentence is not recorded anywhere in this file
-  and the behaviour is not exercised by the live suite** — every `close_ticket`
-  call in `integration_tests/` passes an explicit `status_guid`. Both
-  docstrings now hedge. Until someone either re-reads the vendor page and adds
-  the row here, or measures the omitted form live and dates it, the
-  documentation must not assert it.
+* **O-CLOSE-DEFAULT** — **CLOSED at tier 1 (2026-10-02).** The vendor close page documents an omitted status_GUID as defaulting to the Closed meta-status. Not measured here.
 * **O-COSTGROUP** — `TIME_COST` / `CONTRACTUAL_COST` are parsed by
   `models/common._parse_ev_decimal`, which accepts either decimal separator and
   **refuses a grouping separator** rather than guessing (`'1.234,56'` and
@@ -360,7 +422,7 @@ from Markdown; see open item O-MEMOFORMAT for what is not yet known.
 * **O-ACTIONTYPE28** — types 14, 27 and 28 have an empty `ACTION_LABEL_*` in
   every language column at both list and item level, and there is no
   `action-types` route, so nothing in the API can name them. Type 28 is known
-  behaviourally (it carries `set_status(comment=...)` text) and 14 and 27 not
+  behaviourally (it carries `close_ticket(comment=...)` text) and 14 and 27 not
   at all. Settling this needs the EasyVista **admin console**, not the API: the
   administration screen listing action types, and specifically which type ids
   that deployment classes as *task* types. Nobody working on this package has
