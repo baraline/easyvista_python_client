@@ -676,7 +676,12 @@ def run_tolerance(
     -> ``update_ticket(description=probe)`` -> read back at ``/comment`` -> classify.
     Each probe ticket is closed right after unless ``close_each`` is False.
     """
-    from easyvista_python_client import EasyvistaError, PostRequest, RequestUpdate
+    from easyvista_python_client import (
+        EasyvistaError,
+        PostRequest,
+        RequestUpdate,
+        WorkflowEffect,
+    )
 
     results: list[Probe] = []
     for index, (label, payload) in enumerate(COMMENT_PROBES, start=1):
@@ -723,6 +728,7 @@ def run_tolerance(
             try:
                 client.close_ticket(
                     rfc,
+                    allow_workflow_effect=WorkflowEffect.INTERRUPTS,
                     status_guid=status_guid,
                     delete_actions=1,
                     comment="tolerance probe cleanup",
@@ -742,8 +748,11 @@ def run_tolerance(
 # cleanup
 # --------------------------------------------------------------------------- #
 def do_close(client: EasyvistaClient, rfc: str, status_guid: str) -> None:
+    from easyvista_python_client import WorkflowEffect
+
     client.close_ticket(
         rfc,
+        allow_workflow_effect=WorkflowEffect.INTERRUPTS,
         status_guid=status_guid,
         delete_actions=1,
         comment="Cloture apres validation de fidelite du contenu",

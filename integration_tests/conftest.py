@@ -7,8 +7,8 @@ skips cleanly when credentials are absent, so a checkout with no ``secrets/``
 and no ``EASYVISTA_TEST_*`` environment simply skips the suite rather than
 failing it.
 
-They are not read-only. A full run creates and closes **21 tickets** (one shared
-``rich_ticket``, two ``probe_tickets``, and 18 from ``ticket_factory``), plus 8
+They are not read-only. A full run creates and closes **20 tickets** (one shared
+``rich_ticket``, two ``probe_tickets``, and 17 from ``ticket_factory``), plus 8
 actions, 5 document uploads and **6 to 14 ticket updates** (4 fixed PUTs --
 title, rename, description, external reference -- plus the ``IMPACT_ID`` /
 ``OWNER_ID`` read-back in the ticket-identity test, which tries up to 5
@@ -16,7 +16,10 @@ candidate values per column and stops at the first the instance accepts, some
 of which it may reject outright); ``test_live_smoke`` additionally issues one
 create the server is *expected to reject*, so no ticket persists from it. Every
 created ticket is registered for cleanup before it is asserted on, and closed
-in teardown. Point them at a preprod/test instance, never production.
+in teardown. The opt-in workflow census in ``test_live_workflow_guard.py`` adds
+up to 3 tickets and reassigns workflow steps, which may notify the target group
+or person; it runs only when ``EASYVISTA_TEST_RUN_WORKFLOW_CENSUS=1``. Point
+them at a preprod/test instance, never production.
 
 Credentials resolve from an uppercase env var first, then a lowercase file under
 ``secrets/``:
@@ -87,6 +90,7 @@ from easyvista_python_client import (
     EasyvistaRateLimitError,
     EasyvistaServerError,
     PostRequest,
+    WorkflowEffect,
     ev_equals_filter,
     is_safe_ev_value,
 )
@@ -304,8 +308,10 @@ def live_write_client(live_config: EasyvistaConfig) -> Iterator[EasyvistaClient]
     tell a safe GET from a ``create_action``. Rather than weaken the retry that
     makes reads trustworthy, the non-idempotent verbs get their own client with
     retries off: ``create_ticket``, ``create_action`` and ``add_document``.
-    ``update_ticket`` (fixed-value PUTs) and ``close_ticket`` are idempotent and
-    stay on ``live_client``.
+    ``update_ticket`` (fixed-value PUTs) stays on ``live_client``;
+    ``close_ticket`` is not idempotent in effect (each call inserts an
+    anticipated closing action), but the transport sends an allowed close once
+    on any client.
 
     ``replace`` on a frozen dataclass re-runs ``__post_init__``, which is required
     because ``_server_normalized`` is ``field(init=False)``.
@@ -588,12 +594,15 @@ def _close_tracked(
     Error records carry the exception's TYPE and status code, never the exception
     object: ``str(exc)`` is the transport's message, which interpolates server prose
     this suite did not author (P2).
+
+    Teardown interrupts each ticket's workflow on purpose -- that is what closing is.
     """
     errors: list[tuple[str, str, int | None]] = []
     for rfc in tracked:
         try:
             client.close_ticket(
                 rfc,
+                allow_workflow_effect=WorkflowEffect.INTERRUPTS,
                 status_guid=cfg["status_guid"],
                 delete_actions=1,
                 comment=reason,

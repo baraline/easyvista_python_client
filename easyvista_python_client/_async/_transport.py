@@ -38,7 +38,9 @@ from easyvista_python_client.exceptions import (
     EasyvistaRateLimitError,
     EasyvistaServerError,
     EasyvistaValidationError,
+    EasyvistaWorkflowEffectRefused,
 )
+from easyvista_python_client.workflow import WorkflowEffect, workflow_triggers
 
 #: Default chunk size, in bytes, for :meth:`Transport.stream_bytes`.
 #:
@@ -196,6 +198,49 @@ class BaseTransport:
         if not (self.config.default_params or call or spec):
             return None
         return {**self.config.default_params, **(call or {}), **(spec or {})}
+
+    def gate(self, spec: RequestSpec) -> frozenset[WorkflowEffect]:
+        """Refuse ``spec`` unless every workflow effect it names is allowed.
+
+        Returns the effects it names -- all of them allowed by then -- so the
+        caller can tell a workflow write from an ordinary one. Empty for a read
+        and for an ordinary write. See :mod:`easyvista_python_client.workflow`
+        for what is named and why. Raises
+        :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` (no
+        request is made), or ``ValueError`` for a path with a dot segment, a
+        percent-encoded slash or backslash, or a raw backslash.
+
+        The headers read for a method override are the ones that go on the
+        wire: ``config.extra_headers`` with the spec's own laid over them, as
+        :meth:`headers` and the request merge them, so an override header set in
+        the configuration cannot hide a write behind a ``GET`` either.
+        """
+        triggers = workflow_triggers(
+            spec.method,
+            spec.path,
+            spec.json,
+            {**self.config.extra_headers, **(spec.headers or {})},
+        )
+        refused = tuple(
+            (what, effect)
+            for what, effect in triggers
+            if effect not in spec.allow_workflow_effect
+        )
+        if refused:
+            effects = frozenset(effect for _, effect in refused)
+            names = sorted(f"WorkflowEffect.{effect.name}" for effect in effects)
+            allow = names[0] if len(names) == 1 else "{" + ", ".join(names) + "}"
+            named = ", ".join(f"{what!r} ({effect.name})" for what, effect in refused)
+            raise EasyvistaWorkflowEffectRefused(
+                f"refused {spec.method} {spec.path} before sending it: {named} may "
+                f"change the ticket's workflow. If that is the intent, pass "
+                f"allow_workflow_effect={allow} to this call, or to send() when "
+                f"the method does not take it. See docs/vendor-api-reference.md, "
+                f"'Ticket workflow'.",
+                effects=effects,
+                triggers=refused,
+            )
+        return frozenset(effect for _, effect in triggers)
 
     def auth(self) -> httpx.Auth | None:
         if self.config.uses_basic_auth:
@@ -362,9 +407,16 @@ class Transport(BaseTransport):
 
         ``config.default_params`` sits under both -- see :meth:`merge_params`
         for the full ordering.
+
+        A request naming a workflow effect is refused before anything is sent
+        unless the spec allows it (:meth:`BaseTransport.gate`). One that is
+        allowed is attempted **once**: each close inserts another anticipated
+        closing action and each end ends whatever is open, so a resend after a
+        lost response is not a repeat of the same request.
         """
+        effects = self.gate(spec)
         retryer = AsyncRetrying(
-            stop=stop_after_attempt(self.config.max_retries + 1),
+            stop=stop_after_attempt(1 if effects else self.config.max_retries + 1),
             wait=wait_exponential(multiplier=0.5, max=10),
             retry=retry_if_exception_type((_RetryableResponse, httpx.TransportError)),
             reraise=True,

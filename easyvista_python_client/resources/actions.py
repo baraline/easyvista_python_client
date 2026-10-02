@@ -22,6 +22,30 @@ ACTIONS: ResourceDescriptor[Action] = ResourceDescriptor(
 )
 
 
+def _require_action_id(action_id: object) -> str:
+    """Return ``action_id`` as the digit string ``actions/{id}`` addresses.
+
+    ``PUT actions/{rfc_number}`` is the vendor's END-ACTION route, on the same
+    path template as ``PUT actions/{action_id}`` (tier 1,
+    https://docs.easyvista.com/docs/webservice-rest.md). An RFC number here
+    would therefore not edit one action: it addresses the end-action route
+    instead, where an ``end_action`` body naming no ``action_id`` ends every
+    open action on the ticket. ``Action.action_id`` is legitimately
+    ``None`` across this package (a create response carries none; a projection
+    without ``ACTION_ID`` drops it), so ``None`` is refused rather than
+    addressing ``actions/None``.
+    """
+    if action_id is None or isinstance(action_id, (bool, float)):
+        raise ValueError(f"an action id must be a positive integer, got {action_id!r}")
+    text = str(action_id).strip()
+    if not (text.isascii() and text.isdigit()) or int(text) <= 0:
+        raise ValueError(
+            f"an action id must be a positive integer, got {action_id!r}; an RFC "
+            "number addresses the end-action route on the same path instead"
+        )
+    return text
+
+
 def build_create_action(
     rfc_number: str,
     payload: PostAction,
@@ -140,6 +164,7 @@ def build_list_actions(
 def build_get_action(
     action_id: str | int,
     *,
+    fields: Iterable[str] | str | None = None,
     context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Action]]:
     """Fetch ONE action by id.
@@ -152,8 +177,10 @@ def build_get_action(
     no ``requests/{rfc}/actions/{id}`` route at all. See
     :func:`build_search_actions` for why the HTTP 403 an earlier note recorded
     against that path was never evidence of a permission restriction.
+
+    ``fields`` projects the item read, as on the list.
     """
-    return build_get(ACTIONS, action_id, context=context)
+    return build_get(ACTIONS, action_id, fields=fields, context=context)
 
 
 def build_update_action(
@@ -169,8 +196,63 @@ def build_update_action(
     ``requests/{rfc}/actions/{id}`` route to send them to. See
     :func:`build_search_actions` for why the HTTP 403 an earlier note recorded
     against that path did not distinguish a denied route from an absent one.
+
+    The id must be a positive integer -- see ``_require_action_id`` for why an
+    RFC number is refused.
     """
-    return build_update(ACTIONS, action_id, payload, context=context)
+    record_id = _require_action_id(action_id)
+    return build_update(ACTIONS, record_id, payload, context=context)
+
+
+#: The body keys a reassignment sends. ``group_id`` is the lower-case spelling
+#: the 2026-10-02 census found stored (one instance, 2/2 tickets), so the
+#: upper-case retry was never needed. ``done_by_id`` is the same lower-case
+#: convention as ``PostAction``, but a write to a person was **not measured**.
+_REASSIGN_GROUP_KEY = "group_id"
+_REASSIGN_DONE_BY_KEY = "done_by_id"
+
+
+def _positive_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+    return value
+
+
+def build_reassign_action(
+    action_id: str | int,
+    *,
+    group_id: int | None = None,
+    done_by_id: int | None = None,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Action]]:
+    """Build ``PUT actions/{id}`` reassigning an action to a group and/or person.
+
+    The vendor documents no reassignment route: the UI's transfer is a wizard,
+    and ``PUT actions/{id}`` accepts "all the fields from the AM_ACTION table
+    except" a list that does not name the group or done-by columns (tier 1,
+    https://docs.easyvista.com/docs/rest-api-update-an-action.md). What this
+    write does was measured, not documented -- see the client's
+    ``reassign_action``.
+
+    The id must be a positive integer, as for :func:`build_update_action`;
+    ``group_id`` and ``done_by_id`` must be positive integers, and at least one
+    is required.
+    """
+    path_id = _require_action_id(action_id)
+    body: dict[str, int] = {}
+    if group_id is not None:
+        body[_REASSIGN_GROUP_KEY] = _positive_int(group_id, "group_id")
+    if done_by_id is not None:
+        body[_REASSIGN_DONE_BY_KEY] = _positive_int(done_by_id, "done_by_id")
+    if not body:
+        raise ValueError("reassign_action needs group_id, done_by_id, or both")
+    spec = RequestSpec("PUT", f"actions/{path_id}", json=body)
+
+    def parse(data: Any) -> Action:
+        records = extract_records(data, ACTIONS.envelope_key)
+        return Action.model_validate(records[0] if records else data, context=context)
+
+    return spec, parse
 
 
 def build_end_action(
@@ -216,6 +298,10 @@ def build_end_action(
     End Date" (measured 2026-09-01 on one instance -- one instance, one date,
     so it may not generalise). ``elapsed_time`` is a number of **minutes**.
 
+    ``action_id`` must be a positive integer, as for ``update_action``: it is
+    sent as an integer, and a blank, an RFC number or any other value is
+    refused rather than named in the body.
+
     A blank ``rfc_number`` is refused rather than allowed to build ``PUT
     actions/``, which addresses the collection instead of a ticket.
     """
@@ -244,7 +330,10 @@ def build_end_action(
         )
     end: dict[str, Any] = {}
     if action_id is not None:
-        end["action_id"] = action_id
+        # An integer on the wire, as ``update_action`` addresses one: a blank
+        # or an RFC number is no action id, and would otherwise let the
+        # client's pre-flight read address the collection (``GET actions/``).
+        end["action_id"] = int(_require_action_id(action_id))
     if start_date is not None:
         end["start_date"] = start_date
     if end_date is not None:

@@ -20,7 +20,12 @@ name-and-keyword gate over ``python`` code blocks, not a semantic one:
   only names imported from the package root and keywords passed to a client
   method or a write model are looked up.
 - **No positional arguments and no arity.** Only ``keyword=`` arguments are
-  matched against the signature.
+  matched against the signature -- with one exception: a **required
+  keyword-only** parameter (``close_ticket``'s ``allow_workflow_effect``) must
+  be passed by every snippet that calls the method, since a snippet that omits
+  it raises ``TypeError`` when an agent runs it verbatim. A call that splats
+  ``**kwargs`` is exempt, because the splat may supply it. A positional
+  parameter's arity is still not checked.
 - **No required fields and no value types.** ``PostAsset(catalog_id="1")``
   passes even though the field is an ``int``, and a write model missing a
   mandatory field passes too -- nothing is ever instantiated.
@@ -298,6 +303,25 @@ def _write_model_name(func: ast.expr) -> str | None:
     return None
 
 
+def _missing_required_keywords(
+    call: ast.Call, signature: inspect.Signature
+) -> set[str]:
+    """Required keyword-only parameters of ``signature`` that ``call`` omits.
+
+    A call that splats ``**kwargs`` may be supplying any of them, so its
+    required ones cannot be judged from the source text and none is reported.
+    """
+    if any(keyword.arg is None for keyword in call.keywords):
+        return set()
+    required = {
+        name
+        for name, param in signature.parameters.items()
+        if param.kind is inspect.Parameter.KEYWORD_ONLY
+        and param.default is inspect.Parameter.empty
+    }
+    return required - {keyword.arg for keyword in call.keywords}
+
+
 def _snippet_trees(skill: Path) -> list[ast.Module]:
     text = (skill / "SKILL.md").read_text(encoding="utf-8")
     return [ast.parse(block) for block in _python_blocks(text)]
@@ -371,6 +395,12 @@ def test_client_methods_and_keywords_exist(skill: Path) -> None:
                 f"{skill.name} passes {keyword.arg}= to client.{method}(), "
                 f"which accepts {sorted(accepted)}"
             )
+        missing = _missing_required_keywords(call, signature)
+        assert not missing, (
+            f"{skill.name} calls client.{method}() without its required "
+            f"keyword-only parameter(s) {sorted(missing)}; an agent runs a "
+            "skill's snippet verbatim, so the snippet would raise TypeError"
+        )
 
 
 @pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
@@ -459,6 +489,47 @@ def test_snippet_hosts_are_synthetic(skill: Path) -> None:
                     f"{skill.name} carries a non-synthetic URL {url!r}; every "
                     "host in a skill must sit under example.com"
                 )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        # The case the check exists for: a required keyword is left out.
+        ('client.close_ticket("R", status_guid="g")', {"allow_workflow_effect"}),
+        # A splat may supply it, so the call is exempt rather than reported.
+        ('client.close_ticket("R", **opts)', set()),
+        ('client.close_ticket("R", status_guid="g", **opts)', set()),
+        # A compliant call reports nothing, whatever else it passes.
+        ('client.close_ticket("R", allow_workflow_effect=effect)', set()),
+        (
+            'client.close_ticket("R", allow_workflow_effect=effect, status_guid="g")',
+            set(),
+        ),
+    ],
+)
+def test_required_keyword_check_sees_what_it_should(
+    source: str, expected: set[str]
+) -> None:
+    """The required-keyword check is itself checked, so it cannot go inert.
+
+    ``test_client_methods_and_keywords_exist`` only ever sees the skills as they
+    are. If the helper silently returned an empty set, every skill would pass
+    it. This feeds it synthetic snippets and a real signature that does carry a
+    required keyword-only parameter.
+    """
+    signature = inspect.signature(ev.EasyvistaClient.close_ticket)
+    required = {
+        name
+        for name, param in signature.parameters.items()
+        if param.kind is inspect.Parameter.KEYWORD_ONLY
+        and param.default is inspect.Parameter.empty
+    }
+    assert "allow_workflow_effect" in required, (
+        "close_ticket no longer has a required keyword-only parameter, so this "
+        "self-test no longer exercises the check; pick another method"
+    )
+    (call,) = _client_calls(ast.parse(source))
+    assert _missing_required_keywords(call, signature) == expected
 
 
 def test_write_models_map_is_complete() -> None:

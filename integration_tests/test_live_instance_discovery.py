@@ -54,8 +54,8 @@ def test_describe_instance_profiles_the_live_deployment(
         "no statuses discovered; check profile.unavailable['STATUS'] -- a "
         "denial and an empty table are different things"
     )
-    # The GUID is the value set_status and close_ticket actually address a
-    # status by, and it is only ever readable off a sampled ticket.
+    # The GUID is the value close_ticket actually addresses a status by, and
+    # it is only ever readable off a sampled ticket.
     assert any(s.guid for s in statuses), (
         "no discovered status carried a STATUS_GUID; the sample reached no "
         "ticket, or the nested STATUS object stopped carrying one"

@@ -34,8 +34,11 @@ with `async for`; `await client.stream_document(...)` raises `TypeError`.
    anything with credentials in the environment.
 6. Keep `verify_ssl=True` unless the user confirms an internal endpoint that
    cannot present a valid chain.
-7. Raise `max_retries` above its `0` default only for flaky networks; 429 and
-   5xx are retried with exponential backoff, and 590 deliberately is not.
+7. Raise `max_retries` above its `0` default only for flaky networks, and keep
+   it `0` for a client that writes: 429, 5xx and connection errors are retried
+   with exponential backoff **for every verb** (a resent create can duplicate
+   the ticket), and 590 deliberately is not. A write allowed to change the
+   workflow is sent once whatever `max_retries` says.
 8. Use the client as a context manager so its HTTP session closes; call
    `client.close()` (`await client.aclose()`) when it outlives the block.
 
@@ -51,7 +54,7 @@ Every `EasyvistaConfig` field, and its default:
 | `login` | `None` | HTTP Basic credential, paired with `password` |
 | `password` | `None` | HTTP Basic credential, paired with `login` |
 | `timeout` | `30.0` | Seconds |
-| `max_retries` | `0` | Applies to 429 and 5xx only |
+| `max_retries` | `0` | Applies to 429, 5xx and connection errors, for every verb — except that a write allowed to change the workflow is sent once. Keep it 0 for writers: a resent create can duplicate the ticket. |
 | `verify_ssl` | `True` | `True`/`False`, a CA-bundle path, or an `ssl.SSLContext` — a private CA does **not** require disabling verification |
 | `default_max_rows` | `100` | Page size when `max_rows` / `page_size` is omitted |
 | `api_version` | `"v1"` | Used to build `api_root` |
@@ -92,7 +95,8 @@ config = EasyvistaConfig(
 ## Reaching a route this package does not wrap
 
 `client.send()` is the escape hatch. This package wraps roughly ten of the
-paths an instance advertises; `send` reaches the rest with the same retries
+paths an instance advertises; `send` reaches the rest with the same retries,
+the same workflow guard — pass `allow_workflow_effect=` for a workflow write —
 and the same error mapping, returning the decoded JSON unchanged.
 
 ```python
@@ -237,9 +241,14 @@ with EasyvistaClient.from_env() as client:
 | 429 | `EasyvistaRateLimitError` | Retried when `max_retries > 0`. |
 | 5xx | `EasyvistaServerError` | Retried when `max_retries > 0`. |
 | Transport failure (timeout, refused connection) | `EasyvistaConnectionError` | No response was obtained at all. |
+| *(none: raised before sending)* | `EasyvistaWorkflowEffectRefused` — a `ValueError`, **not** an `EasyvistaError` | A write that may change the workflow, refused before sending; never retry it. |
 
-Every one of these carries `status_code`, `ev_code` and `ev_message`, and all
-derive from `EasyvistaError`.
+Every HTTP-derived one of these carries `status_code`, `ev_code` and
+`ev_message`, and all derive from `EasyvistaError`. The last row is the
+exception on both counts: it has no response to carry a status from, so it is
+not an `EasyvistaError`, and `except EasyvistaError` does not catch it. Never
+retry it: pass the right `allow_workflow_effect=` when changing the workflow is
+the intent, and otherwise drop the write.
 
 ## Gotchas
 
@@ -261,6 +270,8 @@ derive from `EasyvistaError`.
 - `from_env()` accepts no overrides, unlike the sister GLPI client's.
 - `default_max_rows` (100) is the page size used when `max_rows` / `page_size`
   is omitted — it is not a total cap; the `iter_*` methods page past it.
-- Retries are off by default (`max_retries=0`).
+- Retries are off by default (`max_retries=0`). Leave them off for a client that
+  writes: the retry covers every verb, and a resent create can duplicate the
+  ticket.
 - Closing matters: the client owns an HTTP session. Prefer the context
   manager.

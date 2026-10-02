@@ -1,6 +1,6 @@
 ---
 name: easyvista-instance-discovery
-description: "Discover what one EasyVista deployment actually exposes with easyvista_python_client — get_api_spec reads the instance's own OpenAPI, list_reference_table reads any list route into column-free records, discover resolves one reference name to the ids/labels/codes/GUIDs in use, and describe_instance profiles the lot into an InstanceProfile. Use before hardcoding any id, when a ticket create is rejected for an unknown catalog, urgency, impact or group, when you need a STATUS_GUID for set_status or close_ticket, or when you need to know which routes a deployment declares at all."
+description: "Discover what one EasyVista deployment actually exposes with easyvista_python_client — get_api_spec reads the instance's own OpenAPI, list_reference_table reads any list route into column-free records, discover resolves one reference name to the ids/labels/codes/GUIDs in use, and describe_instance profiles the lot into an InstanceProfile. Use before hardcoding any id, when a ticket create is rejected for an unknown catalog, urgency, impact or group, when you need a STATUS_GUID for close_ticket, or when you need to know which routes a deployment declares at all."
 license: MIT
 compatibility: "Requires Python 3.11+, easyvista-python-client, and network access to an EasyVista Service Manager REST API. Every call here is a GET; nothing is created, updated or deleted."
 metadata:
@@ -39,7 +39,9 @@ start-up and fail loudly; never freeze one into code.
    named there.
 2. For one reference, `discover(name)`. Use `.id` for a write model's
    `*_id` field, `.code` for `PostRequest(catalog_code=...)`, and `.guid` for
-   `set_status` / `close_ticket`.
+   `close_ticket` — the vendor close request, which stops the ticket's workflow
+   (documented for final statuses; nothing exempts a non-final one), so it is
+   not a way to pick an intermediate status (see `easyvista-ticket-workflow`).
 3. For a route this package does not model at all, `list_reference_table(path)`
    — check `get_api_spec()["paths"]` to see which your deployment declares.
 4. Never cache an id across deployments. Re-resolve, or fail loudly.
@@ -56,7 +58,7 @@ with EasyvistaClient.from_env() as client:
         print("gap:", gap, reason)
 
     for status in client.discover("STATUS"):
-        # .guid is what set_status and close_ticket address a status by.
+        # .guid is what close_ticket addresses a status by.
         print(status.id, status.label, status.guid)
 
     for catalog in client.discover("CATALOG_REQUEST"):

@@ -36,6 +36,7 @@ from easyvista_python_client import (
     PostRequest,
     PostTask,
     RequestUpdate,
+    WorkflowEffect,
 )
 
 #: One payload that satisfies every parser in the package.
@@ -52,6 +53,10 @@ PAYLOAD = {
         {
             "RFC_NUMBER": "I1",
             "ACTION_ID": 1,
+            # Empty, not absent: end_action's guard reads this column off the
+            # action it is asked to end, and an empty one is the caller's own
+            # action (the safe path the registry should model).
+            "WORKFLOW_ID": "",
             "ASSET_ID": 1,
             "DEPARTMENT_ID": 1,
             "EMPLOYEE_ID": 1,
@@ -75,8 +80,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     # The escape hatch: an arbitrary route, parsed by nobody. PAYLOAD satisfies
     # it because `send` returns the raw JSON body unchanged.
     "send": (("GET", "requests"), {}),
-    "close_ticket": (("I1",), {}),
-    "set_status": (("I1",), {"status_guid": "{0000-0000}"}),
+    "close_ticket": (("I1",), {"allow_workflow_effect": WorkflowEffect.INTERRUPTS}),
     "count_tickets": ((), {}),
     "create_action": (("I1", PostAction(action_type_id=94, group_id=3)), {}),
     # action_id named explicitly: omitted, the vendor form ends EVERY open
@@ -114,6 +118,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "iter_tickets": ((), {"max_records": 1}),
     "list_actions": (("I1",), {}),
     "list_documents": (("I1",), {}),
+    "reassign_action": ((1,), {"group_id": 3}),
     "resolve_memo": (("requests/I1/description",), {}),
     "search_assets": ((), {}),
     "search_departments": ((), {}),

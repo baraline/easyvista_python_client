@@ -327,8 +327,9 @@ def test_request_update_refuses_status_id():
     invisible: measured live, a flat status write is rejected 590 when sent alone
     and -- far worse -- returns 200, applies its companion field and drops the
     status silently when sent beside one. Anything that reinstates this field
-    reinstates a write that reports success and stores nothing. The status route
-    is ``set_status`` / the ``{"closed": {"status_GUID": ...}}`` envelope.
+    reinstates a write that reports success and stores nothing. The only request
+    that sets a status is ``close_ticket`` (the ``{"closed": {"status_GUID":
+    ...}}`` envelope), and it interrupts the workflow.
     """
     with pytest.raises(ValidationError) as excinfo:
         RequestUpdate(status_id=2)

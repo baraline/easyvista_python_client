@@ -47,6 +47,7 @@ from easyvista_python_client import (
     EasyvistaClient,
     EasyvistaConfig,
     PostRequest,
+    WorkflowEffect,
     ev_equals_filter,
 )
 
@@ -80,12 +81,10 @@ with EasyvistaClient(config) as client:
     for t in client.iter_tickets(search=open_status, page_size=100, max_records=1000):
         ...  # async: `async for t in client.iter_tickets(...)`
 
-    # close it with your instance's "closed" status GUID. Every argument is
-    # optional -- `client.close_ticket(ticket.rfc_number)` sends the close with
-    # no status of its own, but where that lands the ticket is not established
-    # by this package; see the user guide before relying on it.
+    # close only when closing is the intent: it interrupts the ticket's workflow.
     client.close_ticket(
         ticket.rfc_number,
+        allow_workflow_effect=WorkflowEffect.INTERRUPTS,
         status_guid="{00000000-0000-0000-0000-000000000000}",
         delete_actions=1,
         comment="Resolved",
@@ -143,7 +142,15 @@ client.end_action(
 > action only ends it; ending the ticket's open workflow step advances the
 > workflow and moves the ticket's status. Naming `action_id` is therefore
 > required — the vendor's id-less "end every open action" form is behind an
-> explicit `end_all=True`.
+> explicit `end_all=True`. Ending a workflow step, or ending every open action
+> with `end_all=True`, is refused unless the call passes
+> `allow_workflow_effect=WorkflowEffect.ADVANCES`. Ending an action you
+> created yourself needs no opt-in, with one unmeasured exception: whether an
+> action `create_action` creates under the workflow step carries a
+> `WORKFLOW_ID` has not been measured, and if it does, `end_action` refuses to
+> end it without `ADVANCES` (the safe direction).
+> The vendor documents no status setter, and this package has none: a ticket's
+> status follows its workflow (user guide, "Changing a ticket's status").
 
 ## Assets and documents
 

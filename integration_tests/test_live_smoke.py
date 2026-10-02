@@ -4,18 +4,19 @@ Skipped automatically unless credentials are configured, via ``EASYVISTA_TEST_*`
 env vars or ``secrets/easyvista_test_*`` files. Never runs in CI (which runs
 ``pytest -m "not integration"``). NEVER point at production.
 
-This module WRITES. It creates up to three tickets and closes every one:
+This module WRITES. It creates up to two tickets and closes every one:
 
 * one under-specified create the server is expected to reject -- which still
   creates the row (measured: 9 of 9 rejected creates left one), so it is
   reconciled by its ``external_reference`` marker and closed. An earlier version
   of this file claimed "no ticket persists from this module ... read-only-safe by
   construction"; that was wrong and leaked one ticket per live run;
-* one create with the full documented body, to prove the ids land;
-* one from ``ticket_factory`` for the ``set_status`` check.
+* one create with the full documented body, to prove the ids land.
 
-The ticket-creating fixture lives in ``conftest.py`` and is also used by
-``test_live_search_syntax``.
+This module creates and closes its own tickets, by marker. The shared
+ticket-creating fixtures (``rich_ticket``, ``probe_tickets``,
+``ticket_factory``) live in ``conftest.py`` and serve the other live modules,
+``test_live_search_syntax`` among them.
 
 Every assertion here is by shape, and every one routes through ``_assertions``
 or a pre-bound local (design principle P2). pytest's assertion rewriter reports
@@ -44,6 +45,7 @@ from easyvista_python_client import (
     EasyvistaValidationError,
     PostRequest,
     Request,
+    WorkflowEffect,
     ev_equals_filter,
 )
 from integration_tests._assertions import assert_shape
@@ -206,42 +208,6 @@ def test_the_documented_create_body_lands_every_id(
         _close_by_marker(live_client, live_write_config, marker)
 
 
-def test_set_status_reaches_a_non_terminal_status(
-    live_client: EasyvistaClient,
-    live_write_client: EasyvistaClient,
-    live_write_config: dict[str, str],
-    ticket_factory,
-) -> None:
-    """``set_status`` sets an arbitrary status, not only a closing one.
-
-    The API has no flat status update -- ``RequestUpdate`` carries no
-    ``status_id`` for that reason -- and the ``{"closed": {"status_GUID": ...}}``
-    envelope is the only route. Its wire name suggests it only closes; measured,
-    it reaches every status tried.
-
-    This pins the non-terminal case specifically, because that is the surprising
-    half and the half a future reader is most likely to "simplify" away. The GUID
-    is read off the instance rather than hardcoded: status GUIDs are per-instance
-    configuration, so a literal here would be a value this repo must not carry
-    and would be wrong on any other deployment anyway.
-    """
-    rfc = ticket_factory()
-    before = live_client.get_ticket(rfc).status_id
-    target_guid, target_id = _a_different_status(live_client, exclude=before)
-    if target_guid is None:
-        pytest.skip("no second status with a readable GUID on this instance")
-
-    live_write_client.set_status(
-        rfc, status_guid=target_guid, comment="capability-suite status probe"
-    )
-    after = live_client.get_ticket(rfc).status_id
-    # Bound as bools: the ids are instance configuration, not suite-authored (P2).
-    moved = str(after) != str(before)
-    landed_on_target = str(after) == str(target_id)
-    assert moved, "set_status did not change the ticket's status"
-    assert landed_on_target, "set_status landed on a status other than the one asked"
-
-
 def _close_by_marker(client: EasyvistaClient, cfg: dict[str, str], marker: str) -> None:
     """Close every ticket carrying ``marker``, however it got there.
 
@@ -268,35 +234,10 @@ def _close_by_marker(client: EasyvistaClient, cfg: dict[str, str], marker: str) 
             continue
         try:
             client.close_ticket(
-                rfc, status_guid=cfg["status_guid"], comment="smoke cleanup"
+                rfc,
+                allow_workflow_effect=WorkflowEffect.INTERRUPTS,
+                status_guid=cfg["status_guid"],
+                comment="smoke cleanup",
             )
         except EasyvistaError:
             continue
-
-
-def _a_different_status(
-    client: EasyvistaClient, *, exclude: object
-) -> tuple[str | None, str | None]:
-    """Return ``(status_guid, status_id)`` for some status that is not ``exclude``.
-
-    Read off the instance because status GUIDs are per-instance configuration: a
-    literal would be a value this repo must not carry, and would be wrong on any
-    other deployment. Found by sampling tickets and taking the first whose status
-    differs -- the nested ``STATUS`` object carries both the id and the GUID,
-    but only on an UNPROJECTED read, so no ``fields`` is passed here.
-    """
-    try:
-        sampled = client.search_tickets(sort="LAST_UPDATE DESC", max_rows=60)
-    except EasyvistaError:
-        return None, None
-    for record in sampled.records:
-        status = record.model_extra.get("STATUS") if record.model_extra else None
-        if not isinstance(status, dict):
-            continue
-        sid = status.get("STATUS_ID")
-        guid = status.get("STATUS_GUID")
-        if sid is None or not guid:
-            continue
-        if str(sid) != str(exclude):
-            return str(guid), str(sid)
-    return None, None
