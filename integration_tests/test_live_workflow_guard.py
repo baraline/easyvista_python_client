@@ -332,22 +332,24 @@ def _write_and_observe(
     before: _Snapshot,
     send: Callable[[], object],
     column: str | None = None,
-) -> tuple[Exception | None, _Snapshot]:
+) -> _Snapshot:
     """Send one write, then read the state twice; a failed write still reads.
 
-    A raised write prints only the exception's type and status code (the message
-    is server prose this suite did not author), and is handed back for the caller
-    to re-raise once the reads are printed. Returns the settled snapshot.
+    A raised write is reduced to its type name and status code, which are
+    printed; the exception itself is dropped, because its message is server
+    prose this suite keeps out of test output (P2). The reads are still taken
+    and printed, and then the test fails with a label-only message.
+    Returns the settled snapshot.
     """
-    error: Exception | None = None
+    failure: str | None = None
     try:
         send()
     except Exception as exc:
-        error = exc
-        print(
-            f"CENSUS {rfc} {label}: the write raised {type(exc).__name__} "
+        failure = (
+            f"census write failed: {type(exc).__name__} "
             f"status_code={getattr(exc, 'status_code', None)}"
         )
+        print(f"CENSUS {rfc} {label}: {failure}")
     immediate = _snapshot(client, rfc, step_id)
     print(f"CENSUS {rfc} {label} immediate: {_describe(before, immediate, column)}")
     time.sleep(_SETTLE_SECONDS)
@@ -356,7 +358,9 @@ def _write_and_observe(
         f"CENSUS {rfc} {label} +{_SETTLE_SECONDS}s: "
         f"{_describe(before, settled, column)}"
     )
-    return error, settled
+    if failure is not None:
+        pytest.fail(failure, pytrace=False)
+    return settled
 
 
 def _census(
@@ -400,7 +404,7 @@ def _census(
     outcomes: dict[str, bool] = {}
     for key in (column, name):
         body = {key: target}
-        error, settled = _write_and_observe(
+        settled = _write_and_observe(
             client,
             rfc,
             step_id,
@@ -411,8 +415,6 @@ def _census(
             ),
             column,
         )
-        if error is not None:
-            raise error
         _check_unchanged(before, settled)
         outcomes[key] = getattr(settled.step, column) == target
         if outcomes[key]:
@@ -477,7 +479,7 @@ def test_the_ticket_writes_the_sync_makes_keep_the_workflow_step_open(
     step_id = step.action_id  # a positive int: _the_open_step refuses anything else
     before = _snapshot(live_client, rfc, step_id)
     _check_before(step, before)
-    error, settled = _write_and_observe(
+    settled = _write_and_observe(
         live_client,
         rfc,
         step_id,
@@ -487,6 +489,4 @@ def test_the_ticket_writes_the_sync_makes_keep_the_workflow_step_open(
             rfc, RequestUpdate(title=f"{rfc} census title")
         ),
     )
-    if error is not None:
-        raise error
     _check_unchanged(before, settled)
