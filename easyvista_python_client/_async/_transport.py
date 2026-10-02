@@ -207,9 +207,20 @@ class BaseTransport:
         and for an ordinary write. See :mod:`easyvista_python_client.workflow`
         for what is named and why. Raises
         :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` (no
-        request is made) or ``ValueError`` for a path with a dot segment.
+        request is made), or ``ValueError`` for a path with a dot segment, a
+        percent-encoded slash or backslash, or a raw backslash.
+
+        The headers read for a method override are the ones that go on the
+        wire: ``config.extra_headers`` with the spec's own laid over them, as
+        :meth:`headers` and the request merge them, so an override header set in
+        the configuration cannot hide a write behind a ``GET`` either.
         """
-        triggers = workflow_triggers(spec.method, spec.path, spec.json, spec.headers)
+        triggers = workflow_triggers(
+            spec.method,
+            spec.path,
+            spec.json,
+            {**self.config.extra_headers, **(spec.headers or {})},
+        )
         refused = tuple(
             (what, effect)
             for what, effect in triggers

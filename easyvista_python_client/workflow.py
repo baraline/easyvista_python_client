@@ -38,9 +38,14 @@ select workflow state: a status, a catalog (which selects the workflow), the
 workflow, stage and step links, and on an existing action its end date, type,
 parent or ticket (creating an action or a task names a narrower set, below).
 (3) Ticket sub-routes that are workflow commands rather than records, and
-``requests/without-workflow`` and the deletion of a ticket. Not named: data
-the workflow merely reads -- text, owner, group, done-by, impact, urgency.
-Reassigning an action's group or person is therefore not refused.
+``requests/without-workflow`` and the deletion of a ticket. (4) A write to
+``actions/<x>`` where ``<x>`` is not an integer id: ``PUT
+actions/{rfc_number}`` is the end-action route, so the route is named
+(``ADVANCES``) whatever the body says. The column rules in (2) apply to the
+``requests/`` and ``actions/`` routes only; a write to any other route family
+is not classified by column. Not named: data the workflow merely
+reads -- text, owner, group, done-by, impact, urgency. Reassigning an action's
+group or person is therefore not refused.
 
 **This is a deny-list, and a deny-list of columns cannot be complete**: the
 vendor's update pages accept "all the fields from the SD_REQUEST table except
@@ -48,7 +53,7 @@ those mentioned below" for a ticket
 (https://docs.easyvista.com/docs/rest-api-update-an-incident-request.md) and
 "all the fields from the AM_ACTION table except those mentioned below" for an
 action (https://docs.easyvista.com/docs/rest-api-update-an-action.md), each
-followed by a short list of exclusions (tier 1, read 2026-10-02). What is not
+followed by a list of exclusions (tier 1, read 2026-10-02). What is not
 named here is unclassified, not proven neutral.
 """
 
@@ -311,6 +316,12 @@ def workflow_triggers(
             found.append((f"requests/{{rfc}}/{sub}", effect))
     elif head == "actions" and len(segments) == 2:
         columns(_ACTION_COLUMNS)
+        # ``PUT actions/{rfc_number}`` is the vendor's end-action route, and the
+        # same path shape as an action edit; only the segment tells them apart.
+        # An integer id addresses an action. Anything else is the ticket's RFC
+        # number, which selects the end-action route whatever the body names.
+        if not (segments[1].isascii() and segments[1].isdigit()):
+            found.append(("actions/{rfc}", WorkflowEffect.ADVANCES))
     return tuple(found)
 
 

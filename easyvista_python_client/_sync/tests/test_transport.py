@@ -1034,3 +1034,36 @@ def test_send_refuses_a_dot_segment_path_before_any_request():
                 RequestSpec("PUT", "x/../requests/I1", json={"closed": {}})
             )
     assert not route.called
+
+
+@respx.mock
+def test_send_refuses_a_write_hidden_behind_a_configured_override_header():
+    # config.extra_headers is merged onto every request on the wire, so a
+    # method-override header set there can turn a GET into a write exactly as
+    # one on the spec can.
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    config = _cfg(extra_headers={"X-HTTP-Method-Override": "PUT"})
+    with Transport(config) as transport:
+        with pytest.raises(EasyvistaWorkflowEffectRefused) as refused:
+            transport.send(RequestSpec("GET", "requests/I1", json={"closed": {}}))
+    assert not route.called
+    assert refused.value.effects == {WorkflowEffect.INTERRUPTS}
+
+
+def test_gate_reads_the_headers_as_they_go_on_the_wire_the_spec_winning():
+    configured = BaseTransport(_cfg(extra_headers={"X-HTTP-Method-Override": "PUT"}))
+    spec = RequestSpec("GET", "requests/I1", json={"closed": {}})
+    assert configured.gate(spec.allowing(WorkflowEffect.INTERRUPTS)) == {
+        WorkflowEffect.INTERRUPTS
+    }
+    # The same header on the spec replaces the configured one, so a read stays one.
+    spec_reads = RequestSpec(
+        "GET",
+        "requests/I1",
+        json={"closed": {}},
+        headers={"X-HTTP-Method-Override": "GET"},
+    )
+    assert configured.gate(spec_reads) == frozenset()
+    # And a configured header that is not an override changes nothing.
+    other = BaseTransport(_cfg(extra_headers={"X-Api-Key": "PUT"}))
+    assert other.gate(spec) == frozenset()
