@@ -26,9 +26,10 @@ page lists them too. The glue below covers what the three libraries leave
 out: plain text, line breaks a browser does not show, bold and italic
 CommonMark would not close, link targets, and an mdformat set up without
 its nesting cap and with its quadratic lookups made linear. A body nested
-too deeply for the stack is read as its text (:func:`_text_of`); anything
-else that fails raises
-:class:`~easyvista_python_client.EasyvistaContentError`.
+too deeply for the stack, or on which the conversion raises ``ValueError``
+-- markdownify does for a ``colspan`` or ``start`` it cannot read as a
+number -- is read as its text (:func:`_text_of`); anything else that fails
+raises :class:`~easyvista_python_client.EasyvistaContentError`.
 
 A memo with no HTML element in it is read as literal lines, a line break
 per line. How EasyVista's web UI displays such a memo is unverified: the
@@ -801,8 +802,10 @@ class EasyvistaContentConverter:
         ------
         EasyvistaContentError
             The value could not be converted. A body nested too deeply for
-            the stack left is read as its text instead, so this is a
-            backstop.
+            the stack left, or on which the conversion raises
+            ``ValueError`` (a ``colspan`` or ``start`` markdownify cannot
+            read as a number, among others), is read as its text instead,
+            so this is a backstop.
         RecursionError
             Only when called from within a few frames of the recursion
             limit, where no stack is left even to report the failure as

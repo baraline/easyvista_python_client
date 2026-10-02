@@ -27,6 +27,27 @@ is the error. Tags carry no `v` prefix.
   or a heading, whose blocks are one line, the tag stays, and around inline
   content nothing changes. The Markdown read from such a memo changes once.
 
+### Documentation
+
+- `docs/content.rst`, corrected after a review of the converter:
+  - a `start` that is not a decimal number counts from 1 as a browser
+    counts one holding no digit; a browser reads `" 3"`, `"+3"` or
+    `"3abc"` as 3, which the converter counts from 1;
+  - any `ValueError` raised while converting degrades the memo to text, not
+    only an unreadable `colspan` or `start` (the module and
+    `from_transport` docstrings say so too);
+  - the CVE-2025-6069 note says that everything after a memo's last `>`
+    reads as text, an unterminated comment and a closing tag cut short
+    inside a link included, where a patched CPython drops some of it;
+  - a second write-and-read cycle changes nothing more except for two
+    shapes, adjacent lists with different bullets and a fence whose info
+    string holds a character reference, where 0.4.0's page and its
+    changelog said it changes nothing;
+  - `<u>`, `<mark>` and `<ins>` round a block, and a known hole for
+    `<b>`, `<em>` and `<s>` round blocks.
+- The `easyvista-ticket-actions` skill says a `<u>` round a block is
+  dropped.
+
 ### Notes
 
 - Four guards of the 0.4.0 fixes that no test caught are pinned, each by a

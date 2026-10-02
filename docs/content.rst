@@ -149,11 +149,13 @@ What each kind of element becomes:
 * **Links** become ``[text](https://... "title")``, and a link whose text is
   its own URL, a pasted link, becomes the autolink ``<https://...>``. No link
   target is filtered, ``javascript:`` included (see `It is not a sanitiser`_).
-* **Lists** nest and keep their numbers, including an ``<ol start>``.
-  **Tables** become GFM tables, and a ``<br>`` inside a cell stays a raw
-  ``<br>``, since a GFM cell is one line. **Preformatted blocks** become fences
-  that keep the ``language-`` class ``cmark-gfm`` writes, with a fence longer
-  than any run of backticks in the code.
+* **Lists** nest and keep their numbers, including an ``<ol start>``. A
+  ``start`` that is not a decimal number counts from 1, as a browser counts
+  one holding no digit, such as ``²``; a browser reads ``" 3"``, ``"+3"`` or
+  ``"3abc"`` as 3. **Tables** become GFM tables, and a ``<br>`` inside a cell
+  stays a raw ``<br>``, since a GFM cell is one line. **Preformatted blocks**
+  become fences that keep the ``language-`` class ``cmark-gfm`` writes, with a
+  fence longer than any run of backticks in the code.
 * ``<head>``, ``<script>``, ``<style>``, ``<template>`` and ``<title>`` are
   dropped, as a browser does not display them. Styling such as ``<font>``
   colours or ``<span style>`` keeps its text and loses the style.
@@ -184,10 +186,12 @@ and 3.14.6 (measured 2026-10-02, default recursion limit). The converter does
 not predict that. It attempts the conversion and, if the walk does not fit,
 reads the memo as its text instead, a line per block. Every word the
 conversion would have produced is still there, in order. What is lost is
-structure: link targets, image alt text, emphasis and code fencing. A
-``colspan`` or ``start`` attribute ``markdownify`` cannot read as a number,
-such as ``"²"``, takes the same path, and so does a document ``html.parser``
-refuses outright, such as one carrying an unknown ``<![FOO[`` marked section.
+structure: link targets, image alt text, emphasis and code fencing. Any
+``ValueError`` from the conversion takes the same path -- ``markdownify``
+raises one for a ``colspan`` or ``start`` attribute it cannot read as a
+number, such as a ``colspan`` of ``"²"`` -- and so does a document
+``html.parser`` refuses outright, such as one carrying an unknown
+``<![FOO[`` marked section.
 
 Because the budget is whatever stack is left when the call starts, the same
 memo can convert from one call site and degrade from a deeper one. A caller
@@ -279,9 +283,13 @@ A few things do not come back:
 * a line holding only ``*`` is an empty list item in CommonMark, and reads
   back as nothing.
 
-A second cycle changes nothing more. That is the property a two-way sync
-relies on: once a text has made one trip, writing what was read back and
-reading it again gives exactly the same Markdown.
+After that first cycle, a further one changes nothing more, with two
+exceptions (reproduced 2026-10-02): two adjacent lists with different
+bullets read as one loose list, then as one tight list; and a fence whose
+info string holds a character reference, such as ``&amp;amp;``, loses one
+level of it on each cycle. A two-way sync relies on the rest: once a text
+has made one trip, writing what was read back and reading it again gives
+the same Markdown.
 
 **A memo read, written back and read again.** This direction is held to more.
 The aim is that what the Markdown displays is what the memo displayed, and
@@ -399,9 +407,12 @@ fixed in those releases according to their changelogs). Many unfinished tags
 after a memo's last ``>`` is the shape that reaches the converter, and a memo
 is outside data. So ``from_transport`` spells every ``<`` after the last ``>``
 as ``&lt;`` before parsing, since no ``<`` there can finish a tag. As a side
-effect, an unfinished tag at the very end, ``x <a``, reads as the text
-``x \<a`` on every interpreter, whereas a patched CPython would drop it. Prefer
-a patched interpreter anyway: the guard covers the converter's input, and the
+effect, whatever follows the memo's last ``>`` reads as text on every
+interpreter, where a patched CPython drops some of it: an unfinished tag at
+the very end, ``x <a``, reads as ``x \<a``; an unterminated comment,
+``<!-- note``, as ``\<!-- note``; and a closing tag cut short inside a link,
+``<a href="...">lien</a``, leaves ``\</a`` in the link's text. Prefer a
+patched interpreter anyway: the guard covers the converter's input, and the
 CPython fix covers the parser itself.
 
 Where it comes from
