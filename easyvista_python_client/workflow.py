@@ -183,9 +183,23 @@ def _segments(path: str) -> list[str]:
     Refuses a ``.`` or ``..`` segment: httpx removes dot segments from the URL
     it sends, so ``x/../requests/I1`` reaches ``requests/I1`` -- a route this
     check would otherwise not have read. No API route needs one.
+
+    Also refuses a backslash anywhere in the path, and a segment whose
+    percent-decoded form contains ``/`` or ``\\`` (``requests%2FI1%2Fclose``,
+    ``requests/I1%5Cclose``): splitting on ``/`` before decoding would read
+    either as one opaque segment and miss the route, yet a server may read it as
+    a separator. This fails closed -- whether the server decodes ``%2F`` or
+    treats ``\\`` as a separator is not measured, and no API route needs either.
     """
     bare = path.split("?", 1)[0].split("#", 1)[0]
-    segments = [unquote(part).casefold() for part in bare.split("/") if part]
+    decoded = [unquote(part) for part in bare.split("/") if part]
+    if "\\" in bare or any("/" in part or "\\" in part for part in decoded):
+        raise ValueError(
+            f"refusing path {path!r}: it contains an encoded slash or a "
+            "backslash, which a server may read as a path separator, so the "
+            "request could reach a different route from the one this check read"
+        )
+    segments = [part.casefold() for part in decoded]
     if any(part in {".", ".."} for part in segments):
         raise ValueError(
             f"refusing path {path!r}: it contains a dot segment, which the HTTP "

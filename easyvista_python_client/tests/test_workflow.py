@@ -144,6 +144,20 @@ def test_a_dot_segment_is_refused_outright(path):
         workflow_triggers("PUT", path, {"title": "t"})
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "requests%2FI1%2Fclose",
+        "requests%2fI1/close",
+        "requests\\I1\\close",
+        "requests/I1%5Cclose",
+    ],
+)
+def test_an_encoded_slash_or_a_backslash_is_refused_outright(path):
+    with pytest.raises(ValueError, match="encoded slash or a backslash"):
+        workflow_triggers("PUT", path, {})
+
+
 def test_triggers_name_the_key_that_matched_envelopes_first():
     assert workflow_triggers("PUT", "requests/I1", {"STATUS_ID": 8, "closed": {}}) == (
         ("closed", I),
