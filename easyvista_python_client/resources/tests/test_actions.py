@@ -280,7 +280,7 @@ def test_build_end_action_puts_the_action_id_in_the_body_as_an_integer(good):
 
 
 @pytest.mark.parametrize(
-    "bad", ["I260901_00016", "", "  ", 0, -1, "-1", True, "12a", "²", 1.5]
+    "bad", ["I250101_00001", "", "  ", 0, -1, "-1", True, "12a", "²", 1.5]
 )
 def test_build_end_action_refuses_anything_but_a_positive_action_id(bad):
     """The same rule as ``update_action``: an RFC number or a blank is no action id.
@@ -327,7 +327,7 @@ def test_build_end_action_parses_the_href_only_response_without_raising():
 
 
 @pytest.mark.parametrize(
-    "bad", ["I260901_00016", "", "  ", 0, -1, "-1", True, None, "12a", "²", 1.5]
+    "bad", ["I250101_00001", "", "  ", 0, -1, "-1", True, None, "12a", "²", 1.5]
 )
 def test_build_update_action_refuses_anything_but_a_positive_action_id(bad):
     """``PUT actions/{rfc_number}`` is the end-action route on the same template.
@@ -380,7 +380,7 @@ def test_build_reassign_action_refuses_a_non_positive_or_non_int_id(bad):
 
 def test_build_reassign_action_refuses_an_rfc_as_the_action():
     with pytest.raises(ValueError, match="action id"):
-        a.build_reassign_action("I260901_00016", group_id=57)
+        a.build_reassign_action("I250101_00001", group_id=57)
 
 
 def test_build_reassign_action_parses_an_empty_echo_without_raising():

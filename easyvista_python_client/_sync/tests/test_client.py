@@ -2684,7 +2684,7 @@ def test_update_action_refuses_an_rfc_where_the_action_id_belongs(config):
     update = ActionUpdate(extra_payload={"end_action": {}})
     with EasyvistaClient(config) as client:
         with pytest.raises(ValueError, match="action id"):
-            client.update_action("I260901_00016", update)
+            client.update_action("I250101_00001", update)
     assert not route.called
 
 
@@ -2717,7 +2717,7 @@ def test_reassign_action_refuses_before_any_request(config):
         with pytest.raises(ValueError, match="group_id, done_by_id"):
             client.reassign_action(60350)
         with pytest.raises(ValueError, match="action id"):
-            client.reassign_action("I260901_00016", group_id=57)
+            client.reassign_action("I250101_00001", group_id=57)
     assert not route.called
 
 
