@@ -29,8 +29,9 @@ from easyvista_python_client.exceptions import (
     EasyvistaNotFound,
     EasyvistaServerError,
     EasyvistaValidationError,
+    EasyvistaWorkflowEffectRefused,
 )
-from easyvista_python_client.models.action import ActionUpdate, PostAction
+from easyvista_python_client.models.action import ActionUpdate, PostAction, PostTask
 from easyvista_python_client.models.asset import PostAsset
 from easyvista_python_client.models.department import (
     Department,
@@ -44,6 +45,7 @@ from easyvista_python_client.models.employee import (
     PostEmployee,
 )
 from easyvista_python_client.models.request import PostRequest, RequestUpdate
+from easyvista_python_client.workflow import WorkflowEffect
 
 ROOT = "https://ev.test/api/v1/acme"
 
@@ -2598,3 +2600,110 @@ async def test_end_action_refuses_a_missing_action_id_before_any_request(config)
     async with AsyncEasyvistaClient(config) as client:
         with pytest.raises(ValueError, match="end_all"):
             await client.end_action("I1", end_date="01/09/2026 17:00:00")
+
+
+# --- the workflow guard on the client's writers ------------------------------
+
+
+@respx.mock
+async def test_update_ticket_refuses_a_close_smuggled_through_extra_payload(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    update = RequestUpdate(extra_payload={"closed": {"status_GUID": "{G}"}})
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.update_ticket("I1", update)
+    assert not route.called
+
+
+@respx.mock
+async def test_update_ticket_sends_it_when_the_call_allows_it(config):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    update = RequestUpdate(extra_payload={"closed": {"status_GUID": "{G}"}})
+    async with AsyncEasyvistaClient(config) as client:
+        await client.update_ticket(
+            "I1", update, allow_workflow_effect=WorkflowEffect.INTERRUPTS
+        )
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_update_ticket_sends_what_the_sync_sends_without_an_opt_in(config):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={"RFC_NUMBER": "I1"})
+    )
+    update = RequestUpdate(title="t", description="d", impact_id=3, owner_id=7)
+    async with AsyncEasyvistaClient(config) as client:
+        await client.update_ticket("I1", update)
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_update_action_refuses_an_end_date_without_an_opt_in(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    update = ActionUpdate(extra_payload={"END_DATE_UT": "01/10/2026 10:00:00"})
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.update_action(60350, update)
+    assert not route.called
+
+
+@respx.mock
+async def test_update_action_refuses_an_rfc_where_the_action_id_belongs(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    update = ActionUpdate(extra_payload={"end_action": {}})
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="action id"):
+            await client.update_action("I260901_00016", update)
+    assert not route.called
+
+
+@respx.mock
+async def test_update_action_lets_a_reassignment_through(config):
+    route = respx.put(f"{ROOT}/actions/60350").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    update = ActionUpdate(extra_payload={"GROUP_ID": 57})
+    async with AsyncEasyvistaClient(config) as client:
+        await client.update_action(60350, update)
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_send_refuses_a_close_unless_allowed(config):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.send("PUT", "requests/I1", json={"closed": {}})
+        assert not route.called
+        await client.send(
+            "PUT",
+            "requests/I1",
+            json={"closed": {}},
+            allow_workflow_effect=WorkflowEffect.INTERRUPTS,
+        )
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_create_action_and_create_task_refuse_step_columns(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.create_action(
+                "I1",
+                PostAction(
+                    action_type_id=94, group_id=3, extra_payload={"workflow_id": 37}
+                ),
+            )
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.create_task(
+                "I1",
+                PostTask(
+                    action_type_id=94, group_id=3, extra_payload={"parent_action_id": 1}
+                ),
+            )
+    assert not route.called

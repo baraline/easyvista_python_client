@@ -22,6 +22,29 @@ ACTIONS: ResourceDescriptor[Action] = ResourceDescriptor(
 )
 
 
+def _require_action_id(action_id: object) -> str:
+    """Return ``action_id`` as the digit string ``actions/{id}`` addresses.
+
+    ``PUT actions/{rfc_number}`` is the vendor's END-ACTION route, on the same
+    path template as ``PUT actions/{action_id}`` (tier 1,
+    https://docs.easyvista.com/docs/webservice-rest.md). An RFC number here
+    would therefore not edit one action: with an ``end_action`` body it ends
+    every open action on the ticket. ``Action.action_id`` is legitimately
+    ``None`` across this package (a create response carries none; a projection
+    without ``ACTION_ID`` drops it), so ``None`` is refused rather than
+    addressing ``actions/None``.
+    """
+    if action_id is None or isinstance(action_id, (bool, float)):
+        raise ValueError(f"an action id must be a positive integer, got {action_id!r}")
+    text = str(action_id).strip()
+    if not (text.isascii() and text.isdigit()) or int(text) <= 0:
+        raise ValueError(
+            f"an action id must be a positive integer, got {action_id!r}; an RFC "
+            "number addresses the end-action route on the same path instead"
+        )
+    return text
+
+
 def build_create_action(
     rfc_number: str,
     payload: PostAction,
@@ -140,6 +163,7 @@ def build_list_actions(
 def build_get_action(
     action_id: str | int,
     *,
+    fields: Iterable[str] | str | None = None,
     context: dict[str, Any] | None = None,
 ) -> tuple[RequestSpec, Callable[[Any], Action]]:
     """Fetch ONE action by id.
@@ -152,8 +176,10 @@ def build_get_action(
     no ``requests/{rfc}/actions/{id}`` route at all. See
     :func:`build_search_actions` for why the HTTP 403 an earlier note recorded
     against that path was never evidence of a permission restriction.
+
+    ``fields`` projects the item read, as on the list.
     """
-    return build_get(ACTIONS, action_id, context=context)
+    return build_get(ACTIONS, action_id, fields=fields, context=context)
 
 
 def build_update_action(
@@ -169,8 +195,12 @@ def build_update_action(
     ``requests/{rfc}/actions/{id}`` route to send them to. See
     :func:`build_search_actions` for why the HTTP 403 an earlier note recorded
     against that path did not distinguish a denied route from an absent one.
+
+    The id must be a positive integer -- see ``_require_action_id`` for why an
+    RFC number is refused.
     """
-    return build_update(ACTIONS, action_id, payload, context=context)
+    record_id = _require_action_id(action_id)
+    return build_update(ACTIONS, record_id, payload, context=context)
 
 
 def build_end_action(

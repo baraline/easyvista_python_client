@@ -298,3 +298,28 @@ def test_build_end_action_parses_the_href_only_response_without_raising():
     _, parser = a.build_end_action("I1", action_id=1)
     parsed = parser({"HREF": "https://host/api/v1/50004/requests/I1"})
     assert parsed.action_id is None
+
+
+@pytest.mark.parametrize(
+    "bad", ["I260901_00016", "", "  ", 0, -1, "-1", True, None, "12a", "²", 1.5]
+)
+def test_build_update_action_refuses_anything_but_a_positive_action_id(bad):
+    """``PUT actions/{rfc_number}`` is the end-action route on the same template.
+
+    An RFC number where an action id belongs would not edit one action; with
+    an ``end_action`` body it would end every open action on the ticket.
+    """
+    with pytest.raises(ValueError, match="action id"):
+        build_update_action(bad, ActionUpdate(description="x"))
+
+
+@pytest.mark.parametrize("good", [60350, "60350", " 60350 "])
+def test_build_update_action_addresses_the_digit_string(good):
+    spec, _ = build_update_action(good, ActionUpdate(description="x"))
+    assert spec.path == "actions/60350"
+
+
+def test_build_get_action_can_project_fields():
+    spec, _ = build_get_action(42, fields=["ACTION_ID", "WORKFLOW_ID"])
+    assert spec.path == "actions/42"
+    assert spec.params == {"fields": "ACTION_ID,WORKFLOW_ID"}

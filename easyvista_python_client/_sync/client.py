@@ -88,7 +88,7 @@ from easyvista_python_client.resources import documents as documents_res
 from easyvista_python_client.resources import employees as employees_res
 from easyvista_python_client.resources import requests as requests_res
 from easyvista_python_client.resources.discovery import SWAGGER_PATH
-from easyvista_python_client.workflow import WorkflowEffect
+from easyvista_python_client.workflow import WorkflowEffect, as_effects
 
 # Width of the action-body fan-out: a ceiling on requests in flight at once on
 # the async surface, inert on the sync one. This is the one fan-out here whose
@@ -163,6 +163,7 @@ class EasyvistaClient:
         params: Mapping[str, Any] | None = None,
         json: Any = None,
         headers: Mapping[str, str] | None = None,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
     ) -> Any:
         """Issue an arbitrary request against this instance's API root.
 
@@ -183,13 +184,24 @@ class EasyvistaClient:
         :meth:`download_document` or :meth:`stream_document`.
 
         Everything else is shared with the typed methods: ``config.max_retries``
-        attempts with the same backoff, and the same exception mapping -- 401 and
+        attempts with the same backoff (one attempt for an allowed workflow
+        write), and the same exception mapping -- 401 and
         403 to :class:`~easyvista_python_client.EasyvistaAuthError`, 404 to
         :class:`~easyvista_python_client.EasyvistaNotFound`, 400 and 590 to
         :class:`~easyvista_python_client.EasyvistaValidationError`, with 590 never
         retried because it is a rejected request rather than a transient one.
         ``config.default_params`` is merged under ``params``; ``headers`` is
         merged over the client-level ones and may not carry ``Authorization``.
+
+        ``allow_workflow_effect`` is the way past the workflow guard. A write
+        whose content may change a ticket's workflow -- a ``closed``,
+        ``end_action``, ``suspended`` or ``restarted`` body on any path, a
+        status or catalog column on a ticket, an end date or type on an action,
+        a ``requests/{rfc}/close``-style route -- is refused with
+        :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` before
+        anything is sent, unless this argument names every
+        :class:`~easyvista_python_client.WorkflowEffect` it carries. See
+        ``docs/vendor-api-reference.md``, "Ticket workflow".
 
         Returns the decoded JSON body, or ``{}`` when the response has none.
         Nothing is validated into a model and no envelope is unwrapped: the
@@ -207,6 +219,7 @@ class EasyvistaClient:
                 path,
                 json=json,
                 headers=dict(headers) if headers else None,
+                allow_workflow_effect=as_effects(allow_workflow_effect),
             ),
             params=params,
         )
@@ -446,16 +459,29 @@ class EasyvistaClient:
         stats.population_total = population_total
         return stats
 
-    def update_ticket(self, rfc_number: str, update: RequestUpdate) -> Request:
+    def update_ticket(
+        self,
+        rfc_number: str,
+        update: RequestUpdate,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Request:
         """Update a ticket's writable fields.
 
-        Cannot set a status: there is no flat status update on this API. See
-        :meth:`set_status`, and :class:`RequestUpdate` for the measurements.
+        Cannot set a status: there is no flat status update on this API, and no
+        status write that leaves the workflow alone -- a ticket's status follows
+        its workflow. See :class:`RequestUpdate` for the measurements, and
+        :meth:`close_ticket` for the one request that does set a status.
+
+        A body that may change the workflow -- a status or catalog column, or a
+        workflow-control body, typically put in ``extra_payload`` -- is refused
+        before it is sent unless ``allow_workflow_effect`` names the effect; see
+        :meth:`send`. The fields :class:`RequestUpdate` declares need no opt-in.
         """
         spec, parse = requests_res.build_update_ticket(
             rfc_number, update, context=self._validation_context
         )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
     def set_status(
         self, rfc_number: str, *, status_guid: str, comment: str | None = None
@@ -565,7 +591,13 @@ class EasyvistaClient:
         )
 
     # --- actions -------------------------------------------------------------
-    def create_action(self, rfc_number: str, action: PostAction) -> Action:
+    def create_action(
+        self,
+        rfc_number: str,
+        action: PostAction,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Action:
         """Create one action on a ticket.
 
         The returned :class:`Action` carries **no usable ``action_id``**: the
@@ -608,13 +640,25 @@ class EasyvistaClient:
         refused on a ticket that accepted the same body earlier. The messages
         are literal, not a stage gate. :meth:`create_task` is not
         parent-resolved and is unaffected.
+
+        A body that would create the record already tied into the workflow --
+        ``WORKFLOW_ID``, ``STAGE_ID`` or ``STATUS_ID_ON_TERMINATE`` through
+        ``extra_payload``, an end date on an action, a parent on a task -- is
+        refused unless ``allow_workflow_effect`` names the effect; see
+        :meth:`send`.
         """
         spec, parse = actions_res.build_create_action(
             rfc_number, action, context=self._validation_context
         )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
-    def create_task(self, rfc_number: str, task: PostTask) -> Action:
+    def create_task(
+        self,
+        rfc_number: str,
+        task: PostTask,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Action:
         """Create a task on a ticket — an action that arrives already ENDED.
 
         **This is how you post a comment.** A task and an action are the same
@@ -663,11 +707,17 @@ class EasyvistaClient:
         usable ``action_id``** — the create response is an HREF naming the
         parent request. Diff :meth:`list_actions` across the call to address
         what you just created.
+
+        A body that would create the record already tied into the workflow --
+        ``WORKFLOW_ID``, ``STAGE_ID`` or ``STATUS_ID_ON_TERMINATE`` through
+        ``extra_payload``, an end date on an action, a parent on a task -- is
+        refused unless ``allow_workflow_effect`` names the effect; see
+        :meth:`send`.
         """
         spec, parse = actions_res.build_create_task(
             rfc_number, task, context=self._validation_context
         )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
     def list_actions(
         self,
@@ -784,7 +834,13 @@ class EasyvistaClient:
         )
         return parse(self._transport.send(spec, params=params))
 
-    def update_action(self, action_id: str | int, update: ActionUpdate) -> Action:
+    def update_action(
+        self,
+        action_id: str | int,
+        update: ActionUpdate,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
+    ) -> Action:
         """Edit an existing action's note text.
 
         ``ActionUpdate`` carries two fields, ``description`` and ``comment``,
@@ -809,6 +865,14 @@ class EasyvistaClient:
         recorded for that verb is what this API answers for an absent route as
         well as a denied one, so it did not distinguish them.
 
+        ``action_id`` must be a positive integer: ``PUT actions/{rfc_number}``
+        is the vendor's end-action route on the same path, so an RFC number is
+        refused rather than sent. A body that may end, re-type, re-parent or
+        move the action (an end date, ``WORKFLOW_ID``, ``ACTION_TYPE_ID``, ...,
+        through ``extra_payload``) is refused unless ``allow_workflow_effect``
+        names the effect; see :meth:`send`. ``GROUP_ID`` and ``DONE_BY_ID`` are
+        not refused -- see ``reassign_action`` for reassignment.
+
         The returned :class:`Action` is the API's own echo and is **not
         verified**: the PUT's response body has never been captured, and if it
         answers empty or href-only the parser yields an ``Action`` whose fields
@@ -818,7 +882,7 @@ class EasyvistaClient:
         spec, parse = actions_res.build_update_action(
             action_id, update, context=self._validation_context
         )
-        return parse(self._transport.send(spec))
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
     def end_action(
         self,
