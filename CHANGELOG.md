@@ -15,6 +15,18 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A block inside `<u>`, `<mark>` or `<ins>` read as broken Markdown**, since
+  0.4.0 kept these tags raw (fix 11). Markdown has no inline tag round blocks:
+  a table inside one read as pipe text, a list, a heading, a quote or a rule
+  as its Markdown source, paragraphs were not a fixed point, and
+  `<u><pre>code</pre></u>` left a fence open that showed the rest of the memo
+  as code. Round a block the tag is now dropped and the blocks kept, as
+  `glpi_python_client`'s reader at `917f030` read them. Inside a table cell
+  or a heading, whose blocks are one line, the tag stays, and around inline
+  content nothing changes. The Markdown read from such a memo changes once.
+
 ## [0.4.0] - 2026-10-02
 
 Adds Markdown <-> memo HTML conversion as an optional extra, drops Python

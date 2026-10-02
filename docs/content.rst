@@ -141,7 +141,11 @@ What each kind of element becomes:
   stay as those raw tags, and **struck text** (``<s>``, ``<del>``,
   ``<strike>``) as a raw ``<s>``. CommonMark has no spelling for any of them,
   and ``to_transport`` passes the tags through, so the formatting survives.
-  The cost is raw HTML in the Markdown.
+  The cost is raw HTML in the Markdown. Markdown has no inline tag round
+  blocks, so a ``<u>``, ``<mark>`` or ``<ins>`` holding a table, a list, a
+  heading, a quote, a ``<pre>``, a rule or paragraphs is dropped and its
+  blocks kept; inside a table cell or a heading, which hold one line, it
+  stays.
 * **Links** become ``[text](https://... "title")``, and a link whose text is
   its own URL, a pasted link, becomes the autolink ``<https://...>``. No link
   target is filtered, ``javascript:`` included (see `It is not a sanitiser`_).
@@ -332,7 +336,12 @@ in the preproduction sample:
 * a table whose ``<td>`` and ``<tr>`` are never closed folds into one cell,
   keeping its words;
 * a definition list (``<dl>``) reads as a ``term`` line and a
-  ``: definition`` line, so its display gains the colon.
+  ``: definition`` line, so its display gains the colon;
+* bold, italic or struck text (``<b>``, ``<em>``, ``<s>`` and their
+  synonyms) wrapped round blocks, other than a single paragraph, shows its
+  markers or its tag as text, and a list, a table or a heading inside it as
+  Markdown source; round a ``<pre>`` it leaves a fence open, so the rest of
+  the memo shows as code.
 
 Some shapes are not fixed points at the first read, and settle after one more
 cycle. None broke a fixed point in the preproduction sample. Adjacent lists
@@ -414,12 +423,14 @@ proposed to ``glpi_python_client``. The fixes cover:
 * ``<br>`` inside inline code;
 * tables inside headings and links, and the spacing of flattened cells;
 * ``<center>``;
-* underline and highlight, as raw tags;
+* underline and highlight, as raw tags, except round a block (corrected in
+  0.4.1);
 * numbering a long ordered list in linear time;
 * a quadratic pattern on runs of spaces;
 * unreadable ``colspan`` and ``start`` values;
 * the CVE-2025-6069 tail.
 
-``CHANGELOG.md`` lists them under 0.4.0. Apart from those fixes, the names and
-the error messages, the only difference from ``glpi_python_client`` is that the
-libraries are an optional extra here, not dependencies.
+``CHANGELOG.md`` lists them under 0.4.0, and the correction under 0.4.1.
+Apart from those fixes, the names and the error messages, the only
+difference from ``glpi_python_client`` is that the libraries are an optional
+extra here, not dependencies.
