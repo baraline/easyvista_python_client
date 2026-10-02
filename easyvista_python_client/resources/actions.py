@@ -28,8 +28,9 @@ def _require_action_id(action_id: object) -> str:
     ``PUT actions/{rfc_number}`` is the vendor's END-ACTION route, on the same
     path template as ``PUT actions/{action_id}`` (tier 1,
     https://docs.easyvista.com/docs/webservice-rest.md). An RFC number here
-    would therefore not edit one action: with an ``end_action`` body it ends
-    every open action on the ticket. ``Action.action_id`` is legitimately
+    would therefore not edit one action: it addresses the end-action route
+    instead, where an ``end_action`` body naming no ``action_id`` ends every
+    open action on the ticket. ``Action.action_id`` is legitimately
     ``None`` across this package (a create response carries none; a projection
     without ``ACTION_ID`` drops it), so ``None`` is refused rather than
     addressing ``actions/None``.

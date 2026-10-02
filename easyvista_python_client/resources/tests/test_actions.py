@@ -306,8 +306,9 @@ def test_build_end_action_parses_the_href_only_response_without_raising():
 def test_build_update_action_refuses_anything_but_a_positive_action_id(bad):
     """``PUT actions/{rfc_number}`` is the end-action route on the same template.
 
-    An RFC number where an action id belongs would not edit one action; with
-    an ``end_action`` body it would end every open action on the ticket.
+    An RFC number where an action id belongs would not edit one action: it
+    would address the end-action route, where an ``end_action`` body naming no
+    ``action_id`` ends every open action on the ticket.
     """
     with pytest.raises(ValueError, match="action id"):
         build_update_action(bad, ActionUpdate(description="x"))

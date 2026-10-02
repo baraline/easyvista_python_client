@@ -2626,6 +2626,7 @@ async def test_update_ticket_sends_it_when_the_call_allows_it(config):
             "I1", update, allow_workflow_effect=WorkflowEffect.INTERRUPTS
         )
     assert route.call_count == 1
+    assert "closed" in json.loads(route.calls.last.request.content)
 
 
 @respx.mock
@@ -2707,3 +2708,49 @@ async def test_create_action_and_create_task_refuse_step_columns(config):
                 ),
             )
     assert not route.called
+
+
+@respx.mock
+async def test_update_action_sends_it_when_the_call_allows_it(config):
+    route = respx.put(f"{ROOT}/actions/60350").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    update = ActionUpdate(extra_payload={"END_DATE_UT": "01/10/2026 10:00:00"})
+    async with AsyncEasyvistaClient(config) as client:
+        await client.update_action(
+            60350, update, allow_workflow_effect=WorkflowEffect.UNKNOWN
+        )
+    assert route.call_count == 1
+    assert "END_DATE_UT" in json.loads(route.calls.last.request.content)
+
+
+@respx.mock
+async def test_create_action_sends_it_when_the_call_allows_it(config):
+    route = respx.post(f"{ROOT}/requests/I1/actions").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    action = PostAction(
+        action_type_id=94, group_id=3, extra_payload={"workflow_id": 37}
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.create_action(
+            "I1", action, allow_workflow_effect=WorkflowEffect.UNKNOWN
+        )
+    assert route.call_count == 1
+    assert "workflow_id" in json.loads(route.calls.last.request.content)
+
+
+@respx.mock
+async def test_create_task_sends_it_when_the_call_allows_it(config):
+    route = respx.post(f"{ROOT}/requests/I1/tasks").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    task = PostTask(
+        action_type_id=94, group_id=3, extra_payload={"parent_action_id": 1}
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.create_task(
+            "I1", task, allow_workflow_effect=WorkflowEffect.UNKNOWN
+        )
+    assert route.call_count == 1
+    assert "parent_action_id" in json.loads(route.calls.last.request.content)
