@@ -27,6 +27,16 @@ is the error. Tags carry no `v` prefix.
   or a heading, whose blocks are one line, the tag stays, and around inline
   content nothing changes. The Markdown read from such a memo changes once.
 
+### Notes
+
+- Four guards of the 0.4.0 fixes that no test caught are pinned, each by a
+  test that fails without it: a second `<` before a space keeps one escape
+  (fix 5), a header cell escapes a `|` in `<kbd>` or `<samp>` and splits a
+  line break in inline code (fix 6), a table inside an `<a>` without `href`
+  stays a table (fix 7), and an ordered item numbered 10 or more indents its
+  content by its bullet's width (fix 12). A count pins that the walk finding
+  blocks inside `<u>`, `<mark>` and `<ins>` checks each tag about once.
+
 ## [0.4.0] - 2026-10-02
 
 Adds Markdown <-> memo HTML conversion as an optional extra, drops Python
