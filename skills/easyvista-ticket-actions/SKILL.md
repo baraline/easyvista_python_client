@@ -197,16 +197,20 @@ with EasyvistaClient.from_env() as client:
 > status and the action count untouched. So ending your own action is inert;
 > ending a workflow step is a state change on the ticket.
 >
-> **`end_action` therefore guards it.** It reads the action first and refuses a
-> workflow step (`WORKFLOW_ID` set) or a record that comes back without
-> `WORKFLOW_ID` unless you pass `allow_workflow_effect=WorkflowEffect.ADVANCES`.
-> Ending your own action needs no opt-in; whether an action created under the
-> step carries a `WORKFLOW_ID` is unmeasured — if it does, the end is refused,
-> and you opt in. `WORKFLOW_ID` is what separates the engine's rows from a
-> caller's (tier 4: 1500 of 1500 rows, 2026-09-02, one instance, so it may not
-> generalise). The refusal is `EasyvistaWorkflowEffectRefused`, a `ValueError`
-> (not an `EasyvistaError`), raised before the end request; an allowed end is
-> sent once, never retried. `action_id` must be a positive integer.
+> **`end_action` therefore guards it.** It makes one read first (an item read
+> projecting `ACTION_ID` and `WORKFLOW_ID`) and refuses a workflow step
+> (`WORKFLOW_ID` set), a record that comes back without `WORKFLOW_ID`, or a
+> record whose `ACTION_ID` is not the one you asked for, unless you pass
+> `allow_workflow_effect=WorkflowEffect.ADVANCES`. If that read fails, its error
+> propagates and the end request is not sent; a 403 there says nothing about
+> whether ending is permitted. Ending your own action needs no opt-in; whether
+> an action created under the step carries a `WORKFLOW_ID` is unmeasured — if it
+> does, the end is refused, and you opt in. `WORKFLOW_ID` is what separates the
+> engine's rows from a caller's (tier 4: 1500 of 1500 rows, 2026-09-02, one
+> instance, so it may not generalise). The refusal is
+> `EasyvistaWorkflowEffectRefused`, a `ValueError` (not an `EasyvistaError`),
+> raised before the end request; an allowed end is sent once, never retried.
+> `action_id` must be a positive integer.
 >
 > **`end_all=True` ends every open action, the workflow step included; it needs
 > `WorkflowEffect.ADVANCES`.** Omitting `action_id` is not that form: a bare
@@ -575,9 +579,11 @@ with EasyvistaClient.from_env() as client:
   two or more gives `590 "Ambiguous query : many parent actions found"`, and an
   explicit `parent_action_id` naming an **open** action succeeds either way (an
   ended one is refused). A fresh ticket carries exactly one open workflow action,
-  and every close request drains the open set to zero — so in practice a bare
-  `create_action` works only on a ticket nobody has moved yet. `create_task` is
-  not parent-resolved and is unaffected.
+  and a close request drains the open set to zero (the vendor close page says
+  the unfinished actions are deleted, or by our reading ended — tier 1; one
+  ticket was censused on 2026-09-01 on one instance — tier 4, so it may not
+  generalise) — so in practice a bare `create_action` works only on a ticket
+  nobody has moved yet. `create_task` is not parent-resolved and is unaffected.
 - **The workflow guard covers the other action writes too.** `create_action`,
   `create_task` and `update_action` refuse a body whose `extra_payload` ties the
   record into the workflow — `WORKFLOW_ID`, `STAGE_ID`, `PROCESS_STEP_ID` or
@@ -587,9 +593,11 @@ with EasyvistaClient.from_env() as client:
   `EasyvistaWorkflowEffectRefused`, before any request, unless the call passes
   `allow_workflow_effect=`. The fields `PostAction`, `PostTask` and
   `ActionUpdate` declare need no opt-in. That is a deny-list of columns, and one
-  cannot be complete: the vendor's update page accepts "all the fields from the
-  AM_ACTION table except those mentioned below" (tier 1), so a column it does not
-  name is unclassified, not proven neutral.
+  cannot be complete: the vendor's
+  [update-an-action page](https://docs.easyvista.com/docs/rest-api-update-an-action.md)
+  accepts "all the fields from the AM_ACTION table except those mentioned below"
+  (tier 1, read 2026-10-02), so a column it does not name is unclassified, not
+  proven neutral.
 - `action.action_type` is a nested object on the live API, not a string. Use
   `action.reference("ACTION_TYPE").display` for the label.
 - Resolving every body costs two extra requests per action (item fetch, then

@@ -40,8 +40,8 @@ start-up and fail loudly; never freeze one into code.
 2. For one reference, `discover(name)`. Use `.id` for a write model's
    `*_id` field, `.code` for `PostRequest(catalog_code=...)`, and `.guid` for
    `close_ticket` — the vendor close request, which stops the ticket's workflow
-   whatever status it carries, so it is not a way to pick an intermediate status
-   (see `easyvista-ticket-workflow`).
+   (documented for final statuses; nothing exempts a non-final one), so it is
+   not a way to pick an intermediate status (see `easyvista-ticket-workflow`).
 3. For a route this package does not model at all, `list_reference_table(path)`
    — check `get_api_spec()["paths"]` to see which your deployment declares.
 4. Never cache an id across deployments. Re-resolve, or fail loudly.

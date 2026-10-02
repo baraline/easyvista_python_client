@@ -85,7 +85,9 @@ deployment needs before you build a payload for it.
    accepts `title`, `impact_id`, `owner_id` and `external_reference` (capped at
    50 characters) after create — see the Gotchas for what it deliberately
    omits. There is no status write: a ticket's status follows its workflow. To
-   complete a workflow step, end its open action (see
+   complete a workflow step, end its open action with `end_action(rfc,
+   action_id=..., allow_workflow_effect=WorkflowEffect.ADVANCES)` — without
+   `ADVANCES`, ending a workflow step is refused (see
    `easyvista-ticket-actions`); `close_ticket` is the vendor CLOSE request and
    needs `allow_workflow_effect=WorkflowEffect.INTERRUPTS`.
 6. Read one ticket with `get_ticket(rfc)`; search a page with
@@ -96,9 +98,10 @@ deployment needs before you build a payload for it.
 7. Close only when closing is the intent, with `close_ticket(rfc,
    allow_workflow_effect=WorkflowEffect.INTERRUPTS, status_guid=...,
    delete_actions=..., comment=...)`. The close request interrupts the
-   workflow, ends (or with `delete_actions`, deletes) the open actions, and
-   inserts an anticipated closing action — whatever status you send (vendor
-   close page, tier 1). Then re-read the ticket: a 200 is not a receipt.
+   workflow, ends (by our reading of the page) or, with `delete_actions`,
+   deletes the unfinished actions, and inserts an anticipated closing action
+   (vendor close page, tier 1) — documented for final statuses; nothing exempts
+   the others. Then re-read the ticket: a 200 is not a receipt.
 
 ## Examples
 
@@ -213,14 +216,19 @@ with EasyvistaClient.from_env() as client:
 - **`close_ticket` is not a status setter.** It stops the workflow. Using it to
   land an intermediate status (the package's former status setter was this same
   request) ended the ticket's initial workflow action — that is how a
-  synchroniser closed tickets early (tier 4: one deployment's synchroniser, date
-  not recorded here, so it may not generalise). The vendor close page lists four
-  processing steps, none conditional on the status sent: the workflow is
-  interrupted, the status is set, the unfinished actions are deleted (or, by
-  our reading, ended) and an anticipated closing action is inserted (tier 1,
-  [vendor close page](https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md)).
-  That page documents *final* statuses only, so for a non-final one it is an
-  extrapolation the page neither exempts nor covers. Writes that may change the
+  synchroniser closed tickets early. The root cause was established on
+  2026-10-01/02 from the synchroniser's code (it sent the close request right
+  after every create and on every status push) and from the vendor close page
+  (tier 1): that page lists four processing steps, none conditional on the
+  status sent — the workflow is interrupted, the status is set, the unfinished
+  actions are deleted (or, by our reading, ended) and an anticipated closing
+  action is inserted
+  ([vendor close page](https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md)).
+  The drain of the open action across such a status write was measured on
+  2026-09-01 on one instance (one ticket censused, target status id 24 there;
+  tier 4, so it may not generalise). The page documents *final* statuses only,
+  so for a non-final one it is an extrapolation the page neither exempts nor
+  covers. Writes that may change the
   workflow are refused unless the call passes `allow_workflow_effect=`; the
   refusal is `EasyvistaWorkflowEffectRefused`, a `ValueError` (not an
   `EasyvistaError`), raised before any request, and an allowed workflow write is
@@ -228,10 +236,12 @@ with EasyvistaClient.from_env() as client:
 - **`update_ticket` cannot set a status either, and refuses the attempt.** A
   `status_id`, `status_guid`, catalog or `parent_request_id` key smuggled in
   through `extra_payload` raises `EasyvistaWorkflowEffectRefused` unless you
-  opt in with `allow_workflow_effect=`. The vendor's update page excludes
-  `status_id`, `sd_catalog_id`, `initial_sd_catalog_id` and `parent_request_id`
-  from its body outright (tier 1), so an opt-in is permission to *send* it, not
-  evidence the server will honour it; re-read after any such write.
+  opt in with `allow_workflow_effect=`. The vendor's
+  [update-an-incident-request page](https://docs.easyvista.com/docs/rest-api-update-an-incident-request.md)
+  excludes `status_id`, `sd_catalog_id`, `initial_sd_catalog_id` and
+  `parent_request_id` from its body outright (tier 1, read 2026-10-02), so an
+  opt-in is permission to *send* it, not evidence the server will honour it;
+  re-read after any such write.
 - **Timestamp columns are aware `datetime`, so a record dump is not
   JSON-serialisable.** `submit_date_ut`, `creation_date_ut`,
   `max_resolution_date_ut`, `expected_date_ut`, `end_date_ut` and `last_update`
