@@ -350,3 +350,48 @@ def test_build_get_action_can_project_fields():
     spec, _ = build_get_action(42, fields=["ACTION_ID", "WORKFLOW_ID"])
     assert spec.path == "actions/42"
     assert spec.params == {"fields": "ACTION_ID,WORKFLOW_ID"}
+
+
+def test_build_reassign_action_puts_the_group_and_person():
+    spec, _ = a.build_reassign_action(60350, group_id=57, done_by_id=12)
+    assert (spec.method, spec.path) == ("PUT", "actions/60350")
+    assert spec.json == {a._REASSIGN_GROUP_KEY: 57, a._REASSIGN_DONE_BY_KEY: 12}
+
+
+def test_build_reassign_action_sends_only_what_it_was_given():
+    spec, _ = a.build_reassign_action(60350, group_id=57)
+    assert spec.json == {a._REASSIGN_GROUP_KEY: 57}
+    spec, _ = a.build_reassign_action(60350, done_by_id=12)
+    assert spec.json == {a._REASSIGN_DONE_BY_KEY: 12}
+
+
+def test_build_reassign_action_needs_a_target():
+    with pytest.raises(ValueError, match="group_id, done_by_id"):
+        a.build_reassign_action(60350)
+
+
+@pytest.mark.parametrize("bad", [0, -3, True, "57", 1.0])
+def test_build_reassign_action_refuses_a_non_positive_or_non_int_id(bad):
+    with pytest.raises(ValueError):
+        a.build_reassign_action(60350, group_id=bad)
+    with pytest.raises(ValueError):
+        a.build_reassign_action(60350, done_by_id=bad)
+
+
+def test_build_reassign_action_refuses_an_rfc_as_the_action():
+    with pytest.raises(ValueError, match="action id"):
+        a.build_reassign_action("I260901_00016", group_id=57)
+
+
+def test_build_reassign_action_parses_an_empty_echo_without_raising():
+    _, parser = a.build_reassign_action(60350, group_id=57)
+    assert parser({}).action_id is None
+    assert parser({"records": [{"ACTION_ID": 60350, "GROUP_ID": 57}]}).group_id == 57
+
+
+def test_build_reassign_action_body_is_not_a_workflow_effect():
+    """The group and person are data the workflow reads, not workflow state."""
+    from easyvista_python_client.workflow import workflow_triggers
+
+    spec, _ = a.build_reassign_action(60350, group_id=57, done_by_id=12)
+    assert not workflow_triggers(spec.method, spec.path, spec.json)

@@ -887,7 +887,7 @@ class EasyvistaClient:
         move the action (an end date, ``WORKFLOW_ID``, ``ACTION_TYPE_ID``, ...,
         through ``extra_payload``) is refused unless ``allow_workflow_effect``
         names the effect; see :meth:`send`. ``GROUP_ID`` and ``DONE_BY_ID`` are
-        not refused -- see ``reassign_action`` for reassignment.
+        not refused -- see :meth:`reassign_action` for reassignment.
 
         The returned :class:`Action` is the API's own echo and is **not
         verified**: the PUT's response body has never been captured, and if it
@@ -899,6 +899,61 @@ class EasyvistaClient:
             action_id, update, context=self._validation_context
         )
         return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
+
+    def reassign_action(
+        self,
+        action_id: str | int,
+        *,
+        group_id: int | None = None,
+        done_by_id: int | None = None,
+    ) -> Action:
+        """Reassign an action to another group and/or person.
+
+        The API counterpart of the UI's reassignment of an action ("Assign
+        action" / *Réaffecter l'action*), and the way to escalate the open
+        workflow step to another group without ending it. Sends
+        ``PUT actions/{id}`` with the group and/or the person in charge; at
+        least one is required, and both are positive integers -- ids are
+        per-deployment, so read them with :meth:`discover` or
+        :meth:`list_reference_table` rather than hardcoding them.
+
+        **The vendor documents no reassignment route.** The UI's transfer is a
+        wizard, and ``PUT actions/{id}`` accepts "all the fields from the
+        AM_ACTION table except" a short list that does not name these two
+        (tier 1, https://docs.easyvista.com/docs/rest-api-update-an-action.md).
+        So what this write does is measured, not specified:
+
+        Measured 2026-10-02 on one instance (Service Manager 2025.3; two
+        tickets, so it may not generalise), with the body
+        ``{"group_id": <int>}``: the group was stored -- ``GROUP_ID`` went
+        57 -> 50 on the open workflow step (type 20, ``WORKFLOW_ID`` set) of
+        both tickets, a service request at status id 6 and a fresh incident at
+        status id 12 (ids are per-instance). On the first ticket the new group
+        was still there on a re-read five seconds later. The step stayed open
+        (``END_DATE_UT`` empty), its ``WORKFLOW_ID`` was unchanged and
+        ``DONE_BY_ID`` stayed empty; the ticket's ``STATUS_ID`` and
+        ``END_DATE_UT`` did not move; the open actions were unchanged; and no
+        new action rows appeared. **The ticket's own ``OWNING_GROUP_ID`` does
+        not follow the action's group** -- it stayed 57 on the first ticket
+        (the second was not read for it), so reassigning a step is not
+        reassigning the ticket. The lower-case key ``group_id`` was the one
+        sent; the upper-case spelling was never needed. The person
+        (``done_by_id``) was **not measured**: the same body shape is sent,
+        but nothing here shows what the instance does with it. Whether the UI
+        wizard's notifications fire is not observable from the API.
+
+        Not refused by the workflow guard: the group and the person are data
+        the workflow reads, not workflow state. Re-read with :meth:`get_action`
+        before trusting the result -- this API answers 200 while dropping a
+        field it did not store.
+        """
+        spec, parse = actions_res.build_reassign_action(
+            action_id,
+            group_id=group_id,
+            done_by_id=done_by_id,
+            context=self._validation_context,
+        )
+        return parse(self._transport.send(spec))
 
     def end_action(
         self,

@@ -204,6 +204,57 @@ def build_update_action(
     return build_update(ACTIONS, record_id, payload, context=context)
 
 
+#: The body keys a reassignment sends. ``group_id`` is the lower-case spelling
+#: the 2026-10-02 census found stored (one instance, 2/2 tickets), so the
+#: upper-case retry was never needed. ``done_by_id`` is the same lower-case
+#: convention as ``PostAction``, but a write to a person was **not measured**.
+_REASSIGN_GROUP_KEY = "group_id"
+_REASSIGN_DONE_BY_KEY = "done_by_id"
+
+
+def _positive_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+    return value
+
+
+def build_reassign_action(
+    action_id: str | int,
+    *,
+    group_id: int | None = None,
+    done_by_id: int | None = None,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Action]]:
+    """Build ``PUT actions/{id}`` reassigning an action to a group and/or person.
+
+    The vendor documents no reassignment route: the UI's transfer is a wizard,
+    and ``PUT actions/{id}`` accepts "all the fields from the AM_ACTION table
+    except" a list that does not name the group or done-by columns (tier 1,
+    https://docs.easyvista.com/docs/rest-api-update-an-action.md). What this
+    write does was measured, not documented -- see the client's
+    ``reassign_action``.
+
+    The id must be a positive integer, as for :func:`build_update_action`;
+    ``group_id`` and ``done_by_id`` must be positive integers, and at least one
+    is required.
+    """
+    path_id = _require_action_id(action_id)
+    body: dict[str, int] = {}
+    if group_id is not None:
+        body[_REASSIGN_GROUP_KEY] = _positive_int(group_id, "group_id")
+    if done_by_id is not None:
+        body[_REASSIGN_DONE_BY_KEY] = _positive_int(done_by_id, "done_by_id")
+    if not body:
+        raise ValueError("reassign_action needs group_id, done_by_id, or both")
+    spec = RequestSpec("PUT", f"actions/{path_id}", json=body)
+
+    def parse(data: Any) -> Action:
+        records = extract_records(data, ACTIONS.envelope_key)
+        return Action.model_validate(records[0] if records else data, context=context)
+
+    return spec, parse
+
+
 def build_end_action(
     rfc_number: str,
     *,

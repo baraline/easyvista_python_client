@@ -118,6 +118,7 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     "iter_tickets": ((), {"max_records": 1}),
     "list_actions": (("I1",), {}),
     "list_documents": (("I1",), {}),
+    "reassign_action": ((1,), {"group_id": 3}),
     "resolve_memo": (("requests/I1/description",), {}),
     "search_assets": ((), {}),
     "search_departments": ((), {}),

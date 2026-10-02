@@ -2700,6 +2700,28 @@ async def test_update_action_lets_a_reassignment_through(config):
 
 
 @respx.mock
+async def test_reassign_action_sends_one_put_without_an_opt_in(config):
+    route = respx.put(f"{ROOT}/actions/60350").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.reassign_action(60350, group_id=57)
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {"group_id": 57}
+
+
+@respx.mock
+async def test_reassign_action_refuses_before_any_request(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="group_id, done_by_id"):
+            await client.reassign_action(60350)
+        with pytest.raises(ValueError, match="action id"):
+            await client.reassign_action("I260901_00016", group_id=57)
+    assert not route.called
+
+
+@respx.mock
 async def test_send_refuses_a_close_unless_allowed(config):
     route = respx.put(f"{ROOT}/requests/I1").mock(
         return_value=httpx.Response(200, json={})
