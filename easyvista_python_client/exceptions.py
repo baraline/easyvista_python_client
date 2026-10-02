@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .workflow import WorkflowEffect
+
 
 class EasyvistaError(Exception):
     """Base class for all EasyVista client errors."""
@@ -76,3 +81,33 @@ class EasyvistaContentError(EasyvistaError):
     and ``status_code``, ``ev_code``, ``ev_message`` and ``body`` stay
     ``None``. Mirrors ``glpi_python_client``'s ``GlpiContentError``.
     """
+
+
+class EasyvistaWorkflowEffectRefused(ValueError):
+    """A write that may change a ticket's workflow was refused before it was sent.
+
+    Raised with no request made: by the transport, when a request names a
+    :class:`~easyvista_python_client.WorkflowEffect` that the call did not
+    allow through ``allow_workflow_effect=``; and by ``end_action``, when the
+    action it was asked to end is a workflow step or cannot be shown not to be.
+
+    **Deliberately not an** :class:`EasyvistaError`. Nothing was sent, so there
+    is no status code and nothing transient: the same call can never succeed on
+    a retry, and a caller that treats a status-code-less ``EasyvistaError`` as
+    "try again later" would retry it for ever. It subclasses ``ValueError``
+    because it refuses the arguments, as this package's other local refusals do.
+
+    ``effects`` holds the refused effects; ``triggers`` the ``(what, effect)``
+    pairs that named them -- a body key, a column, or a route.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        effects: frozenset[WorkflowEffect] = frozenset(),
+        triggers: tuple[tuple[str, WorkflowEffect], ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.effects = effects
+        self.triggers = triggers

@@ -22,6 +22,7 @@ from .exceptions import (
     EasyvistaRateLimitError,
     EasyvistaServerError,
     EasyvistaValidationError,
+    EasyvistaWorkflowEffectRefused,
 )
 from .field_model import FieldClassification
 from .filters import (
@@ -45,6 +46,7 @@ from .pagination import SearchResult
 from .references import DEFAULT_LANGUAGE_ORDER, Reference, localized_label
 from .reporting import TicketStatistics, aggregate_tickets
 from .timestamps import format_ev_datetime, parse_ev_datetime
+from .workflow import WorkflowEffect
 
 __all__ = [
     "DEFAULT_DISCOVERY_NAMES",
@@ -70,6 +72,7 @@ __all__ = [
     "EasyvistaRateLimitError",
     "EasyvistaServerError",
     "EasyvistaValidationError",
+    "EasyvistaWorkflowEffectRefused",
     "Employee",
     "EmployeeUpdate",
     "FieldClassification",
@@ -88,6 +91,7 @@ __all__ = [
     "SearchResult",
     "TicketContext",
     "TicketStatistics",
+    "WorkflowEffect",
     "__version__",
     "aggregate_tickets",
     "escape_ev_value",
