@@ -24,7 +24,9 @@ from easyvista_python_client.exceptions import (
     EasyvistaRateLimitError,
     EasyvistaServerError,
     EasyvistaValidationError,
+    EasyvistaWorkflowEffectRefused,
 )
+from easyvista_python_client.workflow import WorkflowEffect
 
 ROOT = "https://ev.test/api/v1/acme"
 
@@ -945,3 +947,90 @@ def test_request_spec_headers_override_the_client_level_ones():
 def test_request_spec_refuses_the_credential_in_its_headers():
     with pytest.raises(ValueError, match="must not set"):
         RequestSpec("GET", "requests", headers={"authorization": "Bearer other"})
+
+
+# --- the workflow guard ------------------------------------------------------
+
+
+def test_request_spec_normalises_and_validates_the_allow_set():
+    spec = RequestSpec("PUT", "x", allow_workflow_effect=WorkflowEffect.ADVANCES)
+    assert spec.allow_workflow_effect == {WorkflowEffect.ADVANCES}
+    with pytest.raises(TypeError):
+        RequestSpec("PUT", "x", allow_workflow_effect=WorkflowEffect)
+    widened = (
+        RequestSpec("PUT", "x")
+        .allowing(WorkflowEffect.INTERRUPTS)
+        .allowing([WorkflowEffect.UNKNOWN])
+    )
+    assert widened.allow_workflow_effect == {
+        WorkflowEffect.INTERRUPTS,
+        WorkflowEffect.UNKNOWN,
+    }
+    assert RequestSpec("PUT", "x") == RequestSpec("PUT", "x", allow_workflow_effect=())
+
+
+@respx.mock
+def test_send_refuses_a_workflow_write_before_any_request():
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    with Transport(_cfg()) as transport:
+        with pytest.raises(EasyvistaWorkflowEffectRefused) as refused:
+            transport.send(RequestSpec("PUT", "requests/I1", json={"closed": {}}))
+    assert not route.called
+    assert refused.value.effects == {WorkflowEffect.INTERRUPTS}
+    assert "allow_workflow_effect=WorkflowEffect.INTERRUPTS" in str(refused.value)
+
+
+@respx.mock
+def test_send_refuses_an_effect_that_was_not_the_one_allowed():
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    spec = RequestSpec("PUT", "requests/I1", json={"closed": {}, "status_id": 8})
+    with Transport(_cfg()) as transport:
+        with pytest.raises(EasyvistaWorkflowEffectRefused) as refused:
+            transport.send(spec.allowing(WorkflowEffect.INTERRUPTS))
+    assert not route.called
+    assert refused.value.effects == {WorkflowEffect.UNKNOWN}
+
+
+@respx.mock
+def test_send_sends_an_allowed_workflow_write_exactly_once_on_a_5xx():
+    route = respx.put(f"{ROOT}/requests/I1").mock(return_value=httpx.Response(503))
+    spec = RequestSpec("PUT", "requests/I1", json={"closed": {}}).allowing(
+        WorkflowEffect.INTERRUPTS
+    )
+    with Transport(_cfg(max_retries=3)) as transport:
+        with pytest.raises(EasyvistaServerError):
+            transport.send(spec)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_send_sends_an_allowed_workflow_write_exactly_once_on_a_transport_error():
+    route = respx.put(f"{ROOT}/actions/I1").mock(side_effect=httpx.ConnectError("boom"))
+    spec = RequestSpec(
+        "PUT", "actions/I1", json={"end_action": {"action_id": 1}}
+    ).allowing(WorkflowEffect.ADVANCES)
+    with Transport(_cfg(max_retries=3)) as transport:
+        with pytest.raises(EasyvistaConnectionError):
+            transport.send(spec)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_send_still_retries_an_ordinary_write():
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json={})]
+    )
+    with Transport(_cfg(max_retries=2)) as transport:
+        transport.send(RequestSpec("PUT", "requests/I1", json={"title": "t"}))
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_send_refuses_a_dot_segment_path_before_any_request():
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    with Transport(_cfg()) as transport:
+        with pytest.raises(ValueError, match="dot segment"):
+            transport.send(
+                RequestSpec("PUT", "x/../requests/I1", json={"closed": {}})
+            )
+    assert not route.called

@@ -88,6 +88,7 @@ from easyvista_python_client.resources import documents as documents_res
 from easyvista_python_client.resources import employees as employees_res
 from easyvista_python_client.resources import requests as requests_res
 from easyvista_python_client.resources.discovery import SWAGGER_PATH
+from easyvista_python_client.workflow import WorkflowEffect
 
 # Width of the action-body fan-out: a ceiling on requests in flight at once on
 # the async surface, inert on the sync one. This is the one fan-out here whose
@@ -483,7 +484,11 @@ class AsyncEasyvistaClient:
             comment=comment,
             context=self._validation_context,
         )
-        return parse(await self._transport.send(spec))
+        # Interim: keeps today's behaviour; Task 4/6 replace this with the
+        # caller's opt-in.
+        return parse(
+            await self._transport.send(spec.allowing(WorkflowEffect.INTERRUPTS))
+        )
 
     async def close_ticket(
         self,
@@ -553,7 +558,11 @@ class AsyncEasyvistaClient:
             catalog_guid=catalog_guid,
             context=self._validation_context,
         )
-        return parse(await self._transport.send(spec))
+        # Interim: keeps today's behaviour; Task 4/6 replace this with the
+        # caller's opt-in.
+        return parse(
+            await self._transport.send(spec.allowing(WorkflowEffect.INTERRUPTS))
+        )
 
     # --- actions -------------------------------------------------------------
     async def create_action(self, rfc_number: str, action: PostAction) -> Action:
@@ -927,7 +936,9 @@ class AsyncEasyvistaClient:
             doneby_mail=doneby_mail,
             context=self._validation_context,
         )
-        return parse(await self._transport.send(spec))
+        # Interim: keeps today's behaviour; Task 4/6 replace this with the
+        # caller's opt-in.
+        return parse(await self._transport.send(spec.allowing(WorkflowEffect.ADVANCES)))
 
     async def _resolve_action_body(self, action: Action) -> Action:
         """Return ``action`` with its note text resolved onto the memo that shows.
