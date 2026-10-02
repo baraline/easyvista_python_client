@@ -59,8 +59,8 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   reassignment route (tier 1), so the effect was measured: 2026-10-02, one
   instance, two tickets, so it may not generalise -- the group was stored, the
   step stayed open, the ticket's status did not move and no new action rows
-  appeared; the ticket's own owning group does not follow the action's. The
-  person write (`done_by_id`) is unmeasured.
+  appeared; the ticket's owning group was read on one of the two tickets and
+  did not follow the action's. The person write (`done_by_id`) is unmeasured.
 - `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
   optional extra `easyvista-python-client[content]` (`beautifulsoup4>=4.12`,
   `markdown>=3.6`, `markdownify>=1.2`). Two static methods:

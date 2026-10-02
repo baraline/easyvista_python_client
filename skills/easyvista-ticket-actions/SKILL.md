@@ -1,6 +1,6 @@
 ---
 name: easyvista-ticket-actions
-description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, end_action (an action is born OPEN and its text does not show until ended), list_actions, iter_actions, get_action and update_action with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history."
+description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, end_action (an action is born OPEN and its text does not show until ended), list_actions, iter_actions, get_action, update_action and reassign_action (hand an action, such as the open workflow step, to another group or person without ending it) with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history, and to reassign, escalate or transfer an action."
 license: MIT
 compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
@@ -14,9 +14,10 @@ metadata:
 > `easyvista-client-setup`.
 
 Actions are EasyVista's per-ticket work log — the closest equivalent to a
-followup. Six methods: `create_action(rfc, action)`, `list_actions(rfc)`,
-`iter_actions(rfc)`, `get_action(action_id)`, `update_action(action_id,
-update)` and `end_action(rfc, action_id=...)`. The list and item shapes differ
+followup. Eight methods: `create_task(rfc, task)`, `create_action(rfc, action)`,
+`list_actions(rfc)`, `iter_actions(rfc)`, `get_action(action_id)`,
+`update_action(action_id, update)`, `reassign_action(action_id, group_id=...)`
+and `end_action(rfc, action_id=...)`. The list and item shapes differ
 substantially, which is where most mistakes come from.
 
 ## Two shapes of the same record
@@ -359,8 +360,12 @@ Two asymmetries worth knowing:
 `reassign_action(action_id, group_id=..., done_by_id=...)` hands an action to
 another group and/or person without ending it — the way to escalate the open
 workflow step. At least one id is required; both are positive integers, and both
-are per-deployment, so read them from your instance (next section) rather than
-hardcoding them.
+are per-deployment, so look them up (next section) rather than hardcoding them. A
+group id is the one that may not be readable: on the measured instance
+(2026-10-02, one instance) `GET groups` answered 403, which this API also answers
+for an absent route, so if yours does too, take the group id from your
+administrator or from a record that already carries one. `done_by_id` is an
+employee id: find one with `search_employees` or `get_employee`.
 
 ```python
 from easyvista_python_client import EasyvistaClient
@@ -372,7 +377,7 @@ with EasyvistaClient.from_env() as client:
     )
     # The open workflow step: WORKFLOW_ID set, no end date yet.
     step = next(a for a in actions if a.is_workflow_generated and not a.end_date_ut)
-    client.reassign_action(step.action_id, group_id=OTHER_GROUP_ID)
+    client.reassign_action(step.action_id, group_id=YOUR_OTHER_GROUP_ID)
     # Re-read: this API answers 200 while dropping a field it did not store.
     print(client.get_action(step.action_id).group_id)
 ```

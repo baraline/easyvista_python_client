@@ -278,15 +278,17 @@ mentioned below" rule, and its exclusion list does not name `GROUP_ID` or `DONE_
 as `reassign_action(action_id, *, group_id=None, done_by_id=None)`. Allowed by the
 documentation is not the same as shown harmless, so its effect was measured —
 **tier 4, 2026-10-02, one instance (Service Manager 2025.3), two tickets, so it may
-not generalise**: with the body `{"group_id": <int>}`, the group was **stored**
-(`GROUP_ID` 57 → 50 on the open workflow step of both tickets; re-read immediately
-and, on the first, five seconds later); the step **stayed open** (`END_DATE_UT` empty,
-`WORKFLOW_ID` unchanged); the ticket's status and `END_DATE_UT` **did not move**; the
-open actions were unchanged; **no history row** (no new action) appeared; and the
-ticket's own `OWNING_GROUP_ID` **stayed at the old group** on the one ticket where it
-was read, so the ticket's owning group does not follow the action's. Reassigning to a
-person (`done_by_id`) was **not measured**. Whether the UI wizard's notifications fire
-is not observable from the API.
+not generalise**: with the body `{"group_id": <int>}`, on **both** tickets the group was
+**stored** (`GROUP_ID` 57 → 50 on the open workflow step, read back immediately and
+again five seconds later); the step **stayed open** (`END_DATE_UT` empty); the ticket's
+status and `END_DATE_UT` **did not move**; the open actions were unchanged; and **no new
+action rows** appeared. On the **first ticket only** the step was recorded as a type-20
+action with `WORKFLOW_ID` set, its `WORKFLOW_ID` was unchanged, `DONE_BY_ID` stayed
+empty and no ticket field changed; and that is also the only ticket on which the
+ticket's own `OWNING_GROUP_ID` was read — it **stayed at the old group**, so the
+ticket's owning group did not follow the action's. Reassigning to a person
+(`done_by_id`) was **not measured**. Whether the UI wizard's notifications fire is not
+observable from the API.
 
 **Business rules can fire on any write** — "On Insert/On Update" of any record
 (business-rule.md) — so a write this package does not gate is unclassified, not proven

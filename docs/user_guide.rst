@@ -473,7 +473,8 @@ rule on your instance can run on any write.
 To escalate the open workflow step to another group without ending it, use
 :meth:`~easyvista_python_client.EasyvistaClient.reassign_action` (measured
 2026-10-02, one instance, so it may not generalise: the step stays open and the
-status does not move; the ticket's owning group does not follow).
+status does not move; the ticket's owning group, read on one ticket, did not
+follow).
 
 Creating a ticket starts its workflow -- the vendor's create page lists "The
 workflow associated with the ticket is started." among what a create does (tier

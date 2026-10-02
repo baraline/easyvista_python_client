@@ -914,8 +914,15 @@ class AsyncEasyvistaClient:
         workflow step to another group without ending it. Sends
         ``PUT actions/{id}`` with the group and/or the person in charge; at
         least one is required, and both are positive integers -- ids are
-        per-deployment, so read them with :meth:`discover` or
-        :meth:`list_reference_table` rather than hardcoding them.
+        per-deployment, so look them up rather than hardcoding them. A group
+        id comes from :meth:`discover` or :meth:`list_reference_table` where
+        the groups table is readable to you; on the measured instance
+        (2026-10-02, one instance) ``GET groups`` answered 403, which this
+        API also answers for an absent route, so it settles nothing about why.
+        If yours does too, take the group id from your administrator, or from
+        a record that already carries one (an existing action's ``GROUP_ID``).
+        ``done_by_id`` is an employee id: find one with
+        :meth:`search_employees` or :meth:`get_employee`.
 
         **The vendor documents no reassignment route.** The UI's transfer is a
         wizard, and ``PUT actions/{id}`` accepts "all the fields from the
@@ -925,22 +932,24 @@ class AsyncEasyvistaClient:
 
         Measured 2026-10-02 on one instance (Service Manager 2025.3; two
         tickets, so it may not generalise), with the body
-        ``{"group_id": <int>}``: the group was stored -- ``GROUP_ID`` went
-        57 -> 50 on the open workflow step (type 20, ``WORKFLOW_ID`` set) of
-        both tickets, a service request at status id 6 and a fresh incident at
-        status id 12 (ids are per-instance). On the first ticket the new group
-        was still there on a re-read five seconds later. The step stayed open
-        (``END_DATE_UT`` empty), its ``WORKFLOW_ID`` was unchanged and
-        ``DONE_BY_ID`` stayed empty; the ticket's ``STATUS_ID`` and
-        ``END_DATE_UT`` did not move; the open actions were unchanged; and no
-        new action rows appeared. **The ticket's own ``OWNING_GROUP_ID`` does
-        not follow the action's group** -- it stayed 57 on the first ticket
-        (the second was not read for it), so reassigning a step is not
-        reassigning the ticket. The lower-case key ``group_id`` was the one
-        sent; the upper-case spelling was never needed. The person
-        (``done_by_id``) was **not measured**: the same body shape is sent,
-        but nothing here shows what the instance does with it. Whether the UI
-        wizard's notifications fire is not observable from the API.
+        ``{"group_id": <int>}``. On **both** tickets -- a service request at
+        status id 6 and a fresh incident at status id 12 (ids are
+        per-instance) -- the group was stored: ``GROUP_ID`` went 57 -> 50 on
+        the open workflow step, and read 50 on a re-read immediately and again
+        five seconds later. On both, the step stayed open (``END_DATE_UT``
+        empty), the ticket's ``STATUS_ID`` and ``END_DATE_UT`` did not move,
+        the open actions were unchanged, and no new action rows appeared. On
+        the **first ticket only** the step was recorded as a type-20 action
+        with ``WORKFLOW_ID`` set; its ``WORKFLOW_ID`` was unchanged,
+        ``DONE_BY_ID`` stayed empty, and no ticket field changed.
+        **The ticket's own ``OWNING_GROUP_ID`` does not follow the action's
+        group** -- it stayed 57 on the first ticket, the only one read for it,
+        so reassigning a step is not reassigning the ticket. The lower-case
+        key ``group_id`` was the one sent; the upper-case spelling was never
+        needed. The person (``done_by_id``) was **not measured**: the same
+        body shape is sent, but nothing here shows what the instance does
+        with it. Whether the UI wizard's notifications fire is not observable
+        from the API.
 
         Not refused by the workflow guard: the group and the person are data
         the workflow reads, not workflow state. Re-read with :meth:`get_action`
