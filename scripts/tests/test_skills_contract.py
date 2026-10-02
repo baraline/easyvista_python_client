@@ -20,7 +20,12 @@ name-and-keyword gate over ``python`` code blocks, not a semantic one:
   only names imported from the package root and keywords passed to a client
   method or a write model are looked up.
 - **No positional arguments and no arity.** Only ``keyword=`` arguments are
-  matched against the signature.
+  matched against the signature -- with one exception: a **required
+  keyword-only** parameter (``close_ticket``'s ``allow_workflow_effect``) must
+  be passed by every snippet that calls the method, since a snippet that omits
+  it raises ``TypeError`` when an agent runs it verbatim. A call that splats
+  ``**kwargs`` is exempt, because the splat may supply it. A positional
+  parameter's arity is still not checked.
 - **No required fields and no value types.** ``PostAsset(catalog_id="1")``
   passes even though the field is an ``int``, and a write model missing a
   mandatory field passes too -- nothing is ever instantiated.
@@ -371,6 +376,23 @@ def test_client_methods_and_keywords_exist(skill: Path) -> None:
                 f"{skill.name} passes {keyword.arg}= to client.{method}(), "
                 f"which accepts {sorted(accepted)}"
             )
+        # A call that splats ``**kwargs`` may be supplying any keyword, so its
+        # required ones cannot be judged from the source text.
+        if any(keyword.arg is None for keyword in call.keywords):
+            continue
+        required = {
+            name
+            for name, param in signature.parameters.items()
+            if param.kind is inspect.Parameter.KEYWORD_ONLY
+            and param.default is inspect.Parameter.empty
+        }
+        passed = {keyword.arg for keyword in call.keywords}
+        missing = required - passed
+        assert not missing, (
+            f"{skill.name} calls client.{method}() without its required "
+            f"keyword-only parameter(s) {sorted(missing)}; an agent runs a "
+            "skill's snippet verbatim, so the snippet would raise TypeError"
+        )
 
 
 @pytest.mark.parametrize("skill", _skill_dirs(), ids=_skill_ids())
