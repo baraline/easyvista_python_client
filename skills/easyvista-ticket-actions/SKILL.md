@@ -529,11 +529,19 @@ with EasyvistaClient.from_env() as client:
   `EasyvistaContentConverter.to_transport(markdown)` for the `description` you
   write, `EasyvistaContentConverter.from_transport(memo)` on what
   `resolve_memo` returns. Import it from the `easyvista_python_client.content`
-  subpackage. Reading spells a note's text as literal text (`__init__` comes
-  back as `\_\_init\_\_`), so render the Markdown rather than stripping its
-  backslashes. It sanitises nothing: raw HTML and `javascript:` link targets go
-  out live, so neutralise both in Markdown you did not write — a comment sync
-  relaying another ITSM's text is exactly that case.
+  subpackage. Its Markdown is **CommonMark with GFM tables**: a newline you
+  write is a line break, but `~~strike~~`, bare `www.` links and `- [ ]` task
+  boxes are not extensions it enables, so write `<s>...</s>` and
+  `<https://...>` instead. An unescaped `__init__` you write renders as a bold
+  `init`. Reading spells a note's text as literal text (`__init__` comes back
+  as `\_\_init\_\_`, a displayed `<b>` as `\<b>`), so render the Markdown
+  rather than stripping its backslashes. Underline and strike come back as raw
+  `<u>` and `<s>` tags, and a note with no HTML in it reads as literal lines.
+  It sanitises nothing: raw HTML, `javascript:` link targets and
+  `<javascript:...>` autolinks go out live, and reading keeps a memo's
+  `javascript:` links, so neutralise both in Markdown you did not write — a
+  comment sync relaying another ITSM's text is exactly that case. See
+  `docs/content.rst` for what survives a round trip.
 - **`create_action` resolves an implicit parent** and needs exactly **one** open
   action on the ticket: zero gives `590 "Parent action not found or incorrect"`,
   two or more gives `590 "Ambiguous query : many parent actions found"`, and an

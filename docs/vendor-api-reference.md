@@ -308,24 +308,59 @@ catalog GUID cannot be discovered from this route — build with `catalog_code`.
 The vendor documents `catalog_guid` as the *preferred* identifier (tier 1) and
 `close_ticket` accepts one; you simply cannot read one back.
 
-## Memo content (tier 4)
+## Memo content (tiers 1 and 4)
 
 Measured 2026-09-30 on one instance, may not generalise: a ticket's `COMMENT`
 memo written through the API with HTML -- `<p>` paragraphs, an `<a>` anchor and
 character references -- was stored byte for byte and read back identically
 (the `DESCRIPTION` memo stayed empty), and the web UI rendered the `<p>`
 elements as paragraphs. So a memo's format is whatever its writer sent, and the
-API altered nothing in that sample. No vendor documentation of the memo format
-is recorded here. `easyvista_python_client.content` converts memo HTML to and
-from Markdown; see open item O-MEMOFORMAT for what is not yet known.
+API altered nothing in that sample. Memos read from one preproduction instance
+on 2026-10-01 (367 of them) held both HTML and text with no HTML element in it
+(tier 4, one instance, may not generalise).
+
+The vendor's form-editor page
+(<https://docs.easyvista.com/docs/form>, read 2026-10-02, tier 1) defines two
+form objects for long text: **MEMO**, "Identical to TEXT, of unlimited size",
+and **TEXT AREA**, "Identical to MEMO, with the possibility of entering HTML
+code for formatting text". The page does not say which of the two the request
+form or the action history uses, so it does not settle how the UI displays a
+memo holding no HTML.
+
+The vendor's comment-log page
+(<https://docs.easyvista.com/docs/service-manager-comment-log-creation>, read
+2026-10-02, tier 1) adds a *custom* `e_comments` column (`NVARCHAR (MAX)`) to
+`SD_REQUEST`, fills it from the request's comments with an imported business
+rule, and places it on the request form with "type field (Text area)". That
+leans towards the UI displaying comment text as HTML. It is about that custom
+field only: it does not say what the built-in description memo or the action
+history is.
+
+`easyvista_python_client.content` converts memo HTML to and from Markdown and
+reads a memo with no HTML element as literal lines, which is the opposite
+reading; see open item O-MEMOFORMAT for what is not yet known.
 
 ## Open items
 
-* **O-MEMOFORMAT** -- the memo format rests on the one tier-4 sample above.
-  Not yet known: what the web UI's own editor writes into a memo; whether the
-  UI shows the newlines python-markdown puts between blocks as the whitespace
-  HTML makes of them; and what the UI shows for a memo holding raw markup, a
-  `<script>` or an unknown tag. Look for the vendor documentation first.
+* **O-MEMOFORMAT** -- the memo format rests on the tier-4 samples and the two
+  tier-1 pages above. The comment-log page's "Text area" is the one tier-1
+  hint, and it leans towards HTML display, against the converter's
+  literal-lines reading. Not yet known:
+  * whether a ticket's or an action's memo is a MEMO or a TEXT AREA object,
+    and so whether the UI displays a memo with no HTML element as literal
+    lines, as the converter reads it, or as HTML, which would show a line
+    break inside a paragraph as a space;
+  * what the web UI's own editor writes into a memo;
+  * whether the UI shows the newlines cmark-gfm puts between blocks as the
+    whitespace HTML makes of them;
+  * what the UI shows for a memo holding raw markup, a `<script>` or an
+    unknown tag;
+  * whether the memo stylesheet makes the empty header row the converter
+    gives a header-less table visible, for example as a bordered empty row;
+  * whether a link target the converter percent-encodes (`[` and `]` as
+    `%5B` and `%5D`) still resolves when written back.
+
+  Look for the vendor documentation first.
 
 * **O-URG** — `PUT /requests/{rfc_number}` declares `Urgency_ID` as a
   **string** (tier 3). This package sent an **int** when it measured the 590

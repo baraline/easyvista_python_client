@@ -18,12 +18,17 @@ From PyPI
 
    pip install easyvista-python-client
 
-To convert memo text between HTML and Markdown, add the optional ``content`` extra, which brings
-``beautifulsoup4``, ``markdown`` and ``markdownify`` (see :doc:`content`):
+To convert memo text between HTML and Markdown, add the optional ``content`` extra (see
+:doc:`content`). It brings ``beautifulsoup4``, ``cmarkgfm``, ``markdown-it-py``, ``markdownify``,
+``mdformat`` and ``mdformat-tables``, most of them with an upper bound:
 
 .. code-block:: bash
 
    pip install "easyvista-python-client[content]"
+
+``cmarkgfm`` wraps a C library. PyPI lists no wheel of ``cmarkgfm`` 2025.10.22 for macOS x86_64 or
+Windows ARM64 (read 2026-10-02). Unless a later release adds one, ``pip`` builds it from source on
+those platforms, which needs a C compiler.
 
 From source
 -----------
@@ -39,7 +44,8 @@ Development and documentation tooling
 
 The optional ``dev`` extra installs the linters, type-checker, and test tooling; the ``docs`` extra
 installs Sphinx and the theme used to build this site. Both also install the ``content`` extra's
-three packages, because the unit suite tests the converter and the API reference imports it.
+packages, with the same bounds, because the unit suite tests the converter and the API reference
+imports it.
 
 .. code-block:: bash
 

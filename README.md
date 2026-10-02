@@ -33,7 +33,8 @@ Python 3.11 or newer. 0.4.0 dropped 3.10; on 3.10, pip installs 0.3.0, which
 has no `content` extra: the converter below needs 3.11 or newer.
 
 To read and write memo text as Markdown, add the optional `content` extra, which
-brings a Markdown <-> HTML converter, `easyvista_python_client.content`:
+brings a Markdown <-> HTML converter, `easyvista_python_client.content`. Its
+Markdown is CommonMark with GFM tables:
 
 ```bash
 pip install "easyvista-python-client[content]"
