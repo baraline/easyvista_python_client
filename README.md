@@ -140,7 +140,11 @@ client.end_action(
 > required — the vendor's id-less "end every open action" form is behind an
 > explicit `end_all=True`. Ending a workflow step, or ending every open action
 > with `end_all=True`, is refused unless the call passes
-> `allow_workflow_effect=WorkflowEffect.ADVANCES`.
+> `allow_workflow_effect=WorkflowEffect.ADVANCES`. Ending an action you
+> created yourself needs no opt-in, with one unmeasured exception: whether an
+> action `create_action` creates under the workflow step carries a
+> `WORKFLOW_ID` has not been measured, and if it does, `end_action` refuses to
+> end it without `ADVANCES` (the safe direction).
 > There is no status setter: a ticket's status follows its workflow (user
 > guide, "Changing a ticket's status").
 

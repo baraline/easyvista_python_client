@@ -485,12 +485,13 @@ refuses unless allowed.
 A write that may change the workflow and does not say so is refused before it is
 sent, with :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` -- a
 ``ValueError``, deliberately not an ``EasyvistaError``, because retrying it can
-never succeed. ``update_ticket``, ``close_ticket``, ``create_action``,
-``create_task``, ``update_action``, ``end_action`` and ``send`` take
-``allow_workflow_effect``: one :class:`~easyvista_python_client.WorkflowEffect`
-or an iterable of them, and nothing else (a string is a ``TypeError``). A write
-that names a workflow effect and was allowed is sent once, never retried,
-whatever ``max_retries`` says.
+never succeed. ``allow_workflow_effect`` is **required** on ``close_ticket``
+and optional on the other writers -- ``update_ticket``, ``create_action``,
+``create_task``, ``update_action``, ``end_action`` and ``send`` -- where it
+defaults to allowing nothing. It takes one
+:class:`~easyvista_python_client.WorkflowEffect` or an iterable of them, and
+nothing else (a string is a ``TypeError``). A write that names a workflow effect
+and was allowed is sent once, never retried, whatever ``max_retries`` says.
 
 .. code-block:: python
 
@@ -523,9 +524,13 @@ sent, a workflow step (``WORKFLOW_ID`` set), a record that comes back without th
 that returns a different ``ACTION_ID`` from the one you asked for.
 ``end_all=True``, which ends every open action on the ticket, is always refused
 without ``ADVANCES``, and an explicit ``action_id`` must be a positive integer.
-Ending an action you created yourself needs no opt-in. ``WORKFLOW_ID`` is what
-separates the engine's rows from a caller's (tier 4: 1500 of 1500 rows,
-2026-09-02, one instance; it may not generalise).
+Ending an action you created yourself needs no opt-in, with one unmeasured
+exception: whether an action that ``create_action`` creates under the workflow
+step carries a ``WORKFLOW_ID`` has not been measured. If it does,
+``end_action`` refuses to end it unless the call passes
+``allow_workflow_effect=WorkflowEffect.ADVANCES`` -- the safe direction.
+``WORKFLOW_ID`` is what separates the engine's rows from a caller's (tier 4:
+1500 of 1500 rows, 2026-09-02, one instance; it may not generalise).
 
 The guard is a deny-list of body keys, columns and routes (see
 :mod:`easyvista_python_client.workflow`), and a deny-list of columns cannot be
