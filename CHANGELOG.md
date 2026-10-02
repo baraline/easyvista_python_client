@@ -15,6 +15,16 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-02
+
+A patch release of the content reader. A `<u>`, `<mark>` or `<ins>` round a
+block no longer reads as broken Markdown, four guards of 0.4.0's fixes gain
+the tests they lacked, and `docs/content.rst` corrects what it said about
+`start` values, `ValueError`, the CVE-2025-6069 tail and a second round
+trip. Writing is unchanged, and so is everything outside
+`easyvista_python_client.content`. `glpi_python_client`'s port of this
+converter makes the same correction.
+
 ### Fixed
 
 - **A block inside `<u>`, `<mark>` or `<ins>` read as broken Markdown**, since
@@ -1635,7 +1645,8 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.1...HEAD
+[0.4.1]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/baraline/easyvista_python_client/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...0.2.0
