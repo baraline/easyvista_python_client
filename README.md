@@ -3,7 +3,7 @@
 [![CI](https://github.com/baraline/easyvista_python_client/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/baraline/easyvista_python_client/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/baraline/easyvista_python_client/branch/main/graph/badge.svg)](https://codecov.io/gh/baraline/easyvista_python_client)
 [![License](https://img.shields.io/github/license/baraline/easyvista_python_client)](https://github.com/baraline/easyvista_python_client/blob/main/LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/baraline/easyvista_python_client)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://github.com/baraline/easyvista_python_client)
 [![Docs](https://readthedocs.org/projects/easyvista-python-client/badge/?version=latest)](https://easyvista-python-client.readthedocs.io/en/latest/)
 
 
@@ -29,8 +29,12 @@ Build it locally with `pip install -e ".[docs]"` then
 pip install easyvista-python-client
 ```
 
+Python 3.11 or newer. 0.4.0 dropped 3.10; on 3.10, pip installs 0.3.0, which
+has no `content` extra: the converter below needs 3.11 or newer.
+
 To read and write memo text as Markdown, add the optional `content` extra, which
-brings a Markdown <-> HTML converter, `easyvista_python_client.content`:
+brings a Markdown <-> HTML converter, `easyvista_python_client.content`. Its
+Markdown is CommonMark with GFM tables:
 
 ```bash
 pip install "easyvista-python-client[content]"

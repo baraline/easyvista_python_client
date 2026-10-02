@@ -2,7 +2,7 @@
 name: easyvista-ticket-workflow
 description: "Create, read, search, paginate, update and close EasyVista tickets (requests) with easyvista_python_client — PostRequest, Request, RequestUpdate, create_ticket, create_tickets, get_ticket, search_tickets, iter_tickets, count_tickets, update_ticket and close_ticket. Use for any ticket/incident/request operation, including discovering the instance-specific catalog codes and ids a create needs."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
 metadata:
   package: easyvista-python-client
   version: "0.4.0"
@@ -282,14 +282,20 @@ with EasyvistaClient.from_env() as client:
   `EasyvistaContentConverter.to_transport(markdown)` before the write,
   `EasyvistaContentConverter.from_transport(memo)` on what `resolve_memo`
   returns. It lives in the `easyvista_python_client.content` subpackage, not
-  the package root, so it is not imported unless you ask for it. Reading
-  spells a memo's text as literal text -- a typed `__init__` comes back as
-  `\_\_init\_\_`, `#4521` at a line start as `\#4521`, `<Entrée>` as
-  `&lt;Entrée>` -- so render the Markdown to display it rather than
-  stripping the backslashes, and write a memo as HTML or as Markdown, not
-  both: one real HTML element makes the whole value HTML. It sanitises
-  nothing: raw HTML and `javascript:` link targets in the Markdown go out
-  live, so neutralise both in Markdown you did not write.
+  the package root, so it is not imported unless you ask for it. Its Markdown
+  is **CommonMark with GFM tables**, rendered by cmark-gfm: a newline is a
+  line break, raw HTML passes through, and no other GFM extension is on, so
+  `~~strike~~` stays literal (write `<s>...</s>`). Reading spells a memo's
+  text as literal text -- a typed `__init__` comes back as `\_\_init\_\_`,
+  `# titre` at a line start as `\# titre`, `<Entrée>` as `\<Entrée>` -- so
+  render the Markdown to display it rather than stripping the backslashes.
+  A memo with no HTML element reads as literal lines; pass
+  `plain_text_is_markdown=True` when the value is your own Markdown. Write a
+  memo as HTML or as Markdown, not both: one real HTML element makes the
+  whole value HTML. A nested table comes back as its words, and a table
+  without a header row gains an empty one. It sanitises nothing: raw HTML,
+  `javascript:` link targets and `<javascript:...>` autolinks in the Markdown
+  go out live, so neutralise them in Markdown you did not write.
 - A `description` passed to **`PostRequest`** at create time was not readable
   back through either memo on the verified instance. Follow the create with
   an `update_ticket` when the body must be retrievable.

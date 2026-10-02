@@ -15,7 +15,25 @@ repos:
     rev: v2.3.0
     hooks:
       - id: mypy
-        additional_dependencies: ["pydantic>=2.8", "httpx", "tenacity"]
+        # The runtime dependencies, then the TYPED packages of the `content`
+        # extra. The hook's venv holds only this list, so without those four
+        # every converter base class (MarkdownConverter, MDRenderer,
+        # RenderTreeNode, MarkdownIt) resolves to Any and strict mode's
+        # disallow_subclassing_any fails content/conversion.py even though
+        # `mypy easyvista_python_client` in CI is clean. The extra's other two,
+        # cmarkgfm and mdformat-tables, ship no type information, so they are
+        # Any either way and are left out; cmarkgfm would also make every
+        # contributor without a wheel for their platform compile it before
+        # any commit. Each line here must equal the extra's requirement in
+        # pyproject; testing/test_public_api.py fails if one drifts.
+        additional_dependencies:
+          - "pydantic>=2.8"
+          - "httpx"
+          - "tenacity"
+          - "beautifulsoup4>=4.15"
+          - "markdown-it-py>=3.0,<4"
+          - "markdownify>=1.2.3,<1.3"
+          - "mdformat>=0.7.22,<0.8"
         # Must mirror [tool.mypy] exclude in pyproject.toml. pre-commit passes
         # filenames explicitly, and mypy ignores its own `exclude` for files named
         # on the command line -- so this regex is the ONLY thing keeping the hook

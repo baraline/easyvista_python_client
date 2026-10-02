@@ -2,7 +2,7 @@
 name: easyvista-ticket-actions
 description: "Read and write the action log on an EasyVista ticket with easyvista_python_client — create_task and PostTask (the one call that posts a COMMENT: a task is an action born already ended, so its text shows in the history), plus create_action, end_action (an action is born OPEN and its text does not show until ended), list_actions, iter_actions, get_action, update_action and reassign_action (hand an action, such as the open workflow step, to another group or person without ending it) with PostAction, Action and ActionUpdate. Covers why there is no private-comment flag and that visibility is the action TYPE instead, how to recover a created action's id, how to page a whole log past the one-page cap, and how to resolve an action's note text, which the list endpoint does not return. Use for ticket comments, followups, work notes, internal or private comments, progress entries or any per-ticket action history, and to reassign, escalate or transfer an action."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
+compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
   package: easyvista-python-client
   version: "0.4.0"
@@ -611,11 +611,19 @@ with EasyvistaClient.from_env() as client:
   `EasyvistaContentConverter.to_transport(markdown)` for the `description` you
   write, `EasyvistaContentConverter.from_transport(memo)` on what
   `resolve_memo` returns. Import it from the `easyvista_python_client.content`
-  subpackage. Reading spells a note's text as literal text (`__init__` comes
-  back as `\_\_init\_\_`), so render the Markdown rather than stripping its
-  backslashes. It sanitises nothing: raw HTML and `javascript:` link targets go
-  out live, so neutralise both in Markdown you did not write — a comment sync
-  relaying another ITSM's text is exactly that case.
+  subpackage. Its Markdown is **CommonMark with GFM tables**: a newline you
+  write is a line break, but `~~strike~~`, bare `www.` links and `- [ ]` task
+  boxes are not extensions it enables, so write `<s>...</s>` and
+  `<https://...>` instead. An unescaped `__init__` you write renders as a bold
+  `init`. Reading spells a note's text as literal text (`__init__` comes back
+  as `\_\_init\_\_`, a displayed `<b>` as `\<b>`), so render the Markdown
+  rather than stripping its backslashes. Underline and strike come back as raw
+  `<u>` and `<s>` tags, and a note with no HTML in it reads as literal lines.
+  It sanitises nothing: raw HTML, `javascript:` link targets and
+  `<javascript:...>` autolinks go out live, and reading keeps a memo's
+  `javascript:` links, so neutralise both in Markdown you did not write — a
+  comment sync relaying another ITSM's text is exactly that case. See
+  `docs/content.rst` for what survives a round trip.
 - **`create_action` resolves an implicit parent** and needs exactly **one** open
   action on the ticket: zero gives `590 "Parent action not found or incorrect"`,
   two or more gives `590 "Ambiguous query : many parent actions found"`, and an

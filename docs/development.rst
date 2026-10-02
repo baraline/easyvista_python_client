@@ -4,6 +4,10 @@ Development
 Setup
 -----
 
+Use Python 3.11 or newer. ``requires-python`` is ``>=3.11`` since 0.4.0, so an
+environment created with 3.10 refuses the editable install: recreate it with a
+newer interpreter.
+
 .. code-block:: bash
 
    pip install -e ".[dev]"

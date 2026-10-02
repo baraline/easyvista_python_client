@@ -71,11 +71,11 @@ class EasyvistaContentError(EasyvistaError):
     works whether or not the extra is installed.
 
     It exists so that no failure of the content layer escapes the package's
-    taxonomy. The conversion runs third-party parsers (``markdownify``
-    inbound, ``markdown`` outbound), and a parser fault would otherwise reach
-    the caller as a bare builtin that ``except EasyvistaError`` does not
-    catch. HTML nested too deeply to convert is not an error at all: it is
-    answered with the memo's text instead.
+    taxonomy. The conversion runs third-party parsers (``markdownify`` and
+    ``mdformat`` inbound, ``cmark-gfm`` outbound), and a parser fault would
+    otherwise reach the caller as a bare builtin that ``except EasyvistaError``
+    does not catch. HTML nested too deeply to convert is not an error at all:
+    it is answered with the memo's text instead.
 
     No request is involved, so the converter raises it with a message alone
     and ``status_code``, ``ev_code``, ``ev_message`` and ``body`` stay

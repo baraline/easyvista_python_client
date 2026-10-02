@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -12,7 +12,8 @@ from easyvista_python_client.reporting import (
 
 
 def test_parse_offset_with_3_digit_milliseconds():
-    # EasyVista's CREATION_DATE_UT format; 3.10's fromisoformat rejects 3-digit ms.
+    # EasyVista's CREATION_DATE_UT format, 3-digit ms (which 3.10's
+    # fromisoformat rejected, back when 3.10 was supported).
     dt = _parse_iso_datetime("2025-11-28T11:35:22.900+01:00")
     assert dt is not None
     assert dt.year == 2025 and dt.month == 11 and dt.day == 28
@@ -21,7 +22,7 @@ def test_parse_offset_with_3_digit_milliseconds():
 
 def test_parse_trailing_z_is_utc():
     dt = _parse_iso_datetime("2025-01-02T03:04:05Z")
-    assert dt == datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert dt == datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 def test_parse_no_fraction():
@@ -31,13 +32,13 @@ def test_parse_no_fraction():
 
 def test_parse_naive_string_becomes_utc():
     dt = _parse_iso_datetime("2025-06-15T08:00:00")
-    assert dt == datetime(2025, 6, 15, 8, 0, 0, tzinfo=timezone.utc)
+    assert dt == datetime(2025, 6, 15, 8, 0, 0, tzinfo=UTC)
 
 
 def test_parse_datetime_passthrough_makes_naive_utc():
     naive = datetime(2025, 6, 15, 8, 0, 0)
-    assert _parse_iso_datetime(naive) == naive.replace(tzinfo=timezone.utc)
-    aware = datetime(2025, 6, 15, 8, 0, 0, tzinfo=timezone.utc)
+    assert _parse_iso_datetime(naive) == naive.replace(tzinfo=UTC)
+    aware = datetime(2025, 6, 15, 8, 0, 0, tzinfo=UTC)
     assert _parse_iso_datetime(aware) == aware
 
 

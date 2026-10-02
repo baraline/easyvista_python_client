@@ -11,7 +11,7 @@ jobs:
       matrix:
         # Keep in step with the `Programming Language :: Python` classifiers in
         # pyproject.toml and with the same matrix in release.yml.
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,13 +47,13 @@ jobs:
     # including a one-file local run -- measure the whole package and fail. Now
     # that addopts is clean, THIS job is where the floor is actually asserted;
     # delete it and fail_under becomes a number nothing reads. `needs: test`
-    # keeps the failure legible: a broken test reports as a broken test on five
-    # Python versions, not as an under-coverage number here.
+    # keeps the failure legible: a broken test reports as a broken test on every
+    # Python version in the matrix, not as an under-coverage number here.
     #
     # One version, not the matrix: coverage of this package does not vary by
-    # interpreter (there is no version-gated code), so five runs would produce
-    # five identical percentages, five uploads, and a Codecov report whose
-    # totals depend on which one landed last.
+    # interpreter (there is no version-gated code), so one run per matrix entry
+    # would produce identical percentages, one upload each, and a Codecov
+    # report whose totals depend on which one landed last.
     needs: test
     runs-on: ubuntu-latest
     steps:

@@ -45,7 +45,7 @@ Cutting a release
       ``v`` before comparing, so a prefixed tag would still *build* -- which is
       exactly why this drifted unnoticed.)
 
-The workflow then runs the test matrix (3.10--3.14) and the quality gates -- Ruff, mypy,
+The workflow then runs the test matrix (3.11--3.14) and the quality gates -- Ruff, mypy,
 the generated-``_sync``-tree check, the hand-written-twin lint and a warnings-as-errors
 Sphinx build -- validates the tag against the package version, builds the wheel and the
 sdist, runs ``twine check``, uploads to PyPI, and finally triggers a Read the Docs build

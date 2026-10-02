@@ -2,7 +2,7 @@
 name: easyvista-instance-discovery
 description: "Discover what one EasyVista deployment actually exposes with easyvista_python_client — get_api_spec reads the instance's own OpenAPI, list_reference_table reads any list route into column-free records, discover resolves one reference name to the ids/labels/codes/GUIDs in use, and describe_instance profiles the lot into an InstanceProfile. Use before hardcoding any id, when a ticket create is rejected for an unknown catalog, urgency, impact or group, when you need a STATUS_GUID for close_ticket, or when you need to know which routes a deployment declares at all."
 license: MIT
-compatibility: "Requires Python 3.10+, easyvista-python-client, and network access to an EasyVista Service Manager REST API. Every call here is a GET; nothing is created, updated or deleted."
+compatibility: "Requires Python 3.11+, easyvista-python-client, and network access to an EasyVista Service Manager REST API. Every call here is a GET; nothing is created, updated or deleted."
 metadata:
   package: easyvista-python-client
   version: "0.4.0"

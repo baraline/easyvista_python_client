@@ -15,19 +15,27 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-09-30
+## [0.4.0] - 2026-10-02
 
-Adds Markdown <-> memo HTML conversion as an optional extra, and **stops a
-ticket's workflow changing by accident -- which is a breaking release.**
-`set_status` is gone (it was the vendor close request under a name that hid
-it), `close_ticket` requires an explicit opt-in, and every write the package
-can tell may change a ticket's workflow is refused before it is sent unless the
-call says so. What it cannot tell is not covered (see *Notes*). Read
-*Upgrading* below.
+Adds Markdown <-> memo HTML conversion as an optional extra, drops Python
+3.10, and **stops a ticket's workflow changing by accident -- which is a
+breaking release.** `set_status` is gone (it was the vendor close request under
+a name that hid it), `close_ticket` requires an explicit opt-in, and every
+write the package can tell may change a ticket's workflow is refused before it
+is sent unless the call says so. What it cannot tell is not covered (see
+*Notes*).
 
-The converter is purely additive: the core package imports none of the extra's
-dependencies. Every breaking change is in the workflow guard, and is marked
-`**BREAKING**` in `### Changed` or `### Removed`.
+A `0.4.0` section was first prepared on 2026-09-30 around a different
+converter. It was never tagged or uploaded, and this section replaces it;
+`### Changed since the 2026-09-30 preparation` says what moved, for anyone who
+built against that branch.
+
+**Upgrading.** **Python 3.10 is no longer supported** (see `### Removed`). On
+3.10, pip keeps resolving `0.3.0`, the last release that installs there. The
+converter is purely additive: the core package imports none of the extra's
+dependencies. Every other breaking change is in the workflow guard, and each is
+marked `**BREAKING**` in `### Changed` or `### Removed`. Read `### Upgrading`
+below.
 
 ### Added
 
@@ -58,61 +66,93 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   appeared; the ticket's owning group was read on one of the two tickets and
   did not follow the action's. The person write (`done_by_id`) is unmeasured.
 - `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
-  optional extra `easyvista-python-client[content]` (`beautifulsoup4>=4.12`,
-  `markdown>=3.6`, `markdownify>=1.2`). Two static methods:
-  `from_transport(value)` reads a memo -- rich-text HTML or plain text -- as
-  canonical Markdown, and `to_transport(value)` renders Markdown as the HTML a
-  memo is written with.
+  optional extra `easyvista-python-client[content]`. It has two static
+  methods. `from_transport(value, *, plain_text_is_markdown=False)` reads a
+  memo, rich-text HTML or plain text, as Markdown. `to_transport(value)`
+  renders Markdown as the HTML a memo is written with.
 
-  It is a port of `glpi_python_client`'s `content/conversion.py` at `4fc3bed`,
-  the literal-safe converter, with the same rules, extensions and edge-case
-  handling, so with the same library versions the two produce the same
-  Markdown from the same HTML. **The two should move together.** The only code
-  divergence is the optional extra.
+  **The Markdown is CommonMark with GFM tables.** Writing renders it with
+  `cmark-gfm`, with only its `table` extension: a newline is a line break, and
+  raw HTML passes through. Reading converts HTML with `markdownify`, then
+  re-renders the result with `mdformat`, which keeps only the escapes
+  CommonMark needs.
 
-  **Text in a memo is literal, and the Markdown spells it so**: a character is
-  escaped exactly where python-markdown, with the four extensions
-  `to_transport` uses, would otherwise read it as syntax -- a typed `__init__`
-  reads as `\_\_init\_\_`, `\\serveur` as `\\\serveur`, `#4521` at a line start
-  as `\#4521`, `<Entrée>` as `&lt;Entrée>` -- and nowhere else, so ordinary
-  prose such as `fichier_de_test_v2.xlsx` or `R&D` comes back as typed.
-  Rendering the Markdown displays what the memo displayed, and reading that
-  back gives the same Markdown: both are tested with an HTML parser over
-  realistic memos and a seeded fuzzer. Nested lists nest and keep their
-  numbers, `<script>`, `<style>` and `<title>` bodies are dropped, and the
-  obsolete elements (`<font>`, `<center>`, ...) make a memo HTML. The
-  `markdownify` floor is 1.2 because the converter subclasses
-  `MarkdownConverter` and relies on its 1.x hooks, which 0.13 does not have.
-  A memo holding one real HTML element is read as HTML throughout, so
-  Markdown syntax beside it is kept as literal characters.
+  **Text in a memo is literal, and the Markdown spells it so.** A typed
+  `__init__` reads as `\_\_init\_\_`, `\\serveur` as `\\\serveur`, `# titre`
+  at a line start as `\# titre`, and `<Entrée>` as `\<Entrée>`. Ordinary prose
+  such as `fichier_de_test_v2.xlsx`, `C:\Temp`, `R&D` or `Ticket #4521` comes
+  back as typed. The aim is that rendering the Markdown displays what the
+  memo displayed, and that reading that back gives the same Markdown; the
+  measurements below say how far that held, and `docs/content.rst` lists the
+  shapes where it does not.
+
+  What else a reader sees:
+  - A memo with no HTML element is read as literal lines, a hard break per
+    line. Pass `plain_text_is_markdown=True` for a value that is your own
+    Markdown: it then passes through, stripped, unless it starts with `<` and
+    holds a real HTML element anywhere. So Markdown opening with an autolink
+    and carrying inline HTML further on is read as HTML, and loses the
+    autolink.
+  - A memo holding one real HTML element is read as HTML throughout, so
+    Markdown syntax beside it is kept as literal characters. The obsolete
+    elements (`<font>`, `<center>`, ...) count as HTML.
+  - Underline, highlight and strike, which CommonMark cannot spell, are kept
+    as raw `<u>`, `<mark>`, `<ins>` and `<s>`.
+  - A table nested in a table is flattened to its words, every one kept and in
+    order, and a table without a header row gains an empty one.
+  - Nested lists nest and keep their numbers. `<script>`, `<style>`,
+    `<template>` and `<title>` bodies are dropped.
+
+  Measured 2026-10-02 on 367 memos read from one preproduction instance on
+  2026-10-01 (tier 4, one instance, may not generalise): no memo changed a
+  word, and 367 of 367 readings were fixed points. 65 of them displayed
+  differently from the memo, each in a documented way that keeps its words:
+  in 62 a table gained an empty header row (61 of them a notification
+  template's flattened nested table), and 3 had no HTML element and were
+  read as literal lines. Synthetic shapes do lose words: a table row longer
+  than the first, a `|` in a cell's code or link, an image title holding a
+  `"`, and others that `docs/content.rst` lists.
+
+  It is a port of `glpi_python_client`'s `content/conversion.py` at `917f030`,
+  plus 15 fixes listed under `### Notes`. **The two should move together.**
 
   Why it is here: until now this package could only strip HTML to plain text,
   so a downstream GLPI-to-EasyVista sync wrote its own converter. Measured
   2026-09-30 (tier 4, one instance), a GLPI description holding a pasted URL
-  and a titled link reached EasyVista with neither link clickable: EasyVista
-  stored exactly the HTML it was sent, and that converter had escaped `&lt;` a
+  and a titled link reached EasyVista with neither link clickable. EasyVista
+  stored exactly the HTML it was sent. That converter had escaped `&lt;` a
   second time, fused the link title into the `href`, cut a URL at its first
-  `)`, and would read two lone asterisks as emphasis. Every one of those is a
-  regression test here.
+  `)`, and would read two lone asterisks as emphasis. This converter handles
+  each of those correctly (checked 2026-10-02 on synthetic equivalents): a
+  `&lt;` is escaped once, a link title stays a `title`, a URL keeps its
+  parentheses, and a lone `*` stays literal.
 
-  Two properties worth knowing before relying on it. **Deep nesting degrades
-  to text and never raises for depth**: the conversion is attempted and a
-  `RecursionError` answered with the memo's words, and the cliff is measured
-  at 493 levels on CPython 3.12-3.14 but 328 on 3.10. And **it is not a
-  sanitiser**: raw HTML and `javascript:` link targets in the Markdown go out
-  live. A caller relaying Markdown it did not write must neutralise both. Text
-  a memo *displays* as markup (`&lt;script&gt;`) reads back escaped, as the
-  text it is.
+  Two properties are worth knowing before relying on it:
+  - **Deep nesting degrades to text.** The conversion is attempted, and a
+    `RecursionError` is answered with the memo's words. From a shallow stack,
+    the deepest `<div>` document that still converts with its structure is 245
+    levels on CPython 3.11 and 327 on 3.12–3.14 (measured 2026-10-02). A caller
+    already within about 25 frames of the recursion limit still gets
+    `EasyvistaContentError`, and within the last few frames, a bare
+    `RecursionError`.
+  - **It is not a sanitiser.** Raw HTML, `javascript:` link targets and
+    `<javascript:...>` autolinks in the Markdown all go out live, and reading
+    keeps a memo's `javascript:` links. A caller relaying Markdown it did not
+    write must neutralise raw HTML and executable schemes. Text a memo
+    *displays* as markup, such as `&lt;script&gt;`, reads back escaped, as the
+    text it is.
 
-  Importing `easyvista_python_client.content` without the extra raises an
-  `ImportError` naming `pip install "easyvista-python-client[content]"`.
+  Importing `easyvista_python_client.content` without the extra, or with any
+  one of its six packages missing, raises an `ImportError` naming
+  `pip install "easyvista-python-client[content]"`.
 - `EasyvistaContentError`, a subclass of `EasyvistaError` exported at the
-  package root: raised for any converter fault other than depth, with the
-  parser's exception as `__cause__`. It lives in the core package, so it can
-  be caught whether or not the extra is installed.
-- The `dev` and `docs` extras now install the `content` extra's three
-  packages, since CI runs the converter's tests and the API reference imports
-  it. `testing/test_public_api.py` fails if the copies drift.
+  package root. It is raised for any converter fault the text fallback does
+  not absorb, with the underlying exception as `__cause__`. It lives in the
+  core package, so it can be caught whether or not the extra is installed.
+- The `dev` and `docs` extras now install the `content` extra's packages, with
+  the same bounds, since CI runs the converter's tests and the API reference
+  imports it. `testing/test_public_api.py` fails if the copies drift, or if
+  its list of the extra's import names stops matching `pyproject.toml`.
 
 ### Changed
 
@@ -194,6 +234,14 @@ dependencies. Every breaking change is in the workflow guard, and is marked
 
 ### Removed
 
+- **BREAKING** — Python 3.10. `requires-python` is now `>=3.11`, the 3.10
+  classifier is gone, and the CI and release matrices run 3.11–3.14. CPython
+  3.10 reaches end of life in October 2026 (PEP 619), and `glpi_python_client`,
+  whose converter `content` ports, dropped it in `524304a`. Two requirements
+  that existed only for 3.10 go with it: `typing-extensions` (a runtime
+  dependency on 3.10 only) and `tomli` (in `dev` and `docs`). Nothing moves on
+  3.11 and later. The timestamp parser keeps the normalisation it carried for
+  3.10, so it accepts and refuses the same values as before.
 - **BREAKING** `EasyvistaClient.set_status` / `AsyncEasyvistaClient.set_status`
   and `resources.requests.build_set_status`. They sent the vendor CLOSE request,
   which the vendor close page documents (tier 1, re-read 2026-10-02) as
@@ -212,6 +260,51 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   vendor's ticket update body (tier 1) and was seen to return 200 while dropping
   the status (0.2.0 entry below), and a ticket's status follows its workflow.
   `close_ticket` and `resources.requests.build_close_ticket` remain.
+
+### Changed since the 2026-09-30 preparation
+
+None of this reached PyPI, so it is not a break for anyone upgrading from
+`0.3.0`. It matters to a caller who built against the branch.
+
+- **The converter changed design.** The first preparation ported
+  `glpi_python_client` at `4fc3bed`, built on python-markdown with its
+  `nl2br`, `sane_lists`, `fenced_code` and `tables` extensions.
+  `glpi_python_client` replaced that design in `917f030` with markdownify +
+  mdformat inbound and cmark-gfm outbound, and this package follows it.
+- **The `content` extra's dependencies changed.** `markdown` is gone, and
+  `cmarkgfm`, `markdown-it-py`, `mdformat` and `mdformat-tables` are new. The
+  bounds are now `beautifulsoup4>=4.15`, `cmarkgfm>=2025.10.22`,
+  `markdown-it-py>=3.0,<4`, `markdownify>=1.2.3,<1.3`, `mdformat>=0.7.22,<0.8`
+  and `mdformat-tables>=1.0,<1.1`. The upper bounds are deliberate, because
+  the reader overrides private surfaces of `markdownify` and `mdformat`.
+  `docs/content.rst` gives the reason for each bound.
+- **The Markdown dialect is CommonMark with GFM tables**, not
+  python-markdown's. What a caller sees:
+  - A fence's language tag now survives a round trip.
+  - Strong inside emphasis keeps its bold.
+  - Two `<br>` in a row stay two line breaks.
+  - A `<pre>` opening a list item stays code.
+  - Struck text is kept as a raw `<s>` instead of losing the line.
+  - `~~text~~` is literal tildes on write, as before.
+  - `<javascript:alert(1)>` now becomes a live link, where python-markdown left
+    it as raw markup.
+- **Escapes differ.** A displayed `<` reads as `\<` rather than `&lt;`. `#4521`
+  at a line start is no longer escaped, since CommonMark needs a space after
+  `#`. A hard break reads as a trailing backslash rather than two spaces. Link
+  targets are kept in `<...>` where they need it, and a `[` or `]` in one comes
+  back percent-encoded.
+- **Plain text is read as literal lines.** A memo with no HTML element used to
+  pass through verbatim, so its text was read as Markdown and a typed
+  `__init__` rendered bold. It is now escaped, and each line kept with a hard
+  break. How EasyVista's UI displays such a memo is unverified (`O-MEMOFORMAT`).
+  `plain_text_is_markdown=True` restores pass-through for your own Markdown.
+- **The depth cliff moved.** With the old design it was measured at 493 levels
+  on CPython 3.12–3.14. With this one it is 327 there, and 245 on 3.11.
+- **The `beautifulsoup4` workaround is gone.** The old design rewrote
+  self-closing void tags to dodge a defect that dropped the text after a
+  `<br />` in a body that also used `<br>`. That defect no longer reproduced on
+  4.15.0 (measured 2026-09-30), so the floor is now 4.15 and the workaround is
+  removed.
 
 ### Upgrading
 
@@ -280,16 +373,31 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   interrupting the workflow (tier 1). A status that landed is not evidence that
   nothing else moved, and that finding was read as a safe status setter, which
   it was not. The 0.2.0 section is left as written.
-- `docs/content.rst`, a user-guide page for the converter: what a memo holds,
-  what each direction does, what survives a round trip, and what it does not
-  sanitise. The API reference gains a "Rich-text content" section.
-- `docs/vendor-api-reference.md` records the memo format as tier 4 (above) and
-  opens `O-MEMOFORMAT` for what is not yet known: what the web UI's own editor
-  writes, how it treats the newlines between blocks, and what it shows for raw
-  markup.
+- `docs/content.rst` is a user-guide page for the converter. It covers what a
+  memo holds, what each direction reads and writes, what text is escaped and
+  why, and what survives a round trip and what is lost. It also covers what
+  the converter does not sanitise, the dependency bounds, and the
+  CVE-2025-6069 guard. The API reference gains a "Rich-text content" section.
+- `docs/vendor-api-reference.md` records the memo format as tier 4 (above),
+  and the vendor's MEMO and TEXT AREA form objects as tier 1
+  (`docs.easyvista.com/docs/form`, read 2026-10-02). That page does not say
+  which object a ticket's or an action's memo is. A second tier-1 page
+  (`docs.easyvista.com/docs/service-manager-comment-log-creation`, read
+  2026-10-02) sets a custom comment-log field on the request form to "Text
+  area", which leans towards HTML display but is not about the built-in
+  memos. It also opens `O-MEMOFORMAT` for what is not yet known:
+  - how the UI displays a memo with no HTML element;
+  - what the web UI's own editor writes;
+  - how the UI treats the newlines between blocks;
+  - what it shows for raw markup;
+  - whether an empty table header row is visible;
+  - whether a percent-encoded link target still resolves.
 - The `easyvista-ticket-workflow` and `easyvista-ticket-actions` skills each
-  gain a gotcha: a memo stores what it is sent, and nothing renders Markdown
-  for you.
+  gain a gotcha: a memo stores what it is sent, nothing renders Markdown for
+  you, and the converter's dialect is CommonMark with GFM tables.
+- `docs/installation.rst`, `docs/development.rst`, `docs/publishing.rst`,
+  `README.md`, `CONTRIBUTING.md` and every skill's `compatibility` line now
+  state the Python 3.11 floor.
 
 ### Notes
 
@@ -304,20 +412,58 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   in `integration_tests/test_live_workflow_guard.py` are gated: its first two
   tests read only, and the rest write and run only when
   `EASYVISTA_TEST_RUN_WORKFLOW_CENSUS=1` is set.
-- The round-trip inventory is a test, not a promise: six Markdown shapes do
-  not survive one write-then-read cycle exactly, each a strict xfail with the
-  measured reason -- among them a lone newline, which comes back as a hard
-  break. Past the first cycle a second changes nothing more, except for
-  angle-bracket text such as `use the <Enter> key`, which is sent as a live
-  unknown tag and lost. What Markdown cannot carry at all when a memo is read
-  -- strikethrough, adjacent lists merging, two `<br>` in a row, a line break
-  in a table cell, a `<pre>` opening a list item -- is a second inventory,
-  `test_what_markdown_cannot_carry`, each case asserted to stabilise after
-  one cycle.
-- The `beautifulsoup4` defect glpi_python_client works around -- text after a
-  `<br />` dropped in a body that also used `<br>` -- no longer reproduces on
-  4.15.0 (measured 2026-09-30, CPython 3.10 and 3.12-3.14). The workaround
-  stays, because the extra accepts 4.12 and later.
+- **The 15 fixes on top of `glpi_python_client` `917f030`**, measured
+  together on this package's synthetic corpus and on the 367-memo sample, and
+  still to be proposed to `glpi_python_client`:
+  1. Escapes and character references in an image's alt text are kept.
+     markdown-it-py 3 leaves them as `text_special` tokens, which mdformat
+     rendered as nothing.
+  2. A paragraph line opening with `~~~` is escaped, because CommonMark reads
+     it as a fence.
+  3. A `!` that ends a text before a link is escaped, so it does not turn the
+     link into an image.
+  4. An alt text starting with `^` is escaped, because cmark-gfm never opens
+     an image on `![^`.
+  5. A `<` that mdformat leaves bare after an escaped one is escaped, so
+     `<<a@b.c>` no longer becomes an autolink.
+  6. A `<br>` inside inline code (`<code>`, `<kbd>`, `<samp>`) splits the
+     span, and a `|` in such a span in a table cell is escaped.
+  7. A table inside a heading or a link is flattened, as one inside a cell
+     already was.
+  8. A block inside a flattened cell stays on its link's line.
+  9. A flattened cell's edge counts as a space when deciding whether `**`
+     closes.
+  10. `<center>` is a block, as `<div>` is, except inside `<pre>`.
+  11. `<u>`, `<mark>` and `<ins>` are kept as raw tags.
+  12. Ordered items are numbered in linear time, where counting every earlier
+      item was quadratic, and `start` is read with `isdecimal`.
+  13. The pattern that splits emphasis and links into edges and content is
+      linear on runs of spaces or `<br>`. It was quadratic.
+  14. A `colspan` or `start` that is not a decimal number, such as `"²"` or
+      5,000 digits, degrades the memo to text instead of failing it.
+  15. Every `<` after a memo's last `>` is read as text. CPython's
+      `html.parser` before 3.11.14, 3.12.12 and 3.13.6 is quadratic on a run
+      of unfinished tags there (CVE-2025-6069, python/cpython#135462).
+- **What does not round-trip is documented, not hidden.** `docs/content.rst`
+  lists both sides.
+  - Markdown written and read back comes back in mdformat's canonical
+    spelling. Text in angle brackets that is not a URL is lost. An e-mail
+    autolink becomes a `mailto:` link, and `[`/`]` in a link target come back
+    percent-encoded.
+  - A memo read and written back kept every word on the 367-memo sample. A
+    nested table's grid becomes text in its cell, and a header-less table
+    gains an empty header row. The known holes, all synthetic and absent
+    from the sample, are listed too, the ones that lose words among them.
+
+  After one write-and-read cycle, a further one changes nothing more.
+- `cmarkgfm` 2025.10.22 bundles cmark-gfm `0.29.0.gfm.13`. PyPI lists no wheel
+  of that release for macOS x86_64 or Windows ARM64 (read 2026-10-02). Unless a
+  later release adds one, it builds from source there, which needs a C
+  compiler.
+- mdformat 1.x, markdown-it-py 4.x and mdformat-gfm 1.0 were tried and are not
+  adopted. markdown-it-py 4 caps the cells it fills in, which ends a ragged
+  table early and turns the rest into literal pipes. Re-measure before raising
+  those bounds.
 
 ## [0.3.0] - 2026-09-02
 
