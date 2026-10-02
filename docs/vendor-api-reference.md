@@ -244,25 +244,30 @@ Envelope: `HREF`, `record_count`, `total_record_count`, `records`, `@next`.
 ## Ticket workflow — what each documented write does to it (tier 1, read 2026-10-02)
 
 "A workflow is a process that handles a type of tickets, arranged in a sequence of
-actions performed in steps." … "Advancing through the steps of a workflow changes the
-status of a ticket." — https://docs.easyvista.com/docs/workflow.md (also
-references-tables.md: "The change of a meta-status performs actions in the workflow.")
+actions performed in steps." — https://docs.easyvista.com/docs/workflow.md.
+"Advancing through the steps of a workflow changes the status of a ticket." —
+https://docs.easyvista.com/docs/references-tables.md, Statuses section (where also:
+"The change of a meta-status performs actions in the workflow.")
 
 | Write | Effect on the workflow | Evidence |
 | --- | --- | --- |
 | `POST /requests` (create) | **starts** it | "3. The workflow associated with the ticket is started." — rest-api-create-an-incident-request.md |
 | `POST /requests/without-workflow` (virtual agent) | does not start it | "3. The workflow associated with the ticket will not be started." — ev-service-manager-rest-api-create-ticket-via-virtual-agent.md |
+| `PUT /requests/{rfc}/workflowstart?_flowcheck=…` (virtual agent) | **starts** it, for a ticket created without one | "This method allows the workflow from a specified ticket created via a virtual agent to be started." Body: "You must not supply any information (without curly brackets) in the body of the HTTP request." — ev-service-manager-rest-api-start-ticket-workflow-via-virtual-agent.md. The guard names this route (see the table below). |
 | `PUT /requests/{rfc}` `{"closed": …}` | **interrupts** it, whatever status is sent | "1. The workflow of the ticket is interrupted." (sub-bullet: "workflowstop function, with **rfc_number** passed as a parameter"); then status = "the final status of the ticket"; "The unfinished actions associated with the ticket are deleted." (`end_date_ut = NULL` iff `delete_actions = True`; otherwise `end_date` is the "Closing date of open actions"); "An anticipated closing action associated with the ticket is inserted."; "Any further modification is impossible." — rest-api-close-an-incident-request.md. An omitted `status_GUID` defaults to the Closed meta-status (same page). |
-| `PUT /actions/{rfc}` `{"end_action": …}` | **advances** it when the action is a workflow step | REST page: "If the action_id is not specified, all the ongoing actions associated with the rfc_number are ended." — rest-api-finish-an-action-attached-to-an-incident-request.md; it never mentions the workflow. UI Finish wizard: "The workflow will proceed to the next step." — action.md. Tier 4: 2026-09-01, one instance, 2/2 (step ended → ticket Résolu); a caller's own action, 3/3, no change. May not generalise. |
+| `PUT /actions/{rfc}` `{"end_action": …}` | **advances** it when the action is a workflow step | REST page: "If the action_id is not specified, all the ongoing actions associated with the rfc_number are ended." — rest-api-finish-an-action-attached-to-an-incident-request.md; it never mentions the workflow. UI Finish wizard: "The workflow will proceed to the next step." — action.md. Tier 4, one instance, may not generalise: 2026-09-01, 2/2 (step ended → ticket Résolu); a caller's own action, 3/3 across 2026-09-01 and 2026-09-02, no change. |
 | `PUT /requests/{rfc}` `{"suspended"…}` / `{"restarted"…}` | not documented | "A suspend action for the ticket is created." / "Create a reopening action for the ticket." — nothing on open actions or status. rest-api-suspend-an-incident-request.md, rest-api-reopen-an-incident-request.md |
-| Everything else (update a ticket, update/create an action or task, documents) | not documented | The update pages accept "all the fields … except" a list; no processing section. rest-api-update-an-incident-request.md, rest-api-update-an-action.md |
+| Update a ticket, update an action (any body not named above) | not documented | Each page accepts "all the fields from the SD_REQUEST table except those mentioned below" / "…from the AM_ACTION table…", has no processing section and does not contain the word "workflow". rest-api-update-an-incident-request.md, rest-api-update-an-action.md |
+| Create an action | not documented | Processing section: "An action is created for the ticket." then conditional logic on `parent_action_id` (which action the new one attaches to); the page does not contain the word "workflow". rest-api-create-an-action-for-an-incident-request.md |
+| Create a task | not documented | Processing section: "A task associated with the ticket is created."; the page does not contain the word "workflow". rest-api-create-a-task-for-an-incident-request.md |
+| Attach or delete a document | not documented | Attach: "They are attached to the specified ticket."; the delete page has no processing section; neither contains the word "workflow". rest-api-upload-and-attach-documents-to-an-incident-request.md, rest-api-delete-a-ticket-attachment.md |
 
 The vendor documents no REST write that sets a ticket's status outside the rows
 above: the ticket update page excludes `status_id` from its body, with
 `sd_catalog_id`, `initial_sd_catalog_id` and `parent_request_id`
-(rest-api-update-an-incident-request.md). There is no status setter; this package
-removed `set_status` (it was the close request). Not documented is not the same as
-impossible — see the business-rule caveat below.
+(rest-api-update-an-incident-request.md). The vendor documents no status setter, and
+this package has none: it removed `set_status`, which was the close request. Not
+documented is not the same as impossible — see the business-rule caveat below.
 
 **The vendor documents no REST route that reassigns or transfers an action.** The
 UI's "Assign action" button runs a wizard ("The action will automatically be
@@ -279,11 +284,26 @@ neutral.
 
 **The guard.** `easyvista_python_client.workflow` names what a write may do, and the
 transport refuses it, before any request is sent, unless the call passes
-`allow_workflow_effect=`. Named: the four bodies above on any path; on ticket routes,
-status and catalog columns; on action routes, end date, type, parent,
-workflow/stage/step and ticket links; ticket sub-routes other than
-`actions`/`tasks`/`documents`. Not named: text, owner, group, done-by, impact,
-urgency. A column deny-list cannot be complete, and this one says so.
+`allow_workflow_effect=`. What it names, for a request that is not a read, exactly as
+`easyvista_python_client/workflow.py` holds it (keys are matched case-folded, as
+top-level body keys):
+
+| Where | Named | Effect named |
+| --- | --- | --- |
+| any path | body keys `closed` | `INTERRUPTS` |
+| any path | body keys `end_action` | `ADVANCES` |
+| any path | body keys `suspended`, `restarted` | `UNKNOWN` |
+| `requests/{rfc}` | body keys `status_id`, `status_guid`, `sd_catalog_id`, `initial_sd_catalog_id`, `catalog_guid`, `catalog_code`, `parent_request_id`; and a `DELETE` of the ticket | `UNKNOWN` |
+| `requests/without-workflow` | the route itself | `UNKNOWN` |
+| `requests/{rfc}/<sub>`, `<sub>` not `actions`, `tasks` or `documents` | the route itself: `close` is `INTERRUPTS`; any other (`suspend`, `restart`, `workflowstart`, or one a deployment adds) is `UNKNOWN` | as stated |
+| `requests/{rfc}/actions` (create an action) | body keys `end_date_ut`, `end_date`, `status_id_on_terminate`, `workflow_id`, `stage_id`, `process_step_id` | `UNKNOWN` |
+| `requests/{rfc}/tasks` (create a task) | body keys `status_id_on_terminate`, `workflow_id`, `stage_id`, `process_step_id`, `parent_action_id` | `UNKNOWN` |
+| `actions/{id}` | body keys `end_date_ut`, `end_date`, `status_id_on_terminate`, `workflow_id`, `stage_id`, `process_step_id`, `parent_action_id`, `action_type_id`, `action_type_guid`, `action_type_name`, `request_id`, `rfc_number` | `UNKNOWN` |
+
+So creating an action with a `parent_action_id`, a type or a ticket link needs no
+opt-in (the create-action set is narrower than the update set), and a task's end date
+is ordinary because a task is born ended. Not named anywhere: text, owner, group,
+done-by, impact, urgency. A column deny-list cannot be complete, and this one says so.
 
 * **A request counts as a read only when its method and every method-override header
   value are reads.** The method and the value of each of `X-HTTP-Method-Override`,

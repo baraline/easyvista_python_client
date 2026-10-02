@@ -524,7 +524,8 @@ class EasyvistaClient:
         **So this is not a status setter, and there is none.** A ticket's
         status follows its workflow: "Advancing through the steps of a workflow
         changes the status of a ticket." (tier 1,
-        https://docs.easyvista.com/docs/workflow.md). A non-final status sent
+        https://docs.easyvista.com/docs/references-tables.md, Statuses section).
+        A non-final status sent
         here still interrupts the workflow and closes the ticket's open
         actions -- the page documents final statuses only, and nothing exempts
         the others. To move a ticket through its workflow, end the workflow

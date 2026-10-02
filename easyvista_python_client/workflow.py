@@ -2,13 +2,18 @@
 
 EasyVista drives a ticket's status from its workflow, not from a field: "A
 workflow is a process that handles a type of tickets, arranged in a sequence of
-actions performed in steps." ... "Advancing through the steps of a workflow
-changes the status of a ticket." (tier 1,
-https://docs.easyvista.com/docs/workflow.md, read 2026-10-02). Of the REST
-writes the vendor documents, three touch the workflow:
+actions performed in steps." (https://docs.easyvista.com/docs/workflow.md) and
+"Advancing through the steps of a workflow changes the status of a ticket."
+(https://docs.easyvista.com/docs/references-tables.md, Statuses section); both
+tier 1, read 2026-10-02. Of the REST writes the vendor documents, four touch
+the workflow:
 
 * creating a ticket starts it -- "3. The workflow associated with the ticket
   is started." (https://docs.easyvista.com/docs/rest-api-create-an-incident-request.md);
+* ``PUT requests/{rfc_number}/workflowstart`` starts the workflow of a ticket
+  created through the virtual-agent route, which does not start it
+  (https://docs.easyvista.com/docs/ev-service-manager-rest-api-start-ticket-workflow-via-virtual-agent.md);
+  this module names it by the sub-route rule below, as ``UNKNOWN``;
 * the ``closed`` body on ``PUT requests/{rfc_number}`` interrupts it -- "1. The
   workflow of the ticket is interrupted."
   (https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md),
@@ -30,10 +35,12 @@ site allowed it explicitly, with ``allow_workflow_effect=``.
 ``end_action``, ``suspended``, ``restarted`` -- as a top-level body key, in any
 casing, on any path. (2) On ticket and action routes, the columns that hold or
 select workflow state: a status, a catalog (which selects the workflow), the
-workflow, stage and step links, an action's end date, type, parent or ticket.
-(3) Ticket sub-routes that are workflow commands rather than records. Not
-named: data the workflow merely reads -- text, owner, group, done-by, impact,
-urgency. Reassigning an action's group or person is therefore not refused.
+workflow, stage and step links, and on an existing action its end date, type,
+parent or ticket (creating an action or a task names a narrower set, below).
+(3) Ticket sub-routes that are workflow commands rather than records, and
+``requests/without-workflow`` and the deletion of a ticket. Not named: data
+the workflow merely reads -- text, owner, group, done-by, impact, urgency.
+Reassigning an action's group or person is therefore not refused.
 
 **This is a deny-list, and a deny-list of columns cannot be complete**: the
 vendor's update pages accept "all the fields from the SD_REQUEST table except
