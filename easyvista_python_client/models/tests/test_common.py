@@ -230,6 +230,7 @@ def test_an_unknown_field_names_itself_and_extra_payload():
     assert "ctalog_guid" in message
     assert "extra_payload" in message
     assert "a 200 is not a receipt on this API." in message
+    assert "allow_workflow_effect=" in message
 
 
 def test_a_known_field_is_not_intercepted():

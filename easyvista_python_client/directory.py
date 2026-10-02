@@ -60,7 +60,8 @@ DEPARTMENT_NOTE_FIELDS: tuple[str, ...] = (DEPARTMENT_MEMO_FIELD,)
 #:
 #: ``END_DATE_UT`` is included on purpose: a status id is per-instance and says
 #: nothing portable about openness, while ``END_DATE_UT`` is empty on an open
-#: ticket and stamped on a closed one. ``STATUS`` (the nested object) and
+#: ticket and stamped once it is resolved or closed (at resolution, not
+#: closure). ``STATUS`` (the nested object) and
 #: ``STATUS_ID`` are both requested so ``.reference("STATUS")`` resolves a label
 #: where the instance returns one and an id where it does not.
 #:

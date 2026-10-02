@@ -105,7 +105,7 @@ The short version is one call:
            print("gap:", gap, reason)
 
        for status in profile.references["STATUS"]:
-           # .guid is what close_ticket and set_status address a status by.
+           # .guid is what close_ticket addresses a status by.
            print(status.id, status.label, status.guid)
 
 That is :meth:`~easyvista_python_client.EasyvistaClient.describe_instance`; see
@@ -169,7 +169,8 @@ returns ``TITLE`` empty, for instance, so a listing wants
    **Never infer "closed" from a status id.** They are per-instance: on the
    verified instance ``8`` is *Clôturé* and ``12`` is *En cours* — adjacent
    numbers, opposite meanings. ``end_date_ut`` is the portable signal: empty on
-   an open ticket, stamped on a closed one.
+   an open ticket, stamped once it is resolved or closed -- at resolution, not
+   closure (measured 2026-09-02 on one instance; it may not generalise).
 
 Step 6 — **pin what you found in your own configuration.** This package holds
 no registry of instance values and never will: they belong to your deployment,
@@ -207,9 +208,11 @@ asynchronous client inside an event loop (FastAPI, aiohttp) or for concurrent fa
    a ticket, 7 branches for a department.
 
    Two practical consequences. ``max_retries`` defaults to ``0``, so raise it if you fan out — a
-   429 from a rate-limited instance is not retried otherwise. And share one open client across your
-   tasks rather than opening one per task: ``aclose()`` is terminal and is not reference-counted, so
-   the first ``async with`` block to exit closes the client for everyone still using it.
+   429 from a rate-limited instance is not retried otherwise (a write that names a workflow effect
+   and was allowed with ``allow_workflow_effect=`` is sent once whatever ``max_retries`` says). And
+   share one open client across your tasks rather than opening one per task: ``aclose()`` is
+   terminal and is not reference-counted, so the first ``async with`` block to exit closes the
+   client for everyone still using it.
 
    ``create_tickets`` is deliberately **not** concurrent. Those are writes, EasyVista assigns the
    RFC number server-side, and a failure part-way through a concurrent batch would leave you unable
@@ -344,41 +347,43 @@ Create several tickets in one call with :meth:`~easyvista_python_client.Easyvist
        PostRequest(catalog_code="INC_STANDARD", title="Printer B down"),
    ])
 
-Fetch, update, and close a ticket by its RFC number:
+Fetch, update, and close a ticket by its RFC number. Closing is not a status
+change -- it interrupts the ticket's workflow, which is why the call must say so
+with ``allow_workflow_effect`` (see :ref:`changing-a-tickets-status`):
 
 .. code-block:: python
 
-   from easyvista_python_client import RequestUpdate
+   from easyvista_python_client import RequestUpdate, WorkflowEffect
 
    fetched = client.get_ticket(ticket.rfc_number)
    client.update_ticket(ticket.rfc_number, RequestUpdate(description="Updated details"))
 
-   # Close with your instance's "closed" status GUID.
+   # Close with your instance's "closed" status GUID. Close only when closing
+   # is the intent: it interrupts the ticket's workflow.
    client.close_ticket(
        ticket.rfc_number,
+       allow_workflow_effect=WorkflowEffect.INTERRUPTS,
        status_guid="{00000000-0000-0000-0000-000000000000}",
        delete_actions=1,
        comment="Resolved",
    )
 
-   # Every argument is optional -- this sends the close with no status of its
-   # own, letting the instance decide where the ticket lands.
-   client.close_ticket(ticket.rfc_number)
-
    # Verify by re-reading, not by the return value: end_date_ut is empty on an
-   # open ticket and stamped on a closed one, and is more portable than any
-   # status id (on the verified instance 8 is "Clôturé" and 12 is "En cours").
+   # open ticket and stamped once it is resolved or closed, and is more portable
+   # than any status id (on the verified instance 8 is "Clôturé" and 12 is
+   # "En cours").
    assert client.get_ticket(ticket.rfc_number).end_date_ut is not None
 
 .. warning::
 
-   Where a ticket lands when ``status_guid`` is omitted is **not established by
-   this package**. The client simply omits the key; what the server does with a
-   status-less ``closed`` body has never been measured against a live instance
-   here, and the behaviour is not recorded in ``docs/vendor-api-reference.md``.
-   Try it on a throwaway ticket and re-read before you build on it. Passing
-   your instance's closed ``status_guid`` explicitly is the form this package's
-   live suite actually exercises.
+   Where a ticket lands when ``status_guid`` is omitted is **not measured by
+   this package**. The client simply omits the key. The vendor's close page
+   documents an omitted ``status_GUID`` as defaulting to the Closed meta-status
+   (tier 1, recorded in ``docs/vendor-api-reference.md``, "Ticket workflow"),
+   but no live instance has been asked here. Try it on a throwaway ticket and
+   re-read before you build on it. Passing your instance's closed
+   ``status_guid`` explicitly is the form this package's live suite actually
+   exercises.
 
 .. note::
 
@@ -401,7 +406,9 @@ any write model; keys are serialized to their ``e_*`` API names automatically.
 There are **two** escape hatches, and they are not interchangeable. ``custom_fields`` only ever
 emits ``e_``-prefixed keys, so it cannot reach an *official* column this package declines to
 declare. ``extra_payload`` — also on every write model — is the un-prefixed one: whatever you put
-in it reaches the wire exactly as written.
+in it reaches the wire exactly as written -- unless it may change a ticket's workflow, in which
+case the transport refuses the request before sending it (see
+:ref:`changing-a-tickets-status`).
 
 .. code-block:: python
 
@@ -424,6 +431,110 @@ Three properties are worth knowing before you reach for it:
   behaves differently — including for the fields :class:`~easyvista_python_client.RequestUpdate`
   deliberately omits. Re-read the record afterwards: on this API a write can return HTTP 200,
   apply one field and drop another in silence.
+
+.. _changing-a-tickets-status:
+
+Changing a ticket's status
+--------------------------
+
+There is no status setter. A ticket's status follows its workflow -- "Advancing
+through the steps of a workflow changes the status of a ticket." (vendor
+reference-tables page, Statuses section, tier 1:
+https://docs.easyvista.com/docs/references-tables.md) -- and the API offers
+three things that touch it:
+
+* :meth:`~easyvista_python_client.EasyvistaClient.end_action` on the workflow
+  step's open action moves the workflow on. The vendor's REST page for the call
+  never mentions the workflow; the support is the UI's Finish wizard ("The
+  workflow will proceed to the next step.", tier 1,
+  https://docs.easyvista.com/docs/action.md) and one measurement (2026-09-01,
+  one instance, 2 of 2, so it may not generalise: the ticket reached its
+  resolved status). It needs ``allow_workflow_effect=WorkflowEffect.ADVANCES``.
+* :meth:`~easyvista_python_client.EasyvistaClient.close_ticket` is the vendor's
+  close request. The vendor documents it as interrupting the workflow ("The
+  workflow of the ticket is interrupted.", tier 1,
+  https://docs.easyvista.com/docs/rest-api-close-an-incident-request.md) and
+  inserting an anticipated closing action. The ticket's unfinished actions are
+  deleted, or ended: that they are *ended* is this package's reading of the
+  page's ``end_date`` row rather than an explicit sentence, and the page
+  documents final statuses only, so do not read ``status_guid`` as a way to pick
+  an in-progress status. It needs ``allow_workflow_effect=WorkflowEffect.INTERRUPTS``.
+* Suspend and reopen are documented by the vendor but not wrapped here; their
+  pages say only that a suspend, or a reopening, action is created, and their
+  effect on the open actions is unmeasured.
+  :meth:`~easyvista_python_client.EasyvistaClient.send` reaches them with
+  ``allow_workflow_effect=WorkflowEffect.UNKNOWN``.
+
+The vendor documents no REST write that sets a ticket's status outside those
+(tier 1, ``docs/vendor-api-reference.md``, "Ticket workflow"), so this package
+has no setter to offer. Not documented is not the same as impossible: a business
+rule on your instance can run on any write.
+
+Creating a ticket starts its workflow -- the vendor's create page lists "The
+workflow associated with the ticket is started." among what a create does (tier
+1). So read the status a new ticket landed on with
+:meth:`~easyvista_python_client.EasyvistaClient.get_ticket`; do not follow the
+create with ``close_ticket`` to land an initial status, because that interrupts
+the workflow you just started. ``PostRequest.workflow_start=False`` is not a way
+to avoid it: measured a no-op (2026-09-01, one instance: two tickets identical
+but for this flag came back byte-identical), and the vendor create page
+documents no such parameter. A workflow-less create is the separate
+virtual-agent route, ``POST requests/without-workflow``, which the guard below
+refuses unless allowed.
+
+A write that may change the workflow and does not say so is refused before it is
+sent, with :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` -- a
+``ValueError``, deliberately not an ``EasyvistaError``, because retrying it can
+never succeed. ``update_ticket``, ``close_ticket``, ``create_action``,
+``create_task``, ``update_action``, ``end_action`` and ``send`` take
+``allow_workflow_effect``: one :class:`~easyvista_python_client.WorkflowEffect`
+or an iterable of them, and nothing else (a string is a ``TypeError``). A write
+that names a workflow effect and was allowed is sent once, never retried,
+whatever ``max_retries`` says.
+
+.. code-block:: python
+
+   from easyvista_python_client import (
+       EasyvistaWorkflowEffectRefused,
+       RequestUpdate,
+       WorkflowEffect,
+   )
+
+   try:
+       # A status column on a ticket may change its workflow, so this is
+       # refused before anything is sent.
+       client.update_ticket(rfc, RequestUpdate(extra_payload={"STATUS_ID": 4}))
+   except EasyvistaWorkflowEffectRefused as exc:
+       print(exc.effects, exc.triggers)
+
+   # Ending the workflow step's own open action moves the workflow on; say so.
+   client.end_action(
+       rfc,
+       action_id=step_action_id,
+       allow_workflow_effect=WorkflowEffect.ADVANCES,
+   )
+
+``end_action`` is guarded differently, because what it does depends on which
+action you name and the request body cannot say. Unless ``allow_workflow_effect``
+includes ``WorkflowEffect.ADVANCES`` it first reads the action (one read,
+projecting ``ACTION_ID`` and ``WORKFLOW_ID``) and refuses, with no end request
+sent, a workflow step (``WORKFLOW_ID`` set), a record that comes back without the
+``WORKFLOW_ID`` column at all -- which cannot be told from a step -- and a read
+that returns a different ``ACTION_ID`` from the one you asked for.
+``end_all=True``, which ends every open action on the ticket, is always refused
+without ``ADVANCES``, and an explicit ``action_id`` must be a positive integer.
+Ending an action you created yourself needs no opt-in. ``WORKFLOW_ID`` is what
+separates the engine's rows from a caller's (tier 4: 1500 of 1500 rows,
+2026-09-02, one instance; it may not generalise).
+
+The guard is a deny-list of body keys, columns and routes (see
+:mod:`easyvista_python_client.workflow`), and a deny-list of columns cannot be
+complete: the vendor's update pages accept "all the fields from the SD_REQUEST
+table except those mentioned below" (tier 1), so a write the guard does not name
+is unclassified, not proven harmless. One refusal ignores
+``allow_workflow_effect`` altogether: ``send`` refuses a path with a dot segment,
+a percent-encoded slash or a backslash, because the request could reach a route
+other than the one that was checked.
 
 Actions (comments / followups)
 -------------------------------
@@ -627,8 +738,13 @@ comes back early by your instance's UTC offset.
    type-1 *Validation Self Service* action (2 tickets, 2/2); a control showed
    ending a type-94 action the caller had created changed neither the status
    nor the action count. Ending your own action is inert, ending a workflow
-   step is not. Omitting ``action_id`` ends **every** open action, which on a
-   ticket whose only open one is its workflow step means resolving it.
+   step is not -- which is why ``end_action`` refuses one unless the call
+   passes ``allow_workflow_effect=WorkflowEffect.ADVANCES`` (see
+   :ref:`changing-a-tickets-status`). The vendor documents the id-less form as
+   ending **every** open action, which on a ticket whose only open one is its
+   workflow step means resolving it; here that form is reachable only through
+   ``end_all=True`` (also needing ``ADVANCES``), and a bare ``action_id=None``
+   raises ``ValueError``.
 
 .. warning::
 
@@ -1385,6 +1501,13 @@ The hierarchy is: :class:`~easyvista_python_client.EasyvistaAuthError` (401/403)
 :class:`~easyvista_python_client.EasyvistaServerError` (5xx), and
 :class:`~easyvista_python_client.EasyvistaConnectionError` (transport / timeout).
 
+One error sits **outside** that hierarchy on purpose:
+:class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused`, a plain
+``ValueError``. It is raised before anything is sent, so it has no status code
+and nothing transient about it: the same call can never succeed on a retry, and a
+status-code-less ``EasyvistaError`` would invite exactly that retry. Catch it
+separately; see :ref:`changing-a-tickets-status`.
+
 End-to-end workflow
 -------------------
 
@@ -1392,7 +1515,12 @@ Create a ticket, add a comment, close it, and read it back:
 
 .. code-block:: python
 
-   from easyvista_python_client import EasyvistaClient, PostRequest, PostTask
+   from easyvista_python_client import (
+       EasyvistaClient,
+       PostRequest,
+       PostTask,
+       WorkflowEffect,
+   )
 
    with EasyvistaClient.from_env() as client:
        ticket = client.create_ticket(
@@ -1418,8 +1546,10 @@ Create a ticket, add a comment, close it, and read it back:
            ticket.rfc_number,
            PostTask(action_type_id=94, group_id=3, description="Investigating"),
        )
+       # Close only when closing is the intent: it interrupts the ticket's workflow.
        client.close_ticket(
            ticket.rfc_number,
+           allow_workflow_effect=WorkflowEffect.INTERRUPTS,
            status_guid="{00000000-0000-0000-0000-000000000000}",
            comment="Replaced the VPN concentrator",
        )

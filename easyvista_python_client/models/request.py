@@ -230,16 +230,21 @@ class PostRequest(EasyvistaWriteModel):
     you can read again, follow the create with
     ``update_ticket(rfc, RequestUpdate(description=...))``.
 
-    ``workflow_start`` is a boolean and is sent even when ``False``, so a
-    caller disabling the workflow is not silently overridden -- that part is
-    real and unchanged. Its provenance is not like the fields above, though:
-    it does **not** appear anywhere in the vendor's own create-body
-    documentation. It is declared only in the instance's own OpenAPI schema
-    for ``POST /requests`` -- "Optional. If true, starts the workflow for the
-    created incident." -- which makes it **tier 3, illustrative only**: that
-    schema is example-derived, not a normative contract (see
-    ``docs/vendor-api-reference.md``). Treat it as unverified until tested
-    against the deployment you use it on.
+    ``workflow_start`` is a boolean and is sent as given, ``False`` included.
+    Its provenance is not like the fields above: it does **not** appear
+    anywhere in the vendor's own create-body documentation. It is declared only
+    in the instance's own OpenAPI schema for ``POST /requests`` -- "Optional.
+    If true, starts the workflow for the created incident." -- which makes it
+    **tier 3, illustrative only**: that schema is example-derived, not a
+    normative contract (see ``docs/vendor-api-reference.md``).
+
+    Measured a no-op (tier 4, 2026-09-01, one instance: two tickets identical
+    but for this flag came back byte-identical), so ``workflow_start=False`` is
+    not a way to create a ticket without its workflow. The vendor create page
+    documents no such parameter and states the workflow is started. A
+    workflow-less create is the separate virtual-agent route,
+    ``POST requests/without-workflow``, which the workflow guard refuses unless
+    allowed (see :mod:`easyvista_python_client.workflow`).
     """
 
     catalog_guid: str | None = None

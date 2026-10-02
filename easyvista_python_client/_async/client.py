@@ -233,6 +233,22 @@ class AsyncEasyvistaClient:
 
     # --- tickets -------------------------------------------------------------
     async def create_ticket(self, ticket: PostRequest) -> Request:
+        """Create one ticket -- which starts its workflow.
+
+        Per the vendor create page (tier 1,
+        https://docs.easyvista.com/docs/rest-api-create-an-incident-request.md):
+        a CALL action is inserted with its end date set to the ticket's
+        submission date, so it is born ended, then "3. The workflow
+        associated with the ticket is started." A fresh ticket carries one open
+        workflow-step action (tier 4, 2026-09-01, one instance).
+
+        **Do not follow the create with** :meth:`close_ticket` **to land an
+        initial status.** That interrupts the workflow you just started; read
+        the status the ticket landed on with :meth:`get_ticket` instead.
+
+        A 590 on create may still have created the row: reconcile by
+        ``EXTERNAL_REFERENCE`` rather than retrying.
+        """
         spec, parse = requests_res.build_create_ticket(
             ticket, context=self._validation_context
         )
