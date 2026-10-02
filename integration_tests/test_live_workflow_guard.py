@@ -27,8 +27,11 @@ def _one_of_each(client: EasyvistaClient) -> tuple[int, int]:
     """Return (a workflow-step action id, a non-workflow action id)."""
     step: int | None = None
     other: int | None = None
+    # The default order is oldest-first, and on the measured instance
+    # (2026-10-02) the oldest tickets carry only an already-ended CALL action
+    # and no workflow step, so the scan reads the newest tickets instead.
     for ticket in client.iter_tickets(
-        fields=["RFC_NUMBER"], max_records=_TICKETS_TO_SCAN
+        fields=["RFC_NUMBER"], sort="REQUEST_ID DESC", max_records=_TICKETS_TO_SCAN
     ):
         if not ticket.rfc_number:
             continue
