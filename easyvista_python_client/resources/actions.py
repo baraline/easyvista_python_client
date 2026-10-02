@@ -247,6 +247,10 @@ def build_end_action(
     End Date" (measured 2026-09-01 on one instance -- one instance, one date,
     so it may not generalise). ``elapsed_time`` is a number of **minutes**.
 
+    ``action_id`` must be a positive integer, as for ``update_action``: it is
+    sent as an integer, and a blank, an RFC number or any other value is
+    refused rather than named in the body.
+
     A blank ``rfc_number`` is refused rather than allowed to build ``PUT
     actions/``, which addresses the collection instead of a ticket.
     """
@@ -275,7 +279,10 @@ def build_end_action(
         )
     end: dict[str, Any] = {}
     if action_id is not None:
-        end["action_id"] = action_id
+        # An integer on the wire, as ``update_action`` addresses one: a blank
+        # or an RFC number is no action id, and would otherwise let the
+        # client's pre-flight read address the collection (``GET actions/``).
+        end["action_id"] = int(_require_action_id(action_id))
     if start_date is not None:
         end["start_date"] = start_date
     if end_date is not None:

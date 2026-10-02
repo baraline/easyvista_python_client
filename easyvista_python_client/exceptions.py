@@ -86,16 +86,20 @@ class EasyvistaContentError(EasyvistaError):
 class EasyvistaWorkflowEffectRefused(ValueError):
     """A write that may change a ticket's workflow was refused before it was sent.
 
-    Raised with no request made: by the transport, when a request names a
-    :class:`~easyvista_python_client.WorkflowEffect` that the call did not
-    allow through ``allow_workflow_effect=``; and by ``end_action``, when the
-    action it was asked to end is a workflow step or cannot be shown not to be.
+    The refused write is never sent. The transport raises this before it sends
+    a request that names a :class:`~easyvista_python_client.WorkflowEffect` the
+    call did not allow through ``allow_workflow_effect=``; and ``end_action``
+    raises it before its end request, when the action it was asked to end is a
+    workflow step or cannot be shown not to be. On the ``end_action`` path one
+    read of that action may precede the refusal -- it is how the action was
+    judged -- but the end request is never made.
 
-    **Deliberately not an** :class:`EasyvistaError`. Nothing was sent, so there
-    is no status code and nothing transient: the same call can never succeed on
-    a retry, and a caller that treats a status-code-less ``EasyvistaError`` as
-    "try again later" would retry it for ever. It subclasses ``ValueError``
-    because it refuses the arguments, as this package's other local refusals do.
+    **Deliberately not an** :class:`EasyvistaError`. The refused write was
+    never sent, so there is no status code from it and nothing transient: the
+    same call can never succeed on a retry, and a caller that treats a
+    status-code-less ``EasyvistaError`` as "try again later" would retry it for
+    ever. It subclasses ``ValueError`` because it refuses the arguments, as
+    this package's other local refusals do.
 
     ``effects`` holds the refused effects; ``triggers`` the ``(what, effect)``
     pairs that named them -- a body key, a column, or a route.

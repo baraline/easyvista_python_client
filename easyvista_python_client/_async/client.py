@@ -928,7 +928,9 @@ class AsyncEasyvistaClient:
            the id-less form as ending *every open action on the ticket*, which
            on a ticket whose only open action is its workflow step means
            resolving it. That form is reachable only through ``end_all=True``;
-           a bare ``action_id=None`` raises ``ValueError`` before any request.
+           a bare ``action_id=None`` raises ``ValueError`` before any request,
+           as does an ``action_id`` that is not a positive integer -- a blank, or
+           an RFC number -- which is sent as an integer when it is one.
            The guard exists because ``Action.action_id`` is legitimately
            ``None`` all over this package — :meth:`create_action`'s response
            carries no id, and a ``fields=`` projection without ``ACTION_ID``
@@ -943,10 +945,11 @@ class AsyncEasyvistaClient:
            ``ACTION_ID`` and ``WORKFLOW_ID`` -- and refuses, with
            :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` and
            no end request sent, when the action is a workflow step
-           (``WORKFLOW_ID`` set) or when the record comes back without the
-           column at all, which cannot be told apart from a step. ``WORKFLOW_ID``
-           is what separates the engine's rows from a caller's (tier 4, 1500 of
-           1500 rows, 2026-09-02, one instance -- see
+           (``WORKFLOW_ID`` set), when the record comes back without the
+           column at all, which cannot be told apart from a step, or when the
+           record names a different ``ACTION_ID`` than the one asked for.
+           ``WORKFLOW_ID`` is what separates the engine's rows from a caller's
+           (tier 4, 1500 of 1500 rows, 2026-09-02, one instance -- see
            :attr:`Action.is_workflow_generated`). Whether an action created under
            the step by :meth:`create_action` carries one is unmeasured; if it
            does, ending it is refused too -- the safe direction. ``end_all=True``
@@ -1039,13 +1042,26 @@ class AsyncEasyvistaClient:
                 effects=advances,
                 triggers=(("end_action", WorkflowEffect.ADVANCES),),
             )
+        # end_action built the end spec first, which refused anything but a
+        # positive integer, so this conversion cannot fail and the read
+        # addresses exactly the id the end request will name.
+        wanted = int(action_id)
         spec, parse = actions_res.build_get_action(
-            action_id, fields=_WORKFLOW_PROBE_FIELDS, context=self._validation_context
+            wanted, fields=_WORKFLOW_PROBE_FIELDS, context=self._validation_context
         )
         target = parse(await self._transport.send(spec))
+        if target.action_id is not None and target.action_id != wanted:
+            raise EasyvistaWorkflowEffectRefused(
+                f"the read of action {wanted} returned a different action "
+                f"(ACTION_ID {target.action_id}), so ending it was refused rather "
+                "than risked. Pass allow_workflow_effect="
+                "WorkflowEffect.ADVANCES to end it anyway.",
+                effects=advances,
+                triggers=(("ACTION_ID mismatch", WorkflowEffect.ADVANCES),),
+            )
         if "workflow_id" not in target.model_fields_set:
             raise EasyvistaWorkflowEffectRefused(
-                f"could not tell whether action {action_id} is a workflow step: its "
+                f"could not tell whether action {wanted} is a workflow step: its "
                 "record came back without WORKFLOW_ID, so ending it was refused "
                 "rather than risked. Pass allow_workflow_effect="
                 "WorkflowEffect.ADVANCES to end it anyway.",
@@ -1054,7 +1070,7 @@ class AsyncEasyvistaClient:
             )
         if target.workflow_id is not None:
             raise EasyvistaWorkflowEffectRefused(
-                f"action {action_id} is a workflow step (WORKFLOW_ID "
+                f"action {wanted} is a workflow step (WORKFLOW_ID "
                 f"{target.workflow_id}): ending it advances the ticket's workflow. "
                 "Pass allow_workflow_effect=WorkflowEffect.ADVANCES if that is the "
                 "intent.",

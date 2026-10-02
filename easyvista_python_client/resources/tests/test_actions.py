@@ -261,10 +261,36 @@ def test_build_end_action_sends_a_falsy_elapsed_time(value):
     assert spec.json["end_action"]["elapsed_time"] == value
 
 
-def test_build_end_action_sends_a_falsy_action_id():
-    """``action_id=0`` must address action 0, not become the bulk form."""
-    spec, _ = a.build_end_action("I1", action_id=0)
-    assert spec.json["end_action"]["action_id"] == 0
+def test_build_end_action_never_turns_a_falsy_action_id_into_the_bulk_form():
+    """``action_id=0`` is refused, not read as "no id" and not sent.
+
+    Truthiness must not decide between naming an action and the id-less bulk
+    form (``is not None`` does); and 0 is not a valid action id at all, so it
+    is refused with the rest of the non-positive ids.
+    """
+    with pytest.raises(ValueError, match="action id"):
+        a.build_end_action("I1", action_id=0)
+
+
+@pytest.mark.parametrize("good", [42, "42", " 42 "])
+def test_build_end_action_puts_the_action_id_in_the_body_as_an_integer(good):
+    spec, _ = a.build_end_action("I1", action_id=good)
+    assert spec.json == {"end_action": {"action_id": 42}}
+    assert type(spec.json["end_action"]["action_id"]) is int
+
+
+@pytest.mark.parametrize(
+    "bad", ["I260901_00016", "", "  ", 0, -1, "-1", True, "12a", "²", 1.5]
+)
+def test_build_end_action_refuses_anything_but_a_positive_action_id(bad):
+    """The same rule as ``update_action``: an RFC number or a blank is no action id.
+
+    A blank would also make the client's pre-flight read address the
+    collection (``GET actions/``), whose first row says nothing about the
+    action being ended.
+    """
+    with pytest.raises(ValueError, match="action id"):
+        a.build_end_action("I1", action_id=bad)
 
 
 def test_build_end_action_passes_start_date_through():
@@ -274,7 +300,7 @@ def test_build_end_action_passes_start_date_through():
         end_date="01/09/2026 17:15:00", elapsed_time="15", doneby_mail="a@b.c",
     )
     assert spec.json["end_action"] == {
-        "action_id": "7",
+        "action_id": 7,
         "start_date": "01/09/2026 17:00:00",
         "end_date": "01/09/2026 17:15:00",
         "elapsed_time": "15",

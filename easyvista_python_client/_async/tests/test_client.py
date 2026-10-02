@@ -2787,8 +2787,8 @@ async def test_create_task_sends_it_when_the_call_allows_it(config):
 # --- end_action: the workflow-step guard ------------------------------------
 
 
-def _probe_route(workflow_id):
-    record = {"ACTION_ID": 42}
+def _probe_route(workflow_id, *, action_id=42):
+    record = {"ACTION_ID": action_id}
     if workflow_id is not None:
         record["WORKFLOW_ID"] = workflow_id
     return respx.get(f"{ROOT}/actions/42").mock(
@@ -2803,8 +2803,11 @@ async def test_end_action_refuses_a_workflow_step_without_sending_the_end(config
         return_value=httpx.Response(200, json={})
     )
     async with AsyncEasyvistaClient(config) as client:
-        with pytest.raises(EasyvistaWorkflowEffectRefused, match="workflow step"):
+        with pytest.raises(
+            EasyvistaWorkflowEffectRefused, match=r"is a workflow step \(WORKFLOW_ID"
+        ) as refused:
             await client.end_action("I1", action_id=42)
+    assert refused.value.triggers == (("WORKFLOW_ID", WorkflowEffect.ADVANCES),)
     assert probe.call_count == 1
     assert probe.calls.last.request.url.params["fields"] == "ACTION_ID,WORKFLOW_ID"
     assert not end.called
@@ -2828,8 +2831,11 @@ async def test_end_action_fails_closed_when_the_read_names_no_workflow_id(config
         return_value=httpx.Response(200, json={})
     )
     async with AsyncEasyvistaClient(config) as client:
-        with pytest.raises(EasyvistaWorkflowEffectRefused, match="could not tell"):
+        with pytest.raises(
+            EasyvistaWorkflowEffectRefused, match="could not tell"
+        ) as refused:
             await client.end_action("I1", action_id=42)
+    assert refused.value.triggers == (("WORKFLOW_ID absent", WorkflowEffect.ADVANCES),)
     assert not end.called
 
 
@@ -2878,3 +2884,81 @@ async def test_end_action_does_not_send_the_end_when_the_read_fails(config):
         with pytest.raises(EasyvistaAuthError):
             await client.end_action("I1", action_id=42)
     assert not end.called
+
+
+@respx.mock
+async def test_end_action_still_refuses_a_workflow_step_when_only_unknown_is_allowed(
+    config,
+):
+    probe = _probe_route(37)
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused, match="workflow step"):
+            await client.end_action(
+                "I1", action_id=42, allow_workflow_effect=WorkflowEffect.UNKNOWN
+            )
+    assert probe.call_count == 1
+    assert not end.called
+
+
+@respx.mock
+async def test_end_action_with_unknown_allowed_still_ends_the_callers_own_action(
+    config,
+):
+    _probe_route("")
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.end_action(
+            "I1", action_id=42, allow_workflow_effect=WorkflowEffect.UNKNOWN
+        )
+    assert end.call_count == 1
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+@respx.mock
+async def test_end_action_refuses_a_blank_action_id_with_no_request_at_all(
+    config, blank
+):
+    # A blank id would read the collection (GET actions/) and take the first
+    # row's empty WORKFLOW_ID for the target's.
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="positive integer"):
+            await client.end_action("I1", action_id=blank)
+    assert not route.called
+
+
+@respx.mock
+async def test_end_action_refuses_when_the_read_returns_a_different_action(config):
+    probe = _probe_route("", action_id=7)
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(
+            EasyvistaWorkflowEffectRefused, match="different action"
+        ) as refused:
+            await client.end_action("I1", action_id=42)
+    assert refused.value.triggers == (("ACTION_ID mismatch", WorkflowEffect.ADVANCES),)
+    assert probe.call_count == 1
+    assert not end.called
+
+
+@respx.mock
+async def test_end_action_compares_the_read_id_with_the_requested_id_as_integers(
+    config,
+):
+    probe = _probe_route("", action_id="42")
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.end_action("I1", action_id=" 42 ")
+    assert probe.calls.last.request.url.path.endswith("/actions/42")
+    assert json.loads(end.calls.last.request.content) == {
+        "end_action": {"action_id": 42}
+    }
