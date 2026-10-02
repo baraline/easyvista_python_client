@@ -36,8 +36,13 @@ named: data the workflow merely reads -- text, owner, group, done-by, impact,
 urgency. Reassigning an action's group or person is therefore not refused.
 
 **This is a deny-list, and a deny-list of columns cannot be complete**: the
-vendor's update pages accept "all the fields" of the table "except" a short
-list. What is not named here is unclassified, not proven neutral.
+vendor's update pages accept "all the fields from the SD_REQUEST table except
+those mentioned below" for a ticket
+(https://docs.easyvista.com/docs/rest-api-update-an-incident-request.md) and
+"all the fields from the AM_ACTION table except those mentioned below" for an
+action (https://docs.easyvista.com/docs/rest-api-update-an-action.md), each
+followed by a short list of exclusions (tier 1, read 2026-10-02). What is not
+named here is unclassified, not proven neutral.
 """
 
 from __future__ import annotations
@@ -77,8 +82,13 @@ _ENVELOPES: Mapping[str, WorkflowEffect] = {
 
 #: Columns on ``requests/{rfc}`` that hold or select workflow state. The vendor
 #: excludes ``status_id``, ``sd_catalog_id``, ``initial_sd_catalog_id`` and
-#: ``parent_request_id`` from the update body outright; a catalog selects which
-#: workflow runs, and requalifying "starts a new workflow".
+#: ``parent_request_id`` from the update body outright
+#: (https://docs.easyvista.com/docs/rest-api-update-an-incident-request.md,
+#: tier 1, read 2026-10-02). The vendor documents requalifying the ticket's
+#: category as starting a new workflow: "Requalify the category of the object.
+#: A new workflow will then start." (https://docs.easyvista.com/docs/action.md,
+#: tier 1, read 2026-10-02). Reading the catalog columns as that category is
+#: this module's inference, not a measurement.
 _REQUEST_COLUMNS = frozenset(
     {
         "status_id",
@@ -209,19 +219,28 @@ def _segments(path: str) -> list[str]:
     return segments
 
 
-def _effective_method(method: str, headers: Mapping[str, str] | None) -> str:
+def _methods(method: str, headers: Mapping[str, str] | None) -> set[str]:
+    """The real method and every method-override header value, upper-cased.
+
+    A server that honours an override header runs the override, not the real
+    method, and a request may carry several such headers, so any one of them
+    could be the one that is honoured. The request is therefore judged by all
+    of them: it is a read only if every one of them is a read.
+    """
+    methods = {method.strip().upper()}
     for name, value in (headers or {}).items():
         if name.casefold() in _METHOD_OVERRIDE_HEADERS:
-            return str(value).strip().upper()
-    return method.upper()
+            methods.add(str(value).strip().upper())
+    return methods
 
 
 def _body_keys(body: Any) -> set[str]:
+    # httpx serialises a tuple as a JSON array, so it is scanned like a list.
     records = (
         [body]
         if isinstance(body, Mapping)
         else [item for item in body if isinstance(item, Mapping)]
-        if isinstance(body, list)
+        if isinstance(body, (list, tuple))
         else []
     )
     return {str(key).casefold() for record in records for key in record}
@@ -236,12 +255,25 @@ def workflow_triggers(
     """Every ``(what, effect)`` this request names, envelopes first.
 
     ``what`` is the case-folded body key, or the route, that matched. Empty for
-    a read and for an ordinary write. Raises ``ValueError`` for a path with a
-    dot segment, whatever the method.
+    a read and for an ordinary write.
+
+    A request is a read only when the real ``method`` **and** the value of every
+    method-override header in ``headers`` (``X-HTTP-Method-Override``,
+    ``X-HTTP-Method``, ``X-Method-Override``, matched case-insensitively) are
+    all reads (``GET``, ``HEAD``, ``OPTIONS``). Otherwise it is classified as a
+    write, so an override that says ``GET`` cannot hide a write, and a ``DELETE``
+    among them applies the ``DELETE`` rule. A body given as a mapping, or as a
+    list or tuple of mappings, is scanned for its top-level keys.
+
+    Raises ``ValueError``, whatever the method, for a path that contains a dot
+    segment (``.`` or ``..``), a percent-encoded slash or backslash, or a raw
+    backslash. The first is collapsed by the HTTP client and the others may be
+    read by a server as a separator, so each could reach a route other than the
+    one this function read.
     """
     segments = _segments(path)
-    verb = _effective_method(method, headers)
-    if verb in _READ_METHODS:
+    methods = _methods(method, headers)
+    if methods <= _READ_METHODS:
         return ()
     keys = _body_keys(body)
     found: list[tuple[str, WorkflowEffect]] = [
@@ -256,7 +288,7 @@ def workflow_triggers(
         if segments[1] == "without-workflow":
             found.append(("requests/without-workflow", WorkflowEffect.UNKNOWN))
         else:
-            if verb == "DELETE":
+            if "DELETE" in methods:
                 found.append(("DELETE requests/{rfc}", WorkflowEffect.UNKNOWN))
             columns(_REQUEST_COLUMNS)
     elif head == "requests" and len(segments) >= 3:

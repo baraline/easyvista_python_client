@@ -30,6 +30,8 @@ I, A, U = (  # noqa: E741 -- short aliases keep the parametrised table readable
         ("PUT", "actions/60350", {"END_ACTION": {}}, {A}),
         ("PUT", "departments/7", {"closed": {}}, {I}),
         ("PUT", "requests/I1", [{"closed": {}}], {I}),
+        # httpx serialises a tuple as a JSON array, so it is scanned like a list.
+        ("PUT", "requests/I1", ({"closed": {}},), {I}),
         # Ticket columns that hold or select workflow state.
         ("PUT", "requests/I1", {"STATUS_ID": 12}, {U}),
         ("PUT", "requests/I1", {"status_guid": "{G}"}, {U}),
@@ -120,6 +122,51 @@ def test_a_method_override_header_is_read_as_the_method():
         "GET", "requests/I1", {"closed": {}}, {"X-HTTP-Method-Override": "put"}
     )
     assert effects == {I}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "headers", "expected"),
+    [
+        # An override that says "read" must not turn a real write into a read.
+        ("POST", "requests/I1/close", {}, {"X-HTTP-Method-Override": "GET"}, {I}),
+        ("PUT", "requests/I1", {"closed": {}}, {"X-HTTP-Method": "GET"}, {I}),
+        ("PUT", "requests/I1", {"closed": {}}, {"x-method-override": " head "}, {I}),
+        # Two override headers: a read one must not hide a write one, in either order.
+        (
+            "GET",
+            "requests/I1",
+            {"closed": {}},
+            {"X-HTTP-Method": "GET", "X-HTTP-Method-Override": "PUT"},
+            {I},
+        ),
+        (
+            "GET",
+            "requests/I1",
+            {"closed": {}},
+            {"X-HTTP-Method-Override": "PUT", "X-HTTP-Method": "GET"},
+            {I},
+        ),
+        # An empty or unrecognised override is not a read.
+        ("GET", "requests/I1", {"closed": {}}, {"X-HTTP-Method-Override": ""}, {I}),
+        # DELETE semantics apply if any of the methods is a DELETE.
+        ("POST", "requests/I1", {}, {"X-HTTP-Method-Override": "DELETE"}, {U}),
+        ("DELETE", "requests/I1", None, {"X-HTTP-Method-Override": "GET"}, {U}),
+        # Only when every method is a read is the request a read.
+        (
+            "GET",
+            "requests/I1",
+            {"closed": {}},
+            {"X-HTTP-Method-Override": "HEAD"},
+            set(),
+        ),
+        ("GET", "requests/I1", {"closed": {}}, {"Accept": "PUT"}, set()),
+    ],
+)
+def test_a_request_is_a_read_only_when_every_method_it_names_is_a_read(
+    method, path, body, headers, expected
+):
+    effects = classify_workflow_effects(method, path, body, headers)
+    assert effects == frozenset(expected)
 
 
 def test_query_string_case_and_doubled_slashes_do_not_hide_a_route():
