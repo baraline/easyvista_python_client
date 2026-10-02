@@ -2583,7 +2583,8 @@ def test_end_action_forwards_every_keyword_to_the_body(config):
 
     A dropped ``start_date`` is invisible in the response -- the server simply
     derives one, and the derived one is early by the instance's UTC offset. So
-    this asserts the wire body, not the return value.
+    this asserts the wire body, not the return value. It tests the body, not the
+    workflow-step guard, so it opts in and makes no read.
     """
     route = respx.put(f"{ROOT}/actions/I1").mock(
         return_value=httpx.Response(200, json={"HREF": f"{ROOT}/requests/I1"})
@@ -2596,6 +2597,7 @@ def test_end_action_forwards_every_keyword_to_the_body(config):
             end_date="01/09/2026 17:15:00",
             elapsed_time=15,
             doneby_mail="tech@example.invalid",
+            allow_workflow_effect=WorkflowEffect.ADVANCES,
         )
     assert json.loads(route.calls.last.request.content) == {
         "end_action": {
@@ -2615,7 +2617,9 @@ def test_end_action_addresses_the_ticket_not_the_action(config):
         return_value=httpx.Response(200, json={"HREF": f"{ROOT}/requests/I1"})
     )
     with EasyvistaClient(config) as client:
-        client.end_action("I1", action_id=42)
+        client.end_action(
+            "I1", action_id=42, allow_workflow_effect=WorkflowEffect.ADVANCES
+        )
     assert route.calls.last.request.url.path.endswith("/actions/I1")
 
 
@@ -2778,3 +2782,99 @@ def test_create_task_sends_it_when_the_call_allows_it(config):
         )
     assert route.call_count == 1
     assert "parent_action_id" in json.loads(route.calls.last.request.content)
+
+
+# --- end_action: the workflow-step guard ------------------------------------
+
+
+def _probe_route(workflow_id):
+    record = {"ACTION_ID": 42}
+    if workflow_id is not None:
+        record["WORKFLOW_ID"] = workflow_id
+    return respx.get(f"{ROOT}/actions/42").mock(
+        return_value=httpx.Response(200, json=record)
+    )
+
+
+@respx.mock
+def test_end_action_refuses_a_workflow_step_without_sending_the_end(config):
+    probe = _probe_route(37)
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    with EasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused, match="workflow step"):
+            client.end_action("I1", action_id=42)
+    assert probe.call_count == 1
+    assert probe.calls.last.request.url.params["fields"] == "ACTION_ID,WORKFLOW_ID"
+    assert not end.called
+
+
+@respx.mock
+def test_end_action_ends_the_callers_own_action_once(config):
+    _probe_route("")
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    with EasyvistaClient(config) as client:
+        client.end_action("I1", action_id=42, end_date="01/10/2026 10:00:00")
+    assert end.call_count == 1
+
+
+@respx.mock
+def test_end_action_fails_closed_when_the_read_names_no_workflow_id(config):
+    _probe_route(None)
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    with EasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused, match="could not tell"):
+            client.end_action("I1", action_id=42)
+    assert not end.called
+
+
+@respx.mock
+def test_end_action_refuses_end_all_without_any_request(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    with EasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused, match="end_all"):
+            client.end_action("I1", end_all=True)
+    assert not route.called
+
+
+@respx.mock
+def test_end_action_with_advances_allowed_skips_the_read(config):
+    probe = _probe_route(37)
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    with EasyvistaClient(config) as client:
+        client.end_action(
+            "I1", action_id=42, allow_workflow_effect=WorkflowEffect.ADVANCES
+        )
+        client.end_action(
+            "I1", end_all=True, allow_workflow_effect=WorkflowEffect.ADVANCES
+        )
+    assert not probe.called
+    assert end.call_count == 2
+
+
+@respx.mock
+def test_end_action_refuses_a_missing_id_before_the_read(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    with EasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="needs an action_id"):
+            client.end_action("I1")
+    assert not route.called
+
+
+@respx.mock
+def test_end_action_does_not_send_the_end_when_the_read_fails(config):
+    respx.get(f"{ROOT}/actions/42").mock(return_value=httpx.Response(403, json={}))
+    end = respx.put(f"{ROOT}/actions/I1").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    with EasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaAuthError):
+            client.end_action("I1", action_id=42)
+    assert not end.called

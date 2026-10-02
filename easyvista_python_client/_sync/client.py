@@ -49,6 +49,7 @@ from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
     EasyvistaError,
     EasyvistaNotFound,
+    EasyvistaWorkflowEffectRefused,
 )
 from easyvista_python_client.field_model import parse_memo
 from easyvista_python_client.filters import ev_equals_filter, is_safe_ev_value
@@ -98,6 +99,12 @@ from easyvista_python_client.workflow import WorkflowEffect, as_effects
 # limit of 8 costs nothing (19 actions took 5.31s at limit 8 vs 5.43s unbounded
 # -- the server, not the client, is the bottleneck).
 _ACTION_FANOUT = 8
+
+# The projection end_action's guard reads: just enough to tell a workflow step
+# (WORKFLOW_ID set) from a caller's own action (WORKFLOW_ID empty). Projected
+# rather than left to the default item read so that the column is asked for
+# by name -- see integration_tests/test_live_workflow_guard.py.
+_WORKFLOW_PROBE_FIELDS = ("ACTION_ID", "WORKFLOW_ID")
 
 
 def _unavailable_reason(exc: EasyvistaError) -> str:
@@ -886,6 +893,7 @@ class EasyvistaClient:
         start_date: str | None = None,
         elapsed_time: int | str | None = None,
         doneby_mail: str | None = None,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect] = (),
     ) -> Action:
         """Report an action as done — the step :meth:`create_action` leaves open.
 
@@ -928,6 +936,26 @@ class EasyvistaClient:
            select the bulk form in silence. Only ``end_all=True`` was measured
            with a single open action, so *how* it behaves against several open
            at once is vendor-documented, not measured here.
+
+           **And why ending a workflow step must be asked for.** Unless
+           ``allow_workflow_effect`` includes ``WorkflowEffect.ADVANCES``, this
+           method reads the action first -- one item read projecting
+           ``ACTION_ID`` and ``WORKFLOW_ID`` -- and refuses, with
+           :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` and
+           no end request sent, when the action is a workflow step
+           (``WORKFLOW_ID`` set) or when the record comes back without the
+           column at all, which cannot be told apart from a step. ``WORKFLOW_ID``
+           is what separates the engine's rows from a caller's (tier 4, 1500 of
+           1500 rows, 2026-09-02, one instance -- see
+           :attr:`Action.is_workflow_generated`). Whether an action created under
+           the step by :meth:`create_action` carries one is unmeasured; if it
+           does, ending it is refused too -- the safe direction. ``end_all=True``
+           is refused outright without ``ADVANCES``. Ending your own action
+           needs no opt-in. If the read fails, its error propagates and the end
+           request is not sent -- a 403 there says nothing about whether ending
+           is permitted. The end request, once sent, is never retried. Both kinds
+           of action were read with the column present (live, 2026-10-02, one
+           instance).
 
         Both dates are passed through as **strings**, because the accepted
         format follows the instance rather than a standard: it is not ISO 8601
@@ -992,9 +1020,47 @@ class EasyvistaClient:
             doneby_mail=doneby_mail,
             context=self._validation_context,
         )
-        # Interim: keeps today's behaviour; Task 4/6 replace this with the
-        # caller's opt-in.
-        return parse(self._transport.send(spec.allowing(WorkflowEffect.ADVANCES)))
+        allowed = as_effects(allow_workflow_effect)
+        if WorkflowEffect.ADVANCES not in allowed:
+            self._refuse_ending_a_workflow_step(action_id, end_all=end_all)
+            allowed = allowed | {WorkflowEffect.ADVANCES}
+        return parse(self._transport.send(spec.allowing(allowed)))
+
+    def _refuse_ending_a_workflow_step(
+        self, action_id: str | int | None, *, end_all: bool
+    ) -> None:
+        """Raise unless one read shows ``action_id`` is not a workflow step."""
+        advances = frozenset({WorkflowEffect.ADVANCES})
+        if end_all or action_id is None:
+            raise EasyvistaWorkflowEffectRefused(
+                "end_all=True ends every open action on the ticket, its workflow "
+                "step included, which advances the ticket's workflow. Pass "
+                "allow_workflow_effect=WorkflowEffect.ADVANCES if that is the intent.",
+                effects=advances,
+                triggers=(("end_action", WorkflowEffect.ADVANCES),),
+            )
+        spec, parse = actions_res.build_get_action(
+            action_id, fields=_WORKFLOW_PROBE_FIELDS, context=self._validation_context
+        )
+        target = parse(self._transport.send(spec))
+        if "workflow_id" not in target.model_fields_set:
+            raise EasyvistaWorkflowEffectRefused(
+                f"could not tell whether action {action_id} is a workflow step: its "
+                "record came back without WORKFLOW_ID, so ending it was refused "
+                "rather than risked. Pass allow_workflow_effect="
+                "WorkflowEffect.ADVANCES to end it anyway.",
+                effects=advances,
+                triggers=(("WORKFLOW_ID absent", WorkflowEffect.ADVANCES),),
+            )
+        if target.workflow_id is not None:
+            raise EasyvistaWorkflowEffectRefused(
+                f"action {action_id} is a workflow step (WORKFLOW_ID "
+                f"{target.workflow_id}): ending it advances the ticket's workflow. "
+                "Pass allow_workflow_effect=WorkflowEffect.ADVANCES if that is the "
+                "intent.",
+                effects=advances,
+                triggers=(("WORKFLOW_ID", WorkflowEffect.ADVANCES),),
+            )
 
     def _resolve_action_body(self, action: Action) -> Action:
         """Return ``action`` with its note text resolved onto the memo that shows.

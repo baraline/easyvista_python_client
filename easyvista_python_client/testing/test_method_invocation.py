@@ -53,6 +53,10 @@ PAYLOAD = {
         {
             "RFC_NUMBER": "I1",
             "ACTION_ID": 1,
+            # Empty, not absent: end_action's guard reads this column off the
+            # action it is asked to end, and an empty one is the caller's own
+            # action (the safe path the registry should model).
+            "WORKFLOW_ID": "",
             "ASSET_ID": 1,
             "DEPARTMENT_ID": 1,
             "EMPLOYEE_ID": 1,
