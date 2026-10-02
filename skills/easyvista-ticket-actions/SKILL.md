@@ -354,6 +354,43 @@ Two asymmetries worth knowing:
   and PATCH on `actions/{id}` — there is no DELETE verb — so there is
   deliberately no `delete_action`.
 
+## Reassign an action
+
+`reassign_action(action_id, group_id=..., done_by_id=...)` hands an action to
+another group and/or person without ending it — the way to escalate the open
+workflow step. At least one id is required; both are positive integers, and both
+are per-deployment, so read them from your instance (next section) rather than
+hardcoding them.
+
+```python
+from easyvista_python_client import EasyvistaClient
+
+with EasyvistaClient.from_env() as client:
+    actions = client.iter_actions(
+        "YOUR_RFC_NUMBER",
+        fields=["ACTION_ID", "WORKFLOW_ID", "GROUP_ID", "END_DATE_UT"],
+    )
+    # The open workflow step: WORKFLOW_ID set, no end date yet.
+    step = next(a for a in actions if a.is_workflow_generated and not a.end_date_ut)
+    client.reassign_action(step.action_id, group_id=OTHER_GROUP_ID)
+    # Re-read: this API answers 200 while dropping a field it did not store.
+    print(client.get_action(step.action_id).group_id)
+```
+
+The vendor documents no REST reassignment route (tier 1,
+`rest-api-update-an-action.md` lists no group column among its exclusions, and the
+UI's transfer is a wizard), so the effect is measured, not specified. Measured
+2026-10-02 on one instance (Service Manager 2025.3; two tickets, so it may not
+generalise): the group was stored (`GROUP_ID` 57 to 50 on the open workflow step
+of both tickets); the step stayed open and the ticket's status did not move; the
+open actions were unchanged and no new action rows appeared. **The ticket's own
+`OWNING_GROUP_ID` does not follow the action's group** (it stayed 57 on the first
+ticket, the only one read for it), so reassigning a step is not reassigning the
+ticket. Reassigning to a person (`done_by_id`) was **not measured**, and whether
+the UI wizard's notifications fire is not observable from the API.
+`reassign_action` is not refused by the workflow guard, because the group and the
+person are data the workflow reads, not workflow state.
+
 ## Discover the ids first
 
 `action_type_id` and `group_id` are instance-specific. One call finds both —

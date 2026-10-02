@@ -52,6 +52,15 @@ dependencies. Every breaking change is in the workflow guard, and is marked
   positive integer.
 - `resources.actions.build_get_action(..., fields=...)` projects the item read,
   as the list builders already did.
+- `reassign_action(action_id, *, group_id=None, done_by_id=None)` on both
+  clients, with `resources.actions.build_reassign_action`: reassign an action
+  (for example, escalate the open workflow step to another group) without
+  ending it. It is not refused by the workflow guard. The vendor documents no
+  reassignment route (tier 1), so the effect was measured: 2026-10-02, one
+  instance, two tickets, so it may not generalise -- the group was stored, the
+  step stayed open, the ticket's status did not move and no new action rows
+  appeared; the ticket's own owning group does not follow the action's. The
+  person write (`done_by_id`) is unmeasured.
 - `easyvista_python_client.content.EasyvistaContentConverter`, behind the new
   optional extra `easyvista-python-client[content]` (`beautifulsoup4>=4.12`,
   `markdown>=3.6`, `markdownify>=1.2`). Two static methods:
