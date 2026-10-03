@@ -21,7 +21,14 @@ it is:
   a nested table's cell is a word boundary, as a browser shows it (a new
   line, a new box) and as the converter writes it (a space); and
 * an ordered list's ``start`` is read with ``isdecimal``, as the converter
-  reads it, where ``isdigit`` made the oracle itself raise on ``"²"``.
+  reads it, where ``isdigit`` made the oracle itself raise on ``"²"``. So
+  the oracle cannot see where a browser numbers otherwise: from 3 for
+  ``" 3"``, ``"+3"`` or ``"3abc"``, and from 1 for a full-width 3
+  (U+FF13).
+
+Since 0.4.1, with ``glpi_python_client`` 0.6.1, a rule (``<hr>``) inside an
+inline element counts as a block, where the oracle read it as nothing: a
+browser draws ``<u><hr></u>`` as a rule.
 
 What the oracle cannot see: underline and highlight (``<u>``, ``<mark>``,
 ``<ins>``), struck text, link and image titles, and line breaks inside a
@@ -146,8 +153,10 @@ def _inline(node: Tag, words: _Words, fmt: Format) -> None:
 
 
 def _has_block(node: Tag) -> bool:
+    # Since 0.4.1: a rule is a block too, so <u><hr></u> draws its rule.
     return any(
-        isinstance(child, Tag) and child.name in _BLOCKS for child in node.descendants
+        isinstance(child, Tag) and (child.name in _BLOCKS or child.name == "hr")
+        for child in node.descendants
     )
 
 

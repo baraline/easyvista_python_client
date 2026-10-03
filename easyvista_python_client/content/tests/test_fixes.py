@@ -18,7 +18,8 @@ as in the record of that verification:
 8. a block in such a table stays on its holder's line;
 9. bold at a flattened cell's edge still closes;
 10. ``<center>`` is a block, except inside ``<pre>``;
-11. ``<u>``, ``<mark>`` and ``<ins>`` stay raw HTML;
+11. ``<u>``, ``<mark>`` and ``<ins>`` stay raw HTML, except round a block,
+    where they are dropped and the blocks kept;
 12. an ordered list is numbered in linear time, and a ``start`` that is
     not a decimal number counts from 1;
 13. the regex splitting a text's edges is greedy, so linear;
@@ -27,12 +28,26 @@ as in the record of that verification:
     guard).
 
 The cost side of 12, 13 and 15 is tested in :mod:`.test_cost`. Run against
-GLPI 917f030 on 2026-10-02 (CPython 3.12.11), 36 of these 54 tests failed.
-Of the 18 that passed there, 17 are controls, guards on a correction to a
-fix, pins of output a fix leaves as it was, or behaviour a cost fix had to
-keep, and each says which. The other is test 15's ``attribute`` case, which
-passed only because 3.12.11 predates CPython's own fix; that test says
-why. Every word is invented and every URL is under ``example.org``.
+GLPI 917f030 on 2026-10-02 (CPython 3.12.11), 36 of the 54 tests first
+written failed. Of the 18 that passed there, 17 are controls, guards on a
+correction to a fix, pins of output a fix leaves as it was, or behaviour a
+cost fix had to keep, and each says which. The other is test 15's
+``attribute`` case, which passed only because 3.12.11 predates CPython's
+own fix; that test says why.
+
+The 42 tests 0.4.1 added to section 11 for a block inside ``<u>``,
+``<mark>`` or ``<ins>`` pin the correction to fix 11, which wrapped blocks in
+the tag: run against 0.4.0's converter, 40 failed, and the two that passed
+are the one-line controls. They read such a body as GLPI 917f030 did, so on
+that converter only the three that need a tag kept fail.
+
+Twelve more pin four guards a review found no test caught: a second ``<``
+before a space (section 5), a header cell (6), an anchor without ``href``
+(7) and an item numbered 10 or more (12). Each fails when its guard alone
+is removed. On GLPI 917f030, which behaved the same there except for fix
+6, only the three header-cell cases that need fix 6 fail.
+
+Every word is invented and every URL is under ``example.org``.
 """
 
 from __future__ import annotations
@@ -207,6 +222,24 @@ def test_5_a_second_less_than_stays_text(html: str) -> None:
     assert "\\<\\<" in markdown
 
 
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        pytest.param("<p>&lt;&lt; b</p>", "\\<< b", id="before-a-space"),
+        pytest.param("<p>x &lt;&lt; &lt;b&gt;</p>", "x \\<< \\<b>", id="then-a-tag"),
+    ],
+)
+def test_5_a_second_less_than_before_a_space_is_not_escaped(
+    html: str, expected: str
+) -> None:
+    """Before a space a ``<`` opens neither an autolink nor a tag, so the fix
+    leaves it as mdformat wrote it. Both spellings display the same: this
+    pins the spelling, which digests of the Markdown depend on and which the
+    two packages' readers share."""
+
+    assert assert_survives(html) == expected
+
+
 # ---------------------------------------------------------------------------
 # 6. A line break in inline code
 # ---------------------------------------------------------------------------
@@ -231,6 +264,12 @@ def test_5_a_second_less_than_stays_text(html: str) -> None:
             "| H |\n| -- |\n| a `un`<br>`deux` b |",
             id="cell",
         ),
+        pytest.param(
+            "<table><tr><th>a <code>un<br>deux</code> b</th></tr><tr><td>x</td></tr>"
+            "</table>",
+            "| a `un`<br>`deux` b |\n| -- |\n| x |",
+            id="header-cell",
+        ),
     ],
 )
 def test_6_a_line_break_in_inline_code_splits_the_span(
@@ -252,12 +291,20 @@ def test_6_a_line_break_in_inline_code_in_a_heading_is_a_space() -> None:
     )
 
 
+@pytest.mark.parametrize("cell", ["td", "th"])
 @pytest.mark.parametrize("tag", ["code", "kbd", "samp"])
-def test_6_a_pipe_in_inline_code_in_a_cell_stays_in_the_cell(tag: str) -> None:
+def test_6_a_pipe_in_inline_code_in_a_cell_stays_in_the_cell(
+    tag: str, cell: str
+) -> None:
     """GFM splits a row on ``|`` before it reads code. ``code`` is the control:
-    GLPI 917f030 escaped it there already, but not in ``kbd`` or ``samp``."""
+    GLPI 917f030 escaped it there already, but not in ``kbd`` or ``samp``. A
+    header cell is a cell too."""
 
-    html = f"<table><tr><th>H</th></tr><tr><td><{tag}>a|b</{tag}> fin</td></tr></table>"
+    content = f"<{cell}><{tag}>a|b</{tag}> fin</{cell}>"
+    if cell == "td":
+        html = f"<table><tr><th>H</th></tr><tr>{content}</tr></table>"
+    else:
+        html = f"<table><tr>{content}</tr><tr><td>x</td></tr></table>"
 
     markdown = assert_survives(html)
 
@@ -302,6 +349,27 @@ def test_7_a_table_inside_a_cell_is_its_cells_text() -> None:
     )
 
     assert markdown == "| A |\n| -- |\n| un deux |"
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        pytest.param('<a name="x">TABLE</a>', id="named-anchor"),
+        pytest.param('<p>avant</p><a id="ancre">TABLE</a>', id="anchor-with-an-id"),
+    ],
+)
+def test_7_a_table_inside_an_anchor_without_a_target_stays_a_table(
+    html: str,
+) -> None:
+    """The control: an ``<a>`` without ``href`` is no link, so it holds no
+    line, and a table inside it stays a table. Some mail clients wrap a
+    message's content in such named anchors."""
+
+    table = "<table><tr><th>a</th><th>b</th></tr><tr><td>c</td><td>d</td></tr></table>"
+
+    markdown = assert_survives(html.replace("TABLE", table))
+
+    assert markdown.endswith("| a | b |\n| -- | -- |\n| c | d |")
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +463,102 @@ def test_11_underline_inside_a_link() -> None:
     assert markdown == "[<u>lien</u>](https://example.org/u)"
 
 
+_TABLE = (
+    "<table><tr><th>Nom</th><th>Valeur</th></tr>"
+    "<tr><td>serveur</td><td>srv01</td></tr></table>"
+)
+
+
+@pytest.mark.parametrize("tag", ["u", "mark", "ins"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(f"<p>Voir :</p><X>{_TABLE}</X><p>fin</p>", id="table"),
+        pytest.param("<X><ul><li>un</li><li>deux</li></ul></X>", id="list"),
+        pytest.param("<X><ol><li>un</li><li>deux</li></ol></X>", id="ordered-list"),
+        pytest.param("<X><h2>Titre</h2><p>texte</p></X>", id="heading"),
+        pytest.param("<X><blockquote>cite</blockquote></X>", id="quote"),
+        pytest.param("<X><pre>un\ndeux</pre></X>", id="pre"),
+        pytest.param("<p>a</p><X><hr></X><p>b</p>", id="rule"),
+        pytest.param("<X><p>un</p><p>deux</p></X>", id="paragraphs"),
+        pytest.param("<X><div>un</div><div>deux</div></X>", id="divs"),
+        pytest.param("<X>avant<p>milieu</p>apres</X>", id="text-around-a-block"),
+        pytest.param("<ul><li><X><p>un</p><p>deux</p></X></li></ul>", id="in-an-item"),
+        pytest.param(
+            "<blockquote><X><p>un</p><p>deux</p></X></blockquote>", id="in-a-quote"
+        ),
+    ],
+)
+def test_11_around_a_block_the_tag_is_dropped_and_the_blocks_kept(
+    body: str, tag: str
+) -> None:
+    """Markdown has no inline tag around blocks: fix 11 wrapped them anyway,
+    so a table read as pipe text, a list, heading, quote or rule as its
+    Markdown source, and paragraphs were not a fixed point. The tag is
+    dropped there and the blocks read as they would without it, as GLPI
+    917f030 read them; the underline is lost, which the display oracle cannot see."""
+
+    html = body.replace("<X>", f"<{tag}>").replace("</X>", f"</{tag}>")
+    bare = body.replace("<X>", "").replace("</X>", "")
+
+    markdown = assert_survives(html)
+
+    assert markdown == read(bare)
+    assert f"<{tag}>" not in markdown
+
+
+def test_11_a_pre_inside_underline_leaves_no_stray_fence() -> None:
+    """The worst of the shapes above: the closing fence took the ``</u>`` as
+    its info string, so it opened a new fence and everything after it,
+    ``apres`` included, displayed as code."""
+
+    markdown = assert_survives("<u><pre>code</pre></u><p>apres</p>")
+
+    assert markdown == "```\ncode\n```\n\napres"
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        pytest.param(
+            "<u><mark><ul><li>a</li></ul></mark></u>", "- a", id="both-around-a-list"
+        ),
+        pytest.param(
+            "<u><mark>x</mark><p>y</p></u>", "<mark>x</mark>\n\ny", id="inline-sibling"
+        ),
+        pytest.param(
+            "<u><p>a</p><mark><p>b</p></mark>c</u>", "a\n\nb\n\nc", id="inner-after"
+        ),
+    ],
+)
+def test_11_each_tag_around_a_block_is_dropped_and_no_other(
+    html: str, expected: str
+) -> None:
+    """Nested tags: each one holding a block is dropped, however deep the
+    block, and one that closed before the block keeps its raw tag."""
+
+    assert assert_survives(html) == expected
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        pytest.param(
+            "<table><tr><th><u><p>a</p></u></th></tr>"
+            "<tr><td><u><p>b</p><p>c</p></u></td></tr></table>",
+            "| <u>a</u> |\n| -- |\n| <u>b c</u> |",
+            id="cell",
+        ),
+        pytest.param("<h2><u><p>titre</p></u></h2>", "## <u>titre</u>", id="heading"),
+    ],
+)
+def test_11_around_a_block_on_one_line_the_tag_stays(html: str, expected: str) -> None:
+    """The control: a cell or a heading writes its blocks on its one line,
+    so the tag wraps inline text there and is kept."""
+
+    assert assert_survives(html) == expected
+
+
 # ---------------------------------------------------------------------------
 # 12. Ordered-list numbering
 # ---------------------------------------------------------------------------
@@ -420,13 +584,54 @@ def test_12_an_ordered_item_is_numbered_one_past_the_item_before(
 ) -> None:
     """Each item keeps its number for the next, where markdownify counted
     every item before each one. ``isdecimal``, where markdownify's
-    ``isnumeric`` let ``int("½")`` raise -- a browser counts such a list
-    from 1, and so does the converter now.
+    ``isnumeric`` let ``int("½")`` raise: the converter now counts such a
+    list from 1, as a browser counts one whose ``start`` holds no ASCII
+    digit. A browser, under the HTML standard's rules for parsing integers,
+    reads ``" 3"``, ``"+3"`` and ``"3abc"`` as 3, which the converter counts
+    from 1, and a full-width 3 (U+FF13), which the converter reads as 3, as
+    no number. The display oracle reads ``start`` as the converter does, so
+    these tests cannot see that.
 
     With a decimal ``start``, GLPI 917f030 numbered the same: what the fix
     changed there is the cost (:mod:`.test_cost`), and the first two cases
     pin that the rewrite numbers as markdownify did.
     """
+
+    assert assert_survives(html) == expected
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        pytest.param(
+            '<ol start="10"><li>a<ul><li>b</li></ul></li></ol>',
+            "10. a\n    - b",
+            id="nested-list",
+        ),
+        pytest.param(
+            '<ol start="10"><li><p>a</p><p>b</p></li></ol>',
+            "10. a\n\n    b",
+            id="second-paragraph",
+        ),
+        pytest.param(
+            '<ol start="9"><li>a</li><li>b<ul><li>c</li></ul></li></ol>',
+            "09. a\n10. b\n    - c",
+            id="tenth-item",
+        ),
+        pytest.param(
+            '<ol start="100"><li>a<ul><li>b</li></ul></li></ol>',
+            "100. a\n     - b",
+            id="three-digits",
+        ),
+    ],
+)
+def test_12_an_items_content_is_indented_by_its_bullets_width(
+    html: str, expected: str
+) -> None:
+    """A line belongs to an item only if indented by its bullet's width: four
+    for ``10. ``, five for ``100. ``. markdownify indented so; the rewrite
+    does it itself, and only an item numbered 10 or more tells the bullet's
+    width from a fixed three, the width of ``1. ``."""
 
     assert assert_survives(html) == expected
 
@@ -533,6 +738,14 @@ def test_14_a_number_markdownify_cannot_read_falls_back_to_text(html: str) -> No
         pytest.param("<p>r</p>x <<a", "r\n\nx \\<\\<a", id="doubled"),
         pytest.param(  # the control: a bare '<' was text on every release
             "<p>r</p>fin <", "r\n\nfin \\<", id="bare"
+        ),
+        pytest.param(  # a side effect: shown, where a patched parser hides it
+            "<p>r</p><!-- cache", "r\n\n\\<!-- cache", id="unterminated-comment"
+        ),
+        pytest.param(  # the same for a closing tag cut short inside a link
+            '<p><a href="https://example.org/u">lien</a',
+            "[lien\\</a](https://example.org/u)",
+            id="truncated-end-tag",
         ),
     ],
 )

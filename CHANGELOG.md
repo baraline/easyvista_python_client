@@ -15,6 +15,59 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-02
+
+A patch release of the content reader. A `<u>`, `<mark>` or `<ins>` round a
+block no longer reads as broken Markdown, four guards of 0.4.0's fixes gain
+the tests they lacked, and `docs/content.rst` corrects what it said about
+`start` values, `ValueError`, the CVE-2025-6069 tail and a second round
+trip. Writing is unchanged, and so is everything outside
+`easyvista_python_client.content`. `glpi_python_client`'s port of this
+converter makes the same correction.
+
+### Fixed
+
+- **A block inside `<u>`, `<mark>` or `<ins>` read as broken Markdown**, since
+  0.4.0 kept these tags raw (fix 11). Markdown has no inline tag round blocks:
+  a table inside one read as pipe text, a list, a heading, a quote or a rule
+  as its Markdown source, paragraphs were not a fixed point, and
+  `<u><pre>code</pre></u>` left a fence open that showed the rest of the memo
+  as code. Round a block the tag is now dropped and the blocks kept, as
+  `glpi_python_client`'s reader at `917f030` read them. Inside a table cell
+  or a heading, whose blocks are one line, the tag stays, and around inline
+  content nothing changes. The Markdown read from such a memo changes once.
+
+### Documentation
+
+- `docs/content.rst`, corrected after a review of the converter:
+  - a `start` that is not a decimal number counts from 1 as a browser
+    counts one holding no digit; a browser reads `" 3"`, `"+3"` or
+    `"3abc"` as 3, which the converter counts from 1;
+  - any `ValueError` raised while converting degrades the memo to text, not
+    only an unreadable `colspan` or `start` (the module and
+    `from_transport` docstrings say so too);
+  - the CVE-2025-6069 note says that everything after a memo's last `>`
+    reads as text, an unterminated comment and a closing tag cut short
+    inside a link included, where a patched CPython drops some of it;
+  - a second write-and-read cycle changes nothing more except for two
+    shapes, adjacent lists with different bullets and a fence whose info
+    string holds a character reference, where 0.4.0's page and its
+    changelog said it changes nothing;
+  - `<u>`, `<mark>` and `<ins>` round a block, and a known hole for
+    `<b>`, `<em>` and `<s>` round blocks.
+- The `easyvista-ticket-actions` skill says a `<u>` round a block is
+  dropped.
+
+### Notes
+
+- Four guards of the 0.4.0 fixes that no test caught are pinned, each by a
+  test that fails without it: a second `<` before a space keeps one escape
+  (fix 5), a header cell escapes a `|` in `<kbd>` or `<samp>` and splits a
+  line break in inline code (fix 6), a table inside an `<a>` without `href`
+  stays a table (fix 7), and an ordered item numbered 10 or more indents its
+  content by its bullet's width (fix 12). A count pins that the walk finding
+  blocks inside `<u>`, `<mark>` and `<ins>` checks each tag about once.
+
 ## [0.4.0] - 2026-10-02
 
 Adds Markdown <-> memo HTML conversion as an optional extra, drops Python
@@ -1592,7 +1645,8 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.1...HEAD
+[0.4.1]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/baraline/easyvista_python_client/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/baraline/easyvista_python_client/compare/0.1.0...0.2.0

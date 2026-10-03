@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
   package: easyvista-python-client
-  version: "0.4.0"
+  version: "0.4.1"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -618,7 +618,8 @@ with EasyvistaClient.from_env() as client:
   `init`. Reading spells a note's text as literal text (`__init__` comes back
   as `\_\_init\_\_`, a displayed `<b>` as `\<b>`), so render the Markdown
   rather than stripping its backslashes. Underline and strike come back as raw
-  `<u>` and `<s>` tags, and a note with no HTML in it reads as literal lines.
+  `<u>` and `<s>` tags (a `<u>` round a block is dropped and the block kept),
+  and a note with no HTML in it reads as literal lines.
   It sanitises nothing: raw HTML, `javascript:` link targets and
   `<javascript:...>` autolinks go out live, and reading keeps a memo's
   `javascript:` links, so neutralise both in Markdown you did not write — a
