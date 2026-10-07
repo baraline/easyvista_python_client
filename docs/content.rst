@@ -214,6 +214,11 @@ options, ``HARDBREAKS`` and ``UNSAFE``:
 * a fence becomes ``<pre><code>``, with the info string as a
   ``class="language-..."``;
 * a table becomes a ``<table>`` with a ``<thead>``;
+* a link opens in a new window: each ``<a href>`` the renderer writes carries
+  ``target="_blank" rel="noopener noreferrer"``, as a link written in
+  EasyVista's editor does. Without it the memo view opens the link in place,
+  inside EasyVista's window (measured 2026-10-07). Reading ignores both
+  attributes, so a round trip is unchanged;
 * raw HTML, inline or as a block, is passed through as written;
 * ``""``, or only whitespace, stays ``""`` rather than becoming ``<p></p>``.
 

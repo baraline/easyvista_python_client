@@ -15,6 +15,22 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-07
+
+A patch release of the content writer: a link written into a memo opens in a
+new window. Reading is unchanged, and so is everything outside
+`easyvista_python_client.content`.
+
+### Changed
+
+- **Every link `to_transport` writes carries `target="_blank"
+  rel="noopener noreferrer"`**, as a link written in EasyVista's own editor
+  does. Without it, EasyVista's memo view opens the link in place, inside its
+  own window, so a link to another application seemed to do nothing (measured
+  on a live memo, 2026-10-07: links with and without the attributes, side by
+  side). Reading ignores both attributes, so `from_transport(to_transport(m))`
+  is unchanged for every link.
+
 ## [0.4.1] - 2026-10-02
 
 A patch release of the content reader. A `<u>`, `<mark>` or `<ins>` round a
@@ -1645,7 +1661,8 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.1...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.2...HEAD
+[0.4.2]: https://github.com/baraline/easyvista_python_client/compare/0.4.1...0.4.2
 [0.4.1]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/baraline/easyvista_python_client/compare/0.2.0...0.3.0
