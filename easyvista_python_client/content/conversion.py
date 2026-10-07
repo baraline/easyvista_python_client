@@ -748,12 +748,26 @@ def html_to_markdown(html: str) -> str:
     return str(_FORMATTER.render(_CONVERTER.convert_soup(soup))).strip()
 
 
+#: A link as cmark-gfm writes one: an ``href``, an optional ``title``, nothing else.
+_RENDERED_LINK = re.compile(r'<a href="[^"]*"(?: title="[^"]*")?>')
+
+#: What EasyVista's own editor writes on a link: without it the memo view opens the
+#: link in place, inside EasyVista's window, rather than in a new one.
+_NEW_WINDOW = ' target="_blank" rel="noopener noreferrer"'
+
+
 def markdown_to_html(markdown: str) -> str:
-    """Render Markdown as HTML: CommonMark with GFM tables, through cmark-gfm."""
+    """Render Markdown as HTML: CommonMark with GFM tables, through cmark-gfm.
+
+    Every link opens in a new window, the way a link written in EasyVista's
+    editor does: ``target="_blank" rel="noopener noreferrer"`` is added to each
+    link cmark-gfm writes. Reading ignores both attributes.
+    """
 
     html: str = cmarkgfm.markdown_to_html_with_extensions(
         markdown, options=_RENDER_OPTIONS, extensions=["table"]
     )
+    html = _RENDERED_LINK.sub(lambda link: link.group(0)[:-1] + _NEW_WINDOW + ">", html)
     return html.strip()
 
 
