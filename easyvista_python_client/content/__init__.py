@@ -13,6 +13,10 @@ stack left to report it otherwise (see ``docs/content.rst``).
 
 from __future__ import annotations
 
-from easyvista_python_client.content.conversion import EasyvistaContentConverter
+from easyvista_python_client.content.conversion import (
+    EasyvistaContentConverter,
+    Link,
+    RewriteLink,
+)
 
-__all__ = ["EasyvistaContentConverter"]
+__all__ = ["EasyvistaContentConverter", "Link", "RewriteLink"]
