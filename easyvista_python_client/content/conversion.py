@@ -59,9 +59,11 @@ import re
 import string
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import cached_property
 from html import escape, unescape
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from easyvista_python_client.exceptions import EasyvistaContentError
 
@@ -396,6 +398,97 @@ def _title(title: str) -> str:
     return ' "' + re.sub(r'[\\"]', r"\\\g<0>", title) + '"' if title else ""
 
 
+#: How a memo embeds an image: EasyVista's editor stores a pasted image as an
+#: attachment of the request and writes ``<img src="@@EMBEDDED_IMAGE_PATH@@...">``
+#: with that attachment's ``DOCUMENT_ID``. Measured 2026-10-07 on one instance
+#: (tier 4): an image written that way through the API displays too, for an
+#: attachment pasted in the editor and for one uploaded with ``add_document``.
+EMBEDDED_IMAGE_PREFIX = "@@EMBEDDED_IMAGE_PATH@@"
+
+#: A ``DOCUMENT_ID``, as an embedded image's ``src`` carries one. Measured: 40 hex
+#: digits for an image pasted in the editor, an account number, ``_`` and 64 hex
+#: digits for a file uploaded through the API. The class is wider than both.
+_DOCUMENT_ID = re.compile(r"[A-Za-z0-9_.-]{1,128}")
+
+
+@dataclass(frozen=True, slots=True)
+class Link:
+    """A link or an image the reader meets, as a ``rewrite_link`` callback sees it.
+
+    Attributes
+    ----------
+    href : str
+        An ``<a>``'s ``href`` or an ``<img>``'s ``src``, character references
+        decoded.
+    text : str
+        An ``<a>``'s displayed text or an ``<img>``'s ``alt``, whitespace
+        collapsed.
+    title : str
+        The ``title``, or ``""``.
+    image : bool
+        ``True`` for an ``<img>``.
+    document_id : str or None
+        For an ``<img>`` embedding an attachment of the request
+        (:data:`EMBEDDED_IMAGE_PREFIX` and a ``DOCUMENT_ID``), that
+        ``DOCUMENT_ID``; ``None`` otherwise, and always for an ``<a>``.
+    enclosing_href : str or None
+        For an ``<img>`` inside a link, that link's ``href``; ``None``
+        otherwise. The image is read before the link around it.
+    """
+
+    href: str
+    text: str = ""
+    title: str = ""
+    image: bool = False
+    document_id: str | None = None
+    enclosing_href: str | None = None
+
+
+#: A ``rewrite_link`` callback: called with each link and image a read meets,
+#: outside code. ``None`` keeps what the reader writes without one. A ``str`` is
+#: written instead, as literal text. A :class:`Link` is written in the reader's
+#: own spelling: a link's ``href`` and ``title``, around the link's content as
+#: read; an image's ``href`` as its ``src``, ``text`` as its ``alt`` and
+#: ``title``. An empty ``href`` drops a link and keeps its content, and writes an
+#: image as its ``text``.
+RewriteLink = Callable[[Link], "Link | str | None"]
+
+_REWRITE: ContextVar[RewriteLink | None] = ContextVar("rewrite_link", default=None)
+"""The callback of the read in progress. A context variable rather than state
+on the shared converter: each thread and each task reads with its own."""
+
+
+class _CallbackRaised(Exception):
+    """What a ``rewrite_link`` callback raised, carried past the reader's fallbacks.
+
+    The reader answers a ``ValueError`` by reading the body as its text; a
+    callback's own ``ValueError`` must not pass for markdownify's and quietly
+    cost the body its formatting.
+    """
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(error)
+        self.error = error
+
+
+def _rewritten(link: Link) -> Link | str | None:
+    """Ask the read's callback about ``link``; ``None`` when there is none."""
+
+    rewrite = _REWRITE.get()
+    if rewrite is None:
+        return None
+    try:
+        answer: object = rewrite(link)  # typed as what it is, not what it should be
+    except Exception as exc:
+        raise _CallbackRaised(exc) from exc
+    if answer is None or isinstance(answer, (Link, str)):
+        return answer
+    error = TypeError(
+        f"rewrite_link returned {type(answer).__name__}; expected Link, str or None"
+    )
+    raise _CallbackRaised(error)
+
+
 class _Converter(MarkdownConverter):
     """``markdownify``, with what CommonMark and the reader's glue need on top.
 
@@ -553,15 +646,27 @@ class _Converter(MarkdownConverter):
         body, _, tail = rest.rpartition("```")
         return f"{head}{fence}{body}{fence}{tail}"
 
+    def _literal(self, text: str, parent_tags: set[str]) -> str:
+        """``text`` escaped as the reader escapes a text node: displayed as it is."""
+
+        return self.escape(" ".join(text.split()), parent_tags)
+
     def convert_a(self, el: Tag, text: str, parent_tags: set[str]) -> str:
         """A link; ``<url>`` when its text is its URL and reads back unchanged."""
 
+        if "_noformat" in parent_tags:
+            return text
         href = str(el.get("href") or "")
+        title = str(el.get("title") or "")
+        answer = _rewritten(Link(href, " ".join(el.get_text().split()), title))
+        if isinstance(answer, str):
+            return self._literal(answer, parent_tags)
+        if answer is not None:
+            href, title = answer.href, answer.title
         edges = _EDGES.fullmatch(text)
-        if "_noformat" in parent_tags or not href or edges is None or not edges[2]:
+        if not href or edges is None or not edges[2]:
             return text
         before, inner, after = edges.groups()
-        title = str(el.get("title") or "")
         if not title and el.get_text() == href and _AUTOLINK.fullmatch(href):
             return f"{before}<{href}>{after}"
         return f"{before}[{inner}]({_destination(href)}{_title(title)}){after}"
@@ -569,12 +674,38 @@ class _Converter(MarkdownConverter):
     def convert_img(self, el: Tag, text: str, parent_tags: set[str]) -> str:
         """An image, wherever it is: a cell or a heading holds one too."""
 
+        src = str(el.get("src") or "")
         alt = " ".join(str(el.get("alt") or "").split())
+        title = str(el.get("title") or "")
+        if "_noformat" not in parent_tags:
+            embedded = EasyvistaContentConverter.document_id_of(src)
+            around = el.find_parent("a")
+            answer = _rewritten(
+                Link(
+                    src,
+                    alt,
+                    title,
+                    image=True,
+                    document_id=embedded,
+                    enclosing_href=(
+                        None if around is None else str(around.get("href") or "")
+                    ),
+                )
+            )
+            if isinstance(answer, str):
+                return self._literal(answer, parent_tags)
+            if answer is not None and not answer.href:
+                return self._literal(answer.text, parent_tags)
+            if answer is not None:
+                src, alt, title = (
+                    answer.href,
+                    " ".join(answer.text.split()),
+                    answer.title,
+                )
         alt = str(self._inherited("escape")(alt, parent_tags))
         if alt.startswith("^") and "_noformat" not in parent_tags:
             alt = "\\" + alt  # cmark-gfm reads "![^" as "!" and a link
-        src = _destination(str(el.get("src") or ""))
-        return f"![{alt}]({src}{_title(str(el.get('title') or ''))})"
+        return f"![{alt}]({_destination(src)}{_title(title)})"
 
 
 class _Node(RenderTreeNode):
@@ -784,11 +915,41 @@ def _text_of(html: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def _converted(content: str) -> str:
+    """Read memo HTML, falling back to its text where the conversion cannot."""
+
+    try:
+        try:
+            return html_to_markdown(content)
+        except (RecursionError, ValueError):  # ValueError: markdownify's
+            # int() of a colspan or start such as "²" or 5,000 digits
+            return html_to_markdown(_plain_text_html(_text_of(content)))
+        except ParserRejectedMarkup:
+            # html.parser gives up on a few malformed declarations; the
+            # body's words are still worth more than an exception.
+            text = unescape(_ANY_TAG.sub(" ", content))
+            return html_to_markdown(_plain_text_html(" ".join(text.split())))
+    except _CallbackRaised:
+        raise
+    except Exception as exc:
+        raise EasyvistaContentError(
+            "Could not convert EasyVista memo HTML to Markdown "
+            f"({type(exc).__name__}: {exc})."
+        ) from exc
+
+
 class EasyvistaContentConverter:
     """Convert content between EasyVista memo HTML and canonical Markdown."""
 
+    EMBEDDED_IMAGE_PREFIX: ClassVar[str] = EMBEDDED_IMAGE_PREFIX
+
     @staticmethod
-    def from_transport(value: object, *, plain_text_is_markdown: bool = False) -> str:
+    def from_transport(
+        value: object,
+        *,
+        plain_text_is_markdown: bool = False,
+        rewrite_link: RewriteLink | None = None,
+    ) -> str:
         """Convert one EasyVista memo value into Markdown.
 
         Parameters
@@ -806,6 +967,12 @@ class EasyvistaContentConverter:
             ``<kbd>`` is still Markdown, but Markdown that opens with an
             autolink or other angle-bracketed text and carries inline HTML
             further on is read as HTML, and loses that autolink.
+        rewrite_link : callable, optional
+            Called with a :class:`Link` for each link and image the read
+            meets outside code, an image before the link around it; its
+            answer decides what is written (:data:`RewriteLink`). Not called
+            for a value passed through as Markdown, nor for a body read as
+            its text. Without one, the read is what it always was.
 
         Returns
         -------
@@ -825,6 +992,10 @@ class EasyvistaContentConverter:
             limit, where no stack is left even to report the failure as
             ``EasyvistaContentError`` (``docs/content.rst`` gives the
             measured depths).
+        Exception
+            Whatever ``rewrite_link`` raised, unchanged; ``TypeError`` when it
+            answered something other than a :class:`Link`, a ``str`` or
+            ``None``.
         """
 
         content = str(value or "").strip()
@@ -840,22 +1011,65 @@ class EasyvistaContentConverter:
         # 3.11.14/3.12.12/3.13.6 rescans to the end for each (quadratic).
         head, end, tail = content.rpartition(">")
         content = head + end + tail.replace("<", "&lt;")
+        token = _REWRITE.set(rewrite_link)
         try:
-            try:
-                return html_to_markdown(content)
-            except (RecursionError, ValueError):  # ValueError: markdownify's
-                # int() of a colspan or start such as "²" or 5,000 digits
-                return html_to_markdown(_plain_text_html(_text_of(content)))
-            except ParserRejectedMarkup:
-                # html.parser gives up on a few malformed declarations; the
-                # body's words are still worth more than an exception.
-                text = unescape(_ANY_TAG.sub(" ", content))
-                return html_to_markdown(_plain_text_html(" ".join(text.split())))
-        except Exception as exc:
-            raise EasyvistaContentError(
-                "Could not convert EasyVista memo HTML to Markdown "
-                f"({type(exc).__name__}: {exc})."
-            ) from exc
+            return _converted(content)
+        except _CallbackRaised as raised:
+            callback_error = raised.error
+        finally:
+            _REWRITE.reset(token)
+        raise callback_error  # outside the handler: the callback's, as it raised it
+
+    @staticmethod
+    def document_id_of(src: str) -> str | None:
+        """Return the ``DOCUMENT_ID`` an embedded image's ``src`` names.
+
+        ``None`` unless ``src`` is exactly :data:`EMBEDDED_IMAGE_PREFIX`
+        followed by a ``DOCUMENT_ID`` -- how EasyVista's editor refers to an
+        image pasted into a memo, which it keeps as an attachment of the
+        request.
+        """
+
+        if not src.startswith(EMBEDDED_IMAGE_PREFIX):
+            return None
+        document_id = src[len(EMBEDDED_IMAGE_PREFIX) :]
+        return document_id if _DOCUMENT_ID.fullmatch(document_id) else None
+
+    @staticmethod
+    def document_image(document_id: str, *, alt: str = "") -> str:
+        """Return the Markdown of an image embedding one of the request's attachments.
+
+        :meth:`to_transport` renders it as EasyVista's editor writes a pasted
+        image, ``<img src="@@EMBEDDED_IMAGE_PATH@@<document_id>" alt="..." />``,
+        and :meth:`from_transport` reads that back as this same Markdown: it
+        is spelled by the reader itself. The memo displays the image once the
+        attachment is on the same request.
+
+        Parameters
+        ----------
+        document_id : str
+            The attachment's ``DOCUMENT_ID``, as ``list_documents`` gives it.
+        alt : str, optional
+            The image's alternative text.
+
+        Raises
+        ------
+        ValueError
+            ``document_id`` is not one: empty, or holding a character no
+            ``DOCUMENT_ID`` has.
+        """
+
+        if not _DOCUMENT_ID.fullmatch(document_id):
+            raise ValueError(f"not an EasyVista DOCUMENT_ID: {document_id!r}")
+        native = (
+            f'<p><img src="{EMBEDDED_IMAGE_PREFIX}{document_id}" '
+            f'alt="{escape(" ".join(alt.split()))}" /></p>'
+        )
+        token = _REWRITE.set(None)  # a callback in force for an enclosing read
+        try:
+            return html_to_markdown(native)
+        finally:
+            _REWRITE.reset(token)
 
     @staticmethod
     def to_transport(value: object) -> str:

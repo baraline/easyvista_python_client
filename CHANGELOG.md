@@ -15,6 +15,35 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-08
+
+A patch release of the content reader: a caller can recognise the images a
+memo embeds and decide, link by link, what a read writes. Without the new
+argument a read is unchanged, byte for byte; writing is unchanged, and so is
+everything outside `easyvista_python_client.content`.
+
+### Added
+
+- **`from_transport(..., rewrite_link=callback)`.** The callback is called with
+  a `Link` for each link and image the read meets outside code -- an image
+  before the link around it, with that link's `enclosing_href` -- and its
+  answer is written: `None` keeps the reader's output, a `str` is written as
+  literal text, a `Link` replaces the target (an empty `href` drops a link and
+  keeps its content, or writes an image as its text). The callback is held in
+  a context variable, so concurrent reads each use their own. What it raises
+  reaches the caller unchanged; a `ValueError` is not taken for markdownify's
+  and answered with the text fallback.
+- **`Link` and `RewriteLink`**, exported from `easyvista_python_client.content`.
+- **`EasyvistaContentConverter.document_id_of(src)`** returns the
+  `DOCUMENT_ID` of an embedded image's `src`
+  (`@@EMBEDDED_IMAGE_PATH@@<DOCUMENT_ID>`, how EasyVista's editor embeds a
+  pasted image), and **`document_image(document_id, alt=...)`** the Markdown
+  of one, spelled as the reader spells it. A `Link` for such an image carries
+  its `document_id`. Measured on one instance on 2026-10-07: an image written
+  that way through the API displays, for an attachment pasted in the editor
+  and for one uploaded with `add_document`.
+- `EasyvistaContentConverter.EMBEDDED_IMAGE_PREFIX`.
+
 ## [0.4.2] - 2026-10-07
 
 A patch release of the content writer: a link written into a memo opens in a
@@ -1661,7 +1690,8 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.2...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.3...HEAD
+[0.4.3]: https://github.com/baraline/easyvista_python_client/compare/0.4.2...0.4.3
 [0.4.2]: https://github.com/baraline/easyvista_python_client/compare/0.4.1...0.4.2
 [0.4.1]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...0.4.1
 [0.4.0]: https://github.com/baraline/easyvista_python_client/compare/0.3.0...0.4.0
