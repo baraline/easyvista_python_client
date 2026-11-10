@@ -140,3 +140,71 @@ def build_close_ticket(
         )
 
     return spec, parse
+
+
+def _build_state_request(
+    wrapper: str,
+    rfc_number: str,
+    *,
+    comment: str | None,
+    done_by_id: int | None,
+    context: dict[str, Any] | None,
+) -> tuple[RequestSpec, Callable[[Any], Request]]:
+    body: dict[str, Any] = {}
+    if comment is not None:
+        body["comment"] = comment
+    if done_by_id is not None:
+        body["done_by_id"] = done_by_id
+    spec = RequestSpec("PUT", f"requests/{rfc_number}", json={wrapper: body})
+
+    def parse(data: Any) -> Request:
+        records = extract_records(data, REQUESTS.envelope_key)
+        return Request.model_validate(
+            records[0] if records else data, context=context
+        )
+
+    return spec, parse
+
+
+def build_suspend_ticket(
+    rfc_number: str,
+    *,
+    comment: str | None = None,
+    done_by_id: int | None = None,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Request]]:
+    """Build the ``{"suspended": {...}}`` PUT spec -- the vendor's suspend request.
+
+    https://docs.easyvista.com/docs/rest-api-suspend-an-incident-request.md
+    (tier 1): ``comment`` and ``done_by_id`` are the page's two optional
+    parameters, and both are left out of the body when ``None``.
+    """
+    return _build_state_request(
+        "suspended",
+        rfc_number,
+        comment=comment,
+        done_by_id=done_by_id,
+        context=context,
+    )
+
+
+def build_restart_ticket(
+    rfc_number: str,
+    *,
+    comment: str | None = None,
+    done_by_id: int | None = None,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Request]]:
+    """Build the ``{"restarted": {...}}`` PUT spec -- the vendor's restart request.
+
+    https://docs.easyvista.com/docs/rest-api-reopen-an-incident-request.md
+    (tier 1): ``comment`` and ``done_by_id`` are the page's two optional
+    parameters, and both are left out of the body when ``None``.
+    """
+    return _build_state_request(
+        "restarted",
+        rfc_number,
+        comment=comment,
+        done_by_id=done_by_id,
+        context=context,
+    )

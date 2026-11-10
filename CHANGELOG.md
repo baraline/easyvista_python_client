@@ -15,6 +15,46 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-10
+
+Two more of the vendor's ticket requests, and a guard that names one more
+column. Neither new method takes a status: the package still has no status
+setter.
+
+### Added
+
+- **`suspend_ticket(rfc_number, *, allow_workflow_effect, comment=None,
+  done_by_id=None)`** and **`restart_ticket(...)`** (same signature), the
+  vendor's suspend and restart requests
+  ([suspend](https://docs.easyvista.com/docs/rest-api-suspend-an-incident-request.md),
+  [restart](https://docs.easyvista.com/docs/rest-api-reopen-an-incident-request.md)):
+  `PUT requests/{rfc_number}` with a `suspended` / `restarted` object. The guard
+  already named both bodies `WorkflowEffect.UNKNOWN`, so
+  `allow_workflow_effect` is a required keyword and the call is refused before
+  any request unless it includes `UNKNOWN`; an allowed request is sent once,
+  never retried. `comment` and `done_by_id` are left out of the body when
+  `None`. The return value is parsed as `close_ticket`'s is.
+
+### Changed
+
+- **BREAKING:** the workflow guard now names `STATUS_ID_ON_CREATE` on an
+  existing action (`update_action`, or `PUT actions/{id}` through `send`), as
+  it does `STATUS_ID_ON_TERMINATE`. A write that passed before is refused
+  without `allow_workflow_effect=WorkflowEffect.UNKNOWN`. Measured 2026-11-09
+  and 2026-11-10 on one instance (tier 4, may not generalise): a write to it
+  on an existing action changed where the ticket's status went. Creating an
+  action or a task is unchanged: the server overwrites the column on create.
+
+### Fixed
+
+- **The `reassign_action` documentation about `OWNING_GROUP_ID`.** It said the
+  ticket's owning group does not follow a reassigned step. Measured 2026-11-04
+  to 2026-11-10 on one instance (several tickets, may not generalise): it
+  follows after a few seconds to about two minutes (consistent with a
+  server-side job; inferred, not observed), and `LAST_UPDATE` moves with it;
+  the first reading was taken too soon. The status still does not move, the
+  step is not started and no action row is added.
+
 ## [0.4.3] - 2026-10-08
 
 A patch release of the content reader: a caller can recognise the images a
@@ -1690,7 +1730,8 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.4.3...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/baraline/easyvista_python_client/compare/0.4.3...0.5.0
 [0.4.3]: https://github.com/baraline/easyvista_python_client/compare/0.4.2...0.4.3
 [0.4.2]: https://github.com/baraline/easyvista_python_client/compare/0.4.1...0.4.2
 [0.4.1]: https://github.com/baraline/easyvista_python_client/compare/0.4.0...0.4.1

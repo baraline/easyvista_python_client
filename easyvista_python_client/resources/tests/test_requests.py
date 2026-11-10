@@ -189,3 +189,15 @@ def test_build_close_ticket_unwraps_a_capital_r_requests_envelope():
     """Red before the case-insensitive match."""
     _, parser = r.build_close_ticket("I1")
     assert parser({"Requests": [{"RFC_NUMBER": "I1"}]}).rfc_number == "I1"
+
+
+def test_build_suspend_and_restart_ticket_bodies():
+    for build, wrapper in (
+        (r.build_suspend_ticket, "suspended"),
+        (r.build_restart_ticket, "restarted"),
+    ):
+        spec, _ = build("I1")
+        assert (spec.method, spec.path) == ("PUT", "requests/I1")
+        assert spec.json == {wrapper: {}}
+        spec, _ = build("I1", comment="c", done_by_id=3)
+        assert spec.json == {wrapper: {"comment": "c", "done_by_id": 3}}

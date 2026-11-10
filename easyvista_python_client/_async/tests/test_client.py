@@ -2984,3 +2984,150 @@ async def test_end_action_compares_the_read_id_with_the_requested_id_as_integers
     assert json.loads(end.calls.last.request.content) == {
         "end_action": {"action_id": 42}
     }
+
+
+# --- suspend_ticket / restart_ticket ------------------------------------------
+
+_STATE_METHODS = [
+    ("suspend_ticket", "suspended"),
+    ("restart_ticket", "restarted"),
+]
+
+
+@pytest.mark.parametrize(("method", "wrapper"), _STATE_METHODS)
+@respx.mock
+async def test_state_request_sends_the_wrapper_with_comment_and_done_by(
+    config, method, wrapper
+):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(201, json={"HREF": f"{ROOT}/requests/I1"})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await getattr(client, method)(
+            "I1",
+            allow_workflow_effect=WorkflowEffect.UNKNOWN,
+            comment="note",
+            done_by_id=7,
+        )
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {
+        wrapper: {"comment": "note", "done_by_id": 7}
+    }
+
+
+@pytest.mark.parametrize(("method", "wrapper"), _STATE_METHODS)
+@respx.mock
+async def test_state_request_omits_comment_and_done_by_when_none(
+    config, method, wrapper
+):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(201, json={"HREF": f"{ROOT}/requests/I1"})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        result = await getattr(client, method)(
+            "I1", allow_workflow_effect=[WorkflowEffect.UNKNOWN]
+        )
+    assert json.loads(route.calls.last.request.content) == {wrapper: {}}
+    # An HREF-only answer parses like close_ticket's: the model reads the RFC
+    # number off the href.
+    assert result.rfc_number == "I1"
+    assert result.href == f"{ROOT}/requests/I1"
+
+
+@pytest.mark.parametrize(("method", "wrapper"), _STATE_METHODS)
+async def test_state_request_requires_the_opt_in_keyword(config, method, wrapper):
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(TypeError):
+            await getattr(client, method)("I1")
+
+
+@pytest.mark.parametrize(("method", "wrapper"), _STATE_METHODS)
+@respx.mock
+async def test_state_request_is_refused_without_unknown_in_the_opt_in(
+    config, method, wrapper
+):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await getattr(client, method)(
+                "I1", allow_workflow_effect=WorkflowEffect.INTERRUPTS
+            )
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await getattr(client, method)("I1", allow_workflow_effect=())
+    assert not route.called
+
+
+@pytest.mark.parametrize(("method", "wrapper"), _STATE_METHODS)
+@respx.mock
+async def test_state_request_is_sent_once_on_a_transient_failure(
+    config, method, wrapper
+):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(503, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaError):
+            await getattr(client, method)(
+                "I1", allow_workflow_effect=WorkflowEffect.UNKNOWN
+            )
+    assert route.call_count == 1
+
+
+# --- the guard names STATUS_ID_ON_CREATE on an existing action ----------------
+
+
+@pytest.mark.parametrize("key", ["STATUS_ID_ON_CREATE", "status_id_on_create"])
+@respx.mock
+async def test_update_action_refuses_status_id_on_create_without_an_opt_in(
+    config, key
+):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    update = ActionUpdate(extra_payload={key: "12"})
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.update_action(60350, update)
+    assert not route.called
+
+
+@respx.mock
+async def test_update_action_sends_status_id_on_create_when_allowed(config):
+    route = respx.put(f"{ROOT}/actions/60350").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    update = ActionUpdate(extra_payload={"STATUS_ID_ON_CREATE": "12"})
+    async with AsyncEasyvistaClient(config) as client:
+        await client.update_action(
+            60350, update, allow_workflow_effect=WorkflowEffect.UNKNOWN
+        )
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content)["STATUS_ID_ON_CREATE"] == "12"
+
+
+@respx.mock
+async def test_create_action_and_task_do_not_name_status_id_on_create(config):
+    """Pinned: on create the server overwrites the column, so it is not named."""
+    action = respx.post(f"{ROOT}/requests/I1/actions").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    task = respx.post(f"{ROOT}/requests/I1/tasks").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        await client.create_action(
+            "I1",
+            PostAction(
+                action_type_id=94,
+                group_id=3,
+                extra_payload={"STATUS_ID_ON_CREATE": "12"},
+            ),
+        )
+        await client.create_task(
+            "I1",
+            PostTask(
+                action_type_id=94,
+                group_id=3,
+                extra_payload={"STATUS_ID_ON_CREATE": "12"},
+            ),
+        )
+    assert action.call_count == 1
+    assert task.call_count == 1

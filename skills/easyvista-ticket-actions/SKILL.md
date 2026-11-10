@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the actions sub-resource."
 metadata:
   package: easyvista-python-client
-  version: "0.4.3"
+  version: "0.5.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -388,11 +388,17 @@ UI's transfer is a wizard), so the effect is measured, not specified. Measured
 2026-10-02 on one instance (Service Manager 2025.3; two tickets, so it may not
 generalise): the group was stored (`GROUP_ID` 57 to 50 on the open workflow step
 of both tickets); the step stayed open and the ticket's status did not move; the
-open actions were unchanged and no new action rows appeared. **The ticket's own
-`OWNING_GROUP_ID` does not follow the action's group** (it stayed 57 on the first
-ticket, the only one read for it), so reassigning a step is not reassigning the
-ticket. Reassigning to a person (`done_by_id`) was **not measured**, and whether
-the UI wizard's notifications fire is not observable from the API.
+open actions were unchanged and no new action rows appeared. The ticket's own
+`OWNING_GROUP_ID` was read on one ticket only and had not moved; that reading was
+taken too soon. Measured 2026-11-04 to 2026-11-10 on one instance (several tickets,
+may not generalise): **the ticket's `OWNING_GROUP_ID` follows the step's new group**
+after a delay of a few seconds to about two minutes (consistent with a server-side
+job; inferred, not observed; `LAST_UPDATE` moves with it); the status does not move,
+the step is not started and no action row is added. Also measured 2026-11-04 on one
+ticket: after `done_by_id` was written on the step, the ticket's `OWNER_ID` followed
+about 1 min 45 s later. The person's effect on the step was not measured beyond that
+one `OWNER_ID` observation, and whether the UI wizard's notifications fire is not
+observable from the API.
 `reassign_action` is not refused by the workflow guard, because the group and the
 person are data the workflow reads, not workflow state.
 
