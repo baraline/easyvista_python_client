@@ -683,7 +683,8 @@ class EasyvistaClient:
         generalise): the request added one end-of-suspension action and, in
         the tested case, returned the ticket to the status it was suspended
         from; a restart on a ticket that was not suspended was refused with
-        the documented message. A status key sent in the body was ignored
+        the documented message, as HTTP 590 rather than the documented 400.
+        A status key sent in the body was ignored
         (measured 2026-11-04). The request takes no status, and the package
         has no status setter.
 

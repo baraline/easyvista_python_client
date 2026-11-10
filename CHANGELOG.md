@@ -51,9 +51,9 @@ setter.
   ticket's owning group does not follow a reassigned step. Measured 2026-11-04
   to 2026-11-10 on one instance (several tickets, may not generalise): it
   follows after a few seconds to about two minutes (consistent with a
-  server-side job; inferred, not observed), and `LAST_UPDATE` moves with it; the first reading was taken too soon. The
-  status still does not move, the step is not started and no action row is
-  added.
+  server-side job; inferred, not observed), and `LAST_UPDATE` moves with it;
+  the first reading was taken too soon. The status still does not move, the
+  step is not started and no action row is added.
 
 ## [0.4.3] - 2026-10-08
 
