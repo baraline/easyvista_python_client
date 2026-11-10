@@ -610,6 +610,102 @@ class EasyvistaClient:
         )
         return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
 
+    def suspend_ticket(
+        self,
+        rfc_number: str,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect],
+        comment: str | None = None,
+        done_by_id: int | None = None,
+    ) -> Request:
+        """Suspend a ticket -- the vendor's suspend request.
+
+        Sends ``PUT requests/{rfc}`` with a ``suspended`` body, as the vendor
+        documents it:
+        https://docs.easyvista.com/docs/rest-api-suspend-an-incident-request.md
+        (tier 1, re-read 2026-11-10). The page documents two optional
+        parameters, ``comment`` and ``done_by_id`` (an employee id), and no
+        target status. Both are left out of the body when ``None``. A ticket
+        that is already suspended is refused by the server (400, "The request
+        is already suspended. Operation aborted.").
+
+        Measured November 2026 on one instance (may not generalise): the
+        ticket moved to the instance's suspended status and one already-ended
+        "Suspension" action carrying the comment was added; the workflow step
+        stayed open. A status key sent in the body was ignored (measured
+        2026-11-04).
+
+        **This is not a status setter, and the package still has none.** The
+        request takes no status; where a ticket's status goes follows its
+        workflow.
+
+        ``allow_workflow_effect`` is **required**: nothing documents what a
+        suspend does to the workflow, so the write is named
+        ``WorkflowEffect.UNKNOWN`` and refused with
+        :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused`
+        before any request is made unless the call allows it. The allowed
+        request is sent once, never retried. The return value is parsed like
+        :meth:`close_ticket`'s: the vendor answers 201 with an ``HREF`` only, so
+        re-read with :meth:`get_ticket` to see the status::
+
+            client.suspend_ticket(
+                rfc,
+                allow_workflow_effect=WorkflowEffect.UNKNOWN,
+                comment="Waiting for the requester",
+            )
+        """
+        spec, parse = requests_res.build_suspend_ticket(
+            rfc_number,
+            comment=comment,
+            done_by_id=done_by_id,
+            context=self._validation_context,
+        )
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
+
+    def restart_ticket(
+        self,
+        rfc_number: str,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect],
+        comment: str | None = None,
+        done_by_id: int | None = None,
+    ) -> Request:
+        """Restart a suspended ticket -- the vendor's restart request.
+
+        Sends ``PUT requests/{rfc}`` with a ``restarted`` body, as the vendor
+        documents it:
+        https://docs.easyvista.com/docs/rest-api-reopen-an-incident-request.md
+        (tier 1, re-read 2026-11-10). The page documents two optional
+        parameters, ``comment`` and ``done_by_id`` (an employee id), and no
+        target status; its example marks ``comment`` as required while its
+        table lists it as optional, so this method leaves it out of the body
+        when ``None``. On a ticket that is not suspended the server answers
+        400 with "The request is not suspended. Operation aborted.".
+
+        Measured November 2026 on one instance (may not generalise): the
+        request added one "Fin de suspension" action and returned the ticket
+        to the status it was suspended from; a restart on a ticket that was
+        not suspended was refused with the documented message. A status key
+        sent in the body was ignored (measured 2026-11-04).
+
+        **This is not a status setter, and the package still has none.** The
+        request takes no status.
+
+        ``allow_workflow_effect`` is **required** and is
+        ``WorkflowEffect.UNKNOWN``, as for :meth:`suspend_ticket`: refused
+        before any request unless allowed, and sent once, never retried. The
+        return value is parsed like :meth:`close_ticket`'s (an ``HREF`` only)::
+
+            client.restart_ticket(rfc, allow_workflow_effect=WorkflowEffect.UNKNOWN)
+        """
+        spec, parse = requests_res.build_restart_ticket(
+            rfc_number,
+            comment=comment,
+            done_by_id=done_by_id,
+            context=self._validation_context,
+        )
+        return parse(self._transport.send(spec.allowing(allow_workflow_effect)))
+
     # --- actions -------------------------------------------------------------
     def create_action(
         self,
@@ -947,9 +1043,17 @@ class EasyvistaClient:
         the **first ticket only** the step was recorded as a type-20 action
         with ``WORKFLOW_ID`` set; its ``WORKFLOW_ID`` was unchanged,
         ``DONE_BY_ID`` stayed empty, and no ticket field changed.
-        **The ticket's own ``OWNING_GROUP_ID`` does not follow the action's
-        group** -- it stayed 57 on the first ticket, the only one read for it,
-        so reassigning a step is not reassigning the ticket. The lower-case
+        The ticket's own ``OWNING_GROUP_ID`` was read at the time on one
+        ticket only and had not moved; that reading was taken too soon.
+        Measured 2026-11-04 to 2026-11-10 on one instance (several tickets,
+        may not generalise): the ticket's ``OWNING_GROUP_ID`` follows the
+        step's new group after a delay of a few seconds to about two minutes,
+        set by a server-side job rather than by the PUT itself, and
+        ``LAST_UPDATE`` moves with it. What still holds: the status does not
+        move, the step is not started and no action row is added. Also
+        measured 2026-11-04 on one ticket: after ``done_by_id`` was written on
+        the step, the ticket's ``OWNER_ID`` followed about 1 min 45 s later
+        through the same kind of job. The lower-case
         key ``group_id`` was the one sent; the upper-case spelling was never
         needed. The person (``done_by_id``) was **not measured**: the same
         body shape is sent, but nothing here shows what the instance does

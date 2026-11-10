@@ -60,7 +60,7 @@ def _run_python(code: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_package_imports_and_has_version():
-    assert easyvista_python_client.__version__ == "0.4.3"
+    assert easyvista_python_client.__version__ == "0.5.0"
 
 
 def test_public_exports_available():

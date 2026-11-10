@@ -35,7 +35,8 @@ site allowed it explicitly, with ``allow_workflow_effect=``.
 ``end_action``, ``suspended``, ``restarted`` -- as a top-level body key, in any
 casing, on any path. (2) On ticket and action routes, the columns that hold or
 select workflow state: a status, a catalog (which selects the workflow), the
-workflow, stage and step links, and on an existing action its end date, type,
+workflow, stage and step links, and on an existing action its end date, the
+statuses it sets (``status_id_on_terminate``, ``status_id_on_create``), type,
 parent or ticket (creating an action or a task names a narrower set, below).
 (3) Ticket sub-routes that are workflow commands rather than records, and
 ``requests/without-workflow`` and the deletion of a ticket. (4) A write to
@@ -114,11 +115,18 @@ _REQUEST_COLUMNS = frozenset(
 )
 
 #: Columns on ``actions/{id}`` that end, re-type, re-parent or move an action.
+#: ``status_id_on_create``: measured 2026-11-09 and 2026-11-10 on one instance
+#: (may not generalise): a restart puts the ticket on the status stored in its
+#: suspension action's STATUS_ID_ON_CREATE, so writing that column on an
+#: existing action can change the ticket's status. Not in the create sets
+#: below: on create the server overwrites it with the current status
+#: (measured 2026-11-05).
 _ACTION_COLUMNS = frozenset(
     {
         "end_date_ut",
         "end_date",
         "status_id_on_terminate",
+        "status_id_on_create",
         "workflow_id",
         "stage_id",
         "process_step_id",

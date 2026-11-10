@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
 metadata:
   package: easyvista-python-client
-  version: "0.4.3"
+  version: "0.5.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -198,6 +198,40 @@ with EasyvistaClient.from_env() as client:
 a `TypeError`), and a value that does not include `WorkflowEffect.INTERRUPTS` is
 refused before any request is sent (see the first Gotcha). `WorkflowEffect` and
 `EasyvistaWorkflowEffectRefused` are both importable from the package root.
+
+### Suspend and restart
+
+`suspend_ticket` and `restart_ticket` are the vendor's suspend and restart requests
+(tier 1: `rest-api-suspend-an-incident-request.md`,
+`rest-api-reopen-an-incident-request.md`). Each takes an optional `comment` and an
+optional `done_by_id`, and no status. They are not status setters. Both require
+`allow_workflow_effect` and are refused before any request unless it includes
+`WorkflowEffect.UNKNOWN`; an allowed request is sent once, never retried.
+
+```python
+from easyvista_python_client import EasyvistaClient, WorkflowEffect
+
+with EasyvistaClient.from_env() as client:
+    client.suspend_ticket(
+        "YOUR_RFC_NUMBER",
+        allow_workflow_effect=WorkflowEffect.UNKNOWN,
+        comment="Waiting for the requester",
+    )
+    client.restart_ticket(
+        "YOUR_RFC_NUMBER",
+        allow_workflow_effect=WorkflowEffect.UNKNOWN,
+        comment="Requester answered",
+    )
+    # Re-read: the answer carries an HREF only.
+    print(client.get_ticket("YOUR_RFC_NUMBER").status_id)
+```
+
+Measured November 2026 on one instance (may not generalise): a suspend moves the
+ticket to the instance's suspended status and adds one already-ended "Suspension"
+action carrying the comment, with the workflow step left open; a restart adds one
+"Fin de suspension" action and returns the ticket to the status it was suspended
+from; a restart on a ticket that is not suspended is refused with "The request is
+not suspended. Operation aborted."
 
 ```python
 from easyvista_python_client import EasyvistaClient, PostRequest

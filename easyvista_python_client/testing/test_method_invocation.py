@@ -81,6 +81,8 @@ ARGS: dict[str, tuple[tuple, dict]] = {
     # it because `send` returns the raw JSON body unchanged.
     "send": (("GET", "requests"), {}),
     "close_ticket": (("I1",), {"allow_workflow_effect": WorkflowEffect.INTERRUPTS}),
+    "suspend_ticket": (("I1",), {"allow_workflow_effect": WorkflowEffect.UNKNOWN}),
+    "restart_ticket": (("I1",), {"allow_workflow_effect": WorkflowEffect.UNKNOWN}),
     "count_tickets": ((), {}),
     "create_action": (("I1", PostAction(action_type_id=94, group_id=3)), {}),
     # action_id named explicitly: omitted, the vendor form ends EVERY open
