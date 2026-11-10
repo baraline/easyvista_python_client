@@ -226,11 +226,11 @@ with EasyvistaClient.from_env() as client:
     print(client.get_ticket("YOUR_RFC_NUMBER").status_id)
 ```
 
-Measured November 2026 on one instance (may not generalise): a suspend moves the
-ticket to the instance's suspended status and adds one already-ended "Suspension"
-action carrying the comment, with the workflow step left open; a restart adds one
-"Fin de suspension" action and returns the ticket to the status it was suspended
-from; a restart on a ticket that is not suspended is refused with "The request is
+Measured 2026-11-04 to 2026-11-10 on one instance (tier 4, may not generalise): a
+suspend moves the ticket to the instance's suspended status and adds one
+already-ended suspension action carrying the comment, with the workflow step left
+open; a restart adds one end-of-suspension action and, in the tested case, returns
+the ticket to the status it was suspended from; a restart on a ticket that is not suspended is refused with "The request is
 not suspended. Operation aborted."
 
 ```python

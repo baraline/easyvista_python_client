@@ -291,12 +291,12 @@ empty and no ticket field changed. The ticket's own `OWNING_GROUP_ID` was read o
 that ticket only, and had not moved; that reading was taken too soon. Measured
 2026-11-04 to 2026-11-10 on one instance (several tickets, may not generalise): the
 ticket's `OWNING_GROUP_ID` **follows the step's new group** after a delay of a few
-seconds to about two minutes, set by a server-side job rather than by the PUT itself,
-and `LAST_UPDATE` moves with it; the status still does not move, the step is not
-started and no action row is added. Also measured 2026-11-04 on one ticket: after
-`done_by_id` was written on the step, the ticket's `OWNER_ID` followed about 1 min
-45 s later through the same kind of job. Reassigning to a person
-(`done_by_id`) was **not measured**. Whether the UI wizard's notifications fire is not
+seconds to about two minutes (consistent with a server-side job; inferred, not
+observed), and `LAST_UPDATE` moves with it; the status still does not move, the step
+is not started and no action row is added. Also measured 2026-11-04 on one ticket:
+after `done_by_id` was written on the step, the ticket's `OWNER_ID` followed about
+1 min 45 s later. The person's effect on the step was not measured beyond that one
+`OWNER_ID` observation. Whether the UI wizard's notifications fire is not
 observable from the API.
 
 **Business rules can fire on any write** — "On Insert/On Update" of any record

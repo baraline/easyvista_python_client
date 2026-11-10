@@ -115,10 +115,9 @@ _REQUEST_COLUMNS = frozenset(
 )
 
 #: Columns on ``actions/{id}`` that end, re-type, re-parent or move an action.
-#: ``status_id_on_create``: measured 2026-11-09 and 2026-11-10 on one instance
-#: (may not generalise): a restart puts the ticket on the status stored in its
-#: suspension action's STATUS_ID_ON_CREATE, so writing that column on an
-#: existing action can change the ticket's status. Not in the create sets
+#: ``status_id_on_create``: workflow state. Measured 2026-11-09 and 2026-11-10
+#: on one instance (tier 4, may not generalise): a write to it on an existing
+#: action changed where the ticket's status went. Not in the create sets
 #: below: on create the server overwrites it with the current status
 #: (measured 2026-11-05).
 _ACTION_COLUMNS = frozenset(

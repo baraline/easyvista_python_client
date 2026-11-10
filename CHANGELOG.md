@@ -41,18 +41,17 @@ setter.
   existing action (`update_action`, or `PUT actions/{id}` through `send`), as
   it does `STATUS_ID_ON_TERMINATE`. A write that passed before is refused
   without `allow_workflow_effect=WorkflowEffect.UNKNOWN`. Measured 2026-11-09
-  and 2026-11-10 on one instance (may not generalise): a restart puts the
-  ticket on the status stored in its suspension action's
-  `STATUS_ID_ON_CREATE`. Creating an action or a task is unchanged: the server
-  overwrites the column on create.
+  and 2026-11-10 on one instance (tier 4, may not generalise): a write to it
+  on an existing action changed where the ticket's status went. Creating an
+  action or a task is unchanged: the server overwrites the column on create.
 
 ### Fixed
 
 - **The `reassign_action` documentation about `OWNING_GROUP_ID`.** It said the
   ticket's owning group does not follow a reassigned step. Measured 2026-11-04
   to 2026-11-10 on one instance (several tickets, may not generalise): it
-  follows after a few seconds to about two minutes, set by a server-side job,
-  and `LAST_UPDATE` moves with it; the first reading was taken too soon. The
+  follows after a few seconds to about two minutes (consistent with a
+  server-side job; inferred, not observed), and `LAST_UPDATE` moves with it; the first reading was taken too soon. The
   status still does not move, the step is not started and no action row is
   added.
 

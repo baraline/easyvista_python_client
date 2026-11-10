@@ -629,15 +629,12 @@ class EasyvistaClient:
         that is already suspended is refused by the server (400, "The request
         is already suspended. Operation aborted.").
 
-        Measured November 2026 on one instance (may not generalise): the
-        ticket moved to the instance's suspended status and one already-ended
-        "Suspension" action carrying the comment was added; the workflow step
-        stayed open. A status key sent in the body was ignored (measured
-        2026-11-04).
-
-        **This is not a status setter, and the package still has none.** The
-        request takes no status; where a ticket's status goes follows its
-        workflow.
+        Measured 2026-11-04 to 2026-11-10 on one instance (tier 4, may not
+        generalise): the ticket moved to the instance's suspended status and
+        one already-ended suspension action carrying the comment was added;
+        the workflow step stayed open. A status key sent in the body was
+        ignored (measured 2026-11-04). The request takes no status, and the
+        package has no status setter.
 
         ``allow_workflow_effect`` is **required**: nothing documents what a
         suspend does to the workflow, so the write is named
@@ -682,14 +679,13 @@ class EasyvistaClient:
         when ``None``. On a ticket that is not suspended the server answers
         400 with "The request is not suspended. Operation aborted.".
 
-        Measured November 2026 on one instance (may not generalise): the
-        request added one "Fin de suspension" action and returned the ticket
-        to the status it was suspended from; a restart on a ticket that was
-        not suspended was refused with the documented message. A status key
-        sent in the body was ignored (measured 2026-11-04).
-
-        **This is not a status setter, and the package still has none.** The
-        request takes no status.
+        Measured 2026-11-04 to 2026-11-10 on one instance (tier 4, may not
+        generalise): the request added one end-of-suspension action and, in
+        the tested case, returned the ticket to the status it was suspended
+        from; a restart on a ticket that was not suspended was refused with
+        the documented message. A status key sent in the body was ignored
+        (measured 2026-11-04). The request takes no status, and the package
+        has no status setter.
 
         ``allow_workflow_effect`` is **required** and is
         ``WorkflowEffect.UNKNOWN``, as for :meth:`suspend_ticket`: refused
@@ -1048,17 +1044,15 @@ class EasyvistaClient:
         Measured 2026-11-04 to 2026-11-10 on one instance (several tickets,
         may not generalise): the ticket's ``OWNING_GROUP_ID`` follows the
         step's new group after a delay of a few seconds to about two minutes,
-        set by a server-side job rather than by the PUT itself, and
+        consistent with a server-side job (inferred, not observed), and
         ``LAST_UPDATE`` moves with it. What still holds: the status does not
         move, the step is not started and no action row is added. Also
         measured 2026-11-04 on one ticket: after ``done_by_id`` was written on
-        the step, the ticket's ``OWNER_ID`` followed about 1 min 45 s later
-        through the same kind of job. The lower-case
-        key ``group_id`` was the one sent; the upper-case spelling was never
-        needed. The person (``done_by_id``) was **not measured**: the same
-        body shape is sent, but nothing here shows what the instance does
-        with it. Whether the UI wizard's notifications fire is not observable
-        from the API.
+        the step, the ticket's ``OWNER_ID`` followed about 1 min 45 s later.
+        The lower-case key ``group_id`` was the one sent; the upper-case
+        spelling was never needed. The person's effect on the step was not
+        measured beyond that one ``OWNER_ID`` observation. Whether the UI
+        wizard's notifications fire is not observable from the API.
 
         Not refused by the workflow guard: the group and the person are data
         the workflow reads, not workflow state. Re-read with :meth:`get_action`
