@@ -25,6 +25,9 @@ I, A, U = (  # noqa: E741 -- short aliases keep the parametrised table readable
         ("PUT", "actions/I1", {"end_action": {"action_id": 1}}, {A}),
         ("PUT", "requests/I1", {"suspended": {}}, {U}),
         ("PUT", "requests/I1", {"restarted": {}}, {U}),
+        ("PUT", "requests/I1", {"requalified": {"catalog_id": 3}}, {U}),
+        ("PUT", "requests/I1", {"Requalified": {}}, {U}),
+        ("PUT", "requests/I1", [{"requalified": {"catalog_code": "C"}}], {U}),
         # ... matched case-insensitively, on any path, and inside a list body.
         ("PUT", "requests/I1", {"Closed": {}}, {I}),
         ("PUT", "actions/60350", {"END_ACTION": {}}, {A}),

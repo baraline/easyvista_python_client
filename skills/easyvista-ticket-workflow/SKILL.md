@@ -1,11 +1,11 @@
 ---
 name: easyvista-ticket-workflow
-description: "Create, read, search, paginate, update and close EasyVista tickets (requests) with easyvista_python_client — PostRequest, Request, RequestUpdate, create_ticket, create_tickets, get_ticket, search_tickets, iter_tickets, count_tickets, update_ticket and close_ticket. Use for any ticket/incident/request operation, including discovering the instance-specific catalog codes and ids a create needs."
+description: "Create, read, search, paginate, update and close EasyVista tickets (requests) with easyvista_python_client — PostRequest, Request, RequestUpdate, create_ticket, create_tickets, get_ticket, search_tickets, iter_tickets, count_tickets, update_ticket, close_ticket, suspend_ticket, restart_ticket and requalify_ticket. Use for any ticket/incident/request operation, including discovering the instance-specific catalog codes and ids a create needs."
 license: MIT
 compatibility: "Requires Python 3.11+, easyvista-python-client, network access to an EasyVista Service Manager REST API, and a profile authorized for the requests resource."
 metadata:
   package: easyvista-python-client
-  version: "0.5.0"
+  version: "0.6.0"
 ---
 
 > **Sync and async.** Examples use `EasyvistaClient`. For `AsyncEasyvistaClient`,
@@ -363,3 +363,28 @@ with EasyvistaClient.from_env() as client:
   is also absent: it raised HTTP 590 while still changing the stored value on
   the verified instance, so it is not offered until that is resolved (open
   item `O-590-PARTIAL`).
+
+### Requalify
+
+`requalify_ticket` sends a `requalified` body naming exactly one target catalog:
+`catalog_id`, `catalog_code` or `catalog_guid` (zero or several raise `ValueError`
+before any request). The vendor says a requalification starts a new workflow (tier 1:
+`action.md`), so it requires `allow_workflow_effect` and is refused unless it
+includes `WorkflowEffect.UNKNOWN`; an allowed request is sent once, never retried.
+
+```python
+from easyvista_python_client import EasyvistaClient, WorkflowEffect
+
+with EasyvistaClient.from_env() as client:
+    client.requalify_ticket(
+        "YOUR_RFC_NUMBER",
+        allow_workflow_effect=WorkflowEffect.UNKNOWN,
+        catalog_code="YOUR_CATALOG_CODE",
+    )
+    # The answer is not a receipt: re-read to confirm the landing.
+    print(client.get_ticket("YOUR_RFC_NUMBER").sd_catalog_id)
+```
+
+Measured on one instance on 2026-11-16 (tier 4, may not generalise): an incident
+lands even when the server answers HTTP 590; a request is refused with 400 and code
+2117; a request sent to an incident catalog entry is refused with 400 and code 2119.

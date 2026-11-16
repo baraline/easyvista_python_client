@@ -201,3 +201,15 @@ def test_build_suspend_and_restart_ticket_bodies():
         assert spec.json == {wrapper: {}}
         spec, _ = build("I1", comment="c", done_by_id=3)
         assert spec.json == {wrapper: {"comment": "c", "done_by_id": 3}}
+
+
+def test_build_requalify_ticket_bodies():
+    for kwargs, inner in (
+        ({"catalog_id": 3}, {"catalog_id": "3"}),
+        ({"catalog_code": "C1"}, {"catalog_code": "C1"}),
+        ({"catalog_guid": "{G}"}, {"catalog_guid": "{G}"}),
+    ):
+        spec, parse = r.build_requalify_ticket("I1", **kwargs)
+        assert (spec.method, spec.path) == ("PUT", "requests/I1")
+        assert spec.json == {"requalified": inner}
+        assert parse({"HREF": "https://x/requests/I1"}).rfc_number == "I1"
