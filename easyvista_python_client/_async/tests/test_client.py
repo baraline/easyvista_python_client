@@ -3073,6 +3073,83 @@ async def test_state_request_is_sent_once_on_a_transient_failure(
     assert route.call_count == 1
 
 
+# --- requalify_ticket ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "inner"),
+    [
+        ({"catalog_id": 3}, {"catalog_id": "3"}),
+        ({"catalog_code": "C1"}, {"catalog_code": "C1"}),
+        ({"catalog_guid": "{G}"}, {"catalog_guid": "{G}"}),
+    ],
+)
+@respx.mock
+async def test_requalify_sends_the_requalified_body(config, kwargs, inner):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(201, json={"HREF": f"{ROOT}/requests/I1"})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        result = await client.requalify_ticket(
+            "I1", allow_workflow_effect=WorkflowEffect.UNKNOWN, **kwargs
+        )
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {"requalified": inner}
+    assert result.rfc_number == "I1"
+    assert result.href == f"{ROOT}/requests/I1"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"catalog_id": 3, "catalog_code": "C1"},
+        {"catalog_code": "C", "catalog_guid": "G"},
+    ],
+)
+@respx.mock
+async def test_requalify_refuses_zero_or_several_targets(config, kwargs):
+    route = respx.route().mock(return_value=httpx.Response(201, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(ValueError, match="exactly one"):
+            await client.requalify_ticket(
+                "I1", allow_workflow_effect=WorkflowEffect.UNKNOWN, **kwargs
+            )
+    assert not route.called
+
+
+async def test_requalify_requires_the_opt_in_keyword(config):
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(TypeError):
+            await client.requalify_ticket("I1", catalog_id=3)
+
+
+@respx.mock
+async def test_requalify_is_refused_without_unknown_in_the_opt_in(config):
+    route = respx.route().mock(return_value=httpx.Response(200, json={}))
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.requalify_ticket(
+                "I1", allow_workflow_effect=WorkflowEffect.INTERRUPTS, catalog_id=3
+            )
+        with pytest.raises(EasyvistaWorkflowEffectRefused):
+            await client.requalify_ticket("I1", allow_workflow_effect=(), catalog_id=3)
+    assert not route.called
+
+
+@respx.mock
+async def test_requalify_is_sent_once_on_a_transient_failure(config):
+    route = respx.put(f"{ROOT}/requests/I1").mock(
+        return_value=httpx.Response(503, json={})
+    )
+    async with AsyncEasyvistaClient(config) as client:
+        with pytest.raises(EasyvistaError):
+            await client.requalify_ticket(
+                "I1", allow_workflow_effect=WorkflowEffect.UNKNOWN, catalog_id=3
+            )
+    assert route.call_count == 1
+
+
 # --- the guard names STATUS_ID_ON_CREATE on an existing action ----------------
 
 

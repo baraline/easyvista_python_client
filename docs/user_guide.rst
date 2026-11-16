@@ -459,11 +459,19 @@ the API offers three things that touch it:
   page's ``end_date`` row rather than an explicit sentence, and the page
   documents final statuses only, so do not read ``status_guid`` as a way to pick
   an in-progress status. It needs ``allow_workflow_effect=WorkflowEffect.INTERRUPTS``.
-* Suspend and reopen are documented by the vendor but not wrapped here; their
-  pages say only that a suspend, or a reopening, action is created, and their
-  effect on the open actions is unmeasured.
-  :meth:`~easyvista_python_client.EasyvistaClient.send` reaches them with
-  ``allow_workflow_effect=WorkflowEffect.UNKNOWN``.
+* :meth:`~easyvista_python_client.EasyvistaClient.suspend_ticket` and
+  :meth:`~easyvista_python_client.EasyvistaClient.restart_ticket` wrap the
+  vendor's suspend and reopen requests; their pages say only that a suspend, or a
+  reopening, action is created, and their effect on the open actions is
+  unmeasured. They need ``allow_workflow_effect=WorkflowEffect.UNKNOWN``.
+* :meth:`~easyvista_python_client.EasyvistaClient.requalify_ticket` sends a
+  ``requalified`` body naming exactly one of ``catalog_id``, ``catalog_code`` and
+  ``catalog_guid``. The vendor says a requalification starts a new workflow
+  ("Requalify the category of the object. A new workflow will then start.",
+  tier 1, https://docs.easyvista.com/docs/action.md). It needs
+  ``allow_workflow_effect=WorkflowEffect.UNKNOWN`` and never re-reads: confirm a
+  landing with ``get_ticket`` (measured on one instance on 2026-11-16, so it may
+  not generalise: an incident landed even when the server answered 590).
 
 The vendor documents no REST write that sets a ticket's status outside those
 (tier 1, ``docs/vendor-api-reference.md``, "Ticket workflow"), so this package

@@ -15,6 +15,28 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-16
+
+One more of the ticket's workflow-moving writes, named by the guard.
+
+### Added
+
+- **`requalify_ticket(rfc_number, *, allow_workflow_effect, catalog_id=None,
+  catalog_code=None, catalog_guid=None)`**: `PUT requests/{rfc}` with a
+  `requalified` body holding exactly one catalog key (zero or several raise
+  `ValueError` before any request). The vendor documents a requalification as
+  starting a new workflow (`action.md`). The method never re-reads: the caller
+  confirms a landing with `get_ticket`, because one instance answered HTTP 590
+  on an incident requalification that had landed (measured 2026-11-16, tier 4,
+  may not generalise).
+
+### Changed
+
+- **BREAKING:** `requalified` is now a workflow envelope (`UNKNOWN`), matched as a
+  top-level body key in any casing on any path. A raw `send` of a `requalified`
+  body is refused unless the call allows `WorkflowEffect.UNKNOWN`. Before, the
+  nested catalog key passed the guard unseen.
+
 ## [0.5.0] - 2026-11-10
 
 Two more of the vendor's ticket requests, and a guard that names one more

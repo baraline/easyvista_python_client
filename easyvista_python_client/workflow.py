@@ -32,12 +32,13 @@ names what it can, and the transport refuses anything named unless the call
 site allowed it explicitly, with ``allow_workflow_effect=``.
 
 **What gets named.** (1) The vendor's workflow-control bodies -- ``closed``,
-``end_action``, ``suspended``, ``restarted`` -- as a top-level body key, in any
-casing, on any path. (2) On ticket and action routes, the columns that hold or
-select workflow state: a status, a catalog (which selects the workflow), the
-workflow, stage and step links, and on an existing action its end date, the
-statuses it sets (``status_id_on_terminate``, ``status_id_on_create``), type,
-parent or ticket (creating an action or a task names a narrower set, below).
+``end_action``, ``suspended``, ``restarted``, ``requalified`` -- as a top-level body
+key, in any casing, on any path. (2) On ticket and action routes, the columns
+that hold or select workflow state: a status, a catalog (which selects the
+workflow), the workflow, stage and step links, and on an existing action its
+end date, the statuses it sets (``status_id_on_terminate``,
+``status_id_on_create``), type, parent or ticket (creating an action or a task
+names a narrower set, below).
 (3) Ticket sub-routes that are workflow commands rather than records, and
 ``requests/without-workflow`` and the deletion of a ticket. (4) A write to
 ``actions/<x>`` where ``<x>`` is not an integer id: ``PUT
@@ -91,6 +92,7 @@ _ENVELOPES: Mapping[str, WorkflowEffect] = {
     "end_action": WorkflowEffect.ADVANCES,
     "suspended": WorkflowEffect.UNKNOWN,
     "restarted": WorkflowEffect.UNKNOWN,
+    "requalified": WorkflowEffect.UNKNOWN,
 }
 
 #: Columns on ``requests/{rfc}`` that hold or select workflow state. The vendor
@@ -101,7 +103,9 @@ _ENVELOPES: Mapping[str, WorkflowEffect] = {
 #: category as starting a new workflow: "Requalify the category of the object.
 #: A new workflow will then start." (https://docs.easyvista.com/docs/action.md,
 #: tier 1, read 2026-10-02). Reading the catalog columns as that category is
-#: this module's inference, not a measurement.
+#: this module's inference, not a measurement. The ``requalified`` body nests
+#: its catalog key one level down, where this column check does not look, so
+#: the body is named as an envelope above.
 _REQUEST_COLUMNS = frozenset(
     {
         "status_id",

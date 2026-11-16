@@ -202,11 +202,11 @@ class AsyncEasyvistaClient:
 
         ``allow_workflow_effect`` is the way past the workflow guard. A write
         whose content may change a ticket's workflow -- a ``closed``,
-        ``end_action``, ``suspended`` or ``restarted`` body on any path, a
-        status or catalog column on a ticket, an end date or type on an action,
-        any write to ``actions/{rfc_number}`` (the vendor's end-action route; an
-        integer id addresses an action instead), a ``requests/{rfc}/close``-style
-        route -- is refused with
+        ``end_action``, ``suspended``, ``restarted`` or ``requalified`` body
+        on any path, a status or catalog column on a ticket, an end date or
+        type on an action, any write to ``actions/{rfc_number}`` (the vendor's
+        end-action route; an integer id addresses an action instead), a
+        ``requests/{rfc}/close``-style route -- is refused with
         :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` before
         anything is sent, unless this argument names every
         :class:`~easyvista_python_client.WorkflowEffect` it carries. See
@@ -655,6 +655,54 @@ class AsyncEasyvistaClient:
             rfc_number,
             comment=comment,
             done_by_id=done_by_id,
+            context=self._validation_context,
+        )
+        return parse(await self._transport.send(spec.allowing(allow_workflow_effect)))
+
+    async def requalify_ticket(
+        self,
+        rfc_number: str,
+        *,
+        allow_workflow_effect: WorkflowEffect | Iterable[WorkflowEffect],
+        catalog_id: int | None = None,
+        catalog_code: str | None = None,
+        catalog_guid: str | None = None,
+    ) -> Request:
+        """Requalify a ticket to another catalog.
+
+        Sends ``PUT requests/{rfc}`` with a ``requalified`` body holding exactly
+        one of ``catalog_id``, ``catalog_code`` and ``catalog_guid``; zero or
+        several raise :class:`ValueError` before any request. The id is sent as
+        a decimal string.
+
+        The vendor documents requalifying a category as starting a new
+        workflow: "Requalify the category of the object. A new workflow will
+        then start." (https://docs.easyvista.com/docs/action.md, tier 1, re-read
+        2026-11-16). The vendor's index lists no REST page for this body, so
+        its key spelling and value types are measured, not documented.
+
+        Measured on one instance on 2026-11-16 (tier 4, may not generalise):
+        on an incident the requalification lands even when the server answers
+        HTTP 590; a request (not an incident) is refused with 400 and code
+        2117; a request sent to an incident catalog entry is refused with 400
+        and code 2119. Because the answer is not a receipt, the caller confirms
+        a landing by re-reading with :meth:`get_ticket`; this method never
+        re-reads.
+
+        ``allow_workflow_effect`` is **required** and is
+        ``WorkflowEffect.UNKNOWN``, as for :meth:`suspend_ticket`: refused
+        before any request unless allowed, and sent once, never retried. The
+        return value is parsed like :meth:`close_ticket`'s (an ``HREF`` only)::
+
+            client.requalify_ticket(
+                rfc, allow_workflow_effect=WorkflowEffect.UNKNOWN, catalog_code=code
+            )
+        """
+        spec, parse = requests_res.build_requalify_ticket(
+            rfc_number,
+            catalog_id=catalog_id,
+            catalog_code=catalog_code,
+            catalog_guid=catalog_guid,
             context=self._validation_context,
         )
         return parse(await self._transport.send(spec.allowing(allow_workflow_effect)))

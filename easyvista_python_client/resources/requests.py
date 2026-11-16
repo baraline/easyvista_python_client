@@ -188,6 +188,42 @@ def build_suspend_ticket(
     )
 
 
+def build_requalify_ticket(
+    rfc_number: str,
+    *,
+    catalog_id: int | None = None,
+    catalog_code: str | None = None,
+    catalog_guid: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> tuple[RequestSpec, Callable[[Any], Request]]:
+    """Build the ``{"requalified": {...}}`` PUT spec -- a requalification.
+
+    Exactly one of ``catalog_id``, ``catalog_code`` and ``catalog_guid`` names
+    the target catalog; zero or several raise :class:`ValueError`. The id goes
+    on the wire as a decimal string, the form measured to land on one
+    instance (tier 4, 2026-11-16, may not generalise).
+    """
+    keyed = {
+        "catalog_id": None if catalog_id is None else str(catalog_id),
+        "catalog_code": catalog_code,
+        "catalog_guid": catalog_guid,
+    }
+    inner = {key: value for key, value in keyed.items() if value is not None}
+    if len(inner) != 1:
+        raise ValueError(
+            "requalify needs exactly one of catalog_id, catalog_code and catalog_guid"
+        )
+    spec = RequestSpec("PUT", f"requests/{rfc_number}", json={"requalified": inner})
+
+    def parse(data: Any) -> Request:
+        records = extract_records(data, REQUESTS.envelope_key)
+        return Request.model_validate(
+            records[0] if records else data, context=context
+        )
+
+    return spec, parse
+
+
 def build_restart_ticket(
     rfc_number: str,
     *,
