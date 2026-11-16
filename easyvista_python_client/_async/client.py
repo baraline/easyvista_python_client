@@ -202,11 +202,11 @@ class AsyncEasyvistaClient:
 
         ``allow_workflow_effect`` is the way past the workflow guard. A write
         whose content may change a ticket's workflow -- a ``closed``,
-        ``end_action``, ``suspended`` or ``restarted`` body on any path, a
-        status or catalog column on a ticket, an end date or type on an action,
-        any write to ``actions/{rfc_number}`` (the vendor's end-action route; an
-        integer id addresses an action instead), a ``requests/{rfc}/close``-style
-        route -- is refused with
+        ``end_action``, ``suspended``, ``restarted`` or ``requalified`` body
+        on any path, a status or catalog column on a ticket, an end date or
+        type on an action, any write to ``actions/{rfc_number}`` (the vendor's
+        end-action route; an integer id addresses an action instead), a
+        ``requests/{rfc}/close``-style route -- is refused with
         :class:`~easyvista_python_client.EasyvistaWorkflowEffectRefused` before
         anything is sent, unless this argument names every
         :class:`~easyvista_python_client.WorkflowEffect` it carries. See
