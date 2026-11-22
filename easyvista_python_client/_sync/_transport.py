@@ -34,6 +34,7 @@ from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
     EasyvistaConnectionError,
     EasyvistaError,
+    EasyvistaMalformedResponseError,
     EasyvistaNotFound,
     EasyvistaRateLimitError,
     EasyvistaServerError,
@@ -260,7 +261,21 @@ class BaseTransport:
         if response.is_success:
             if not response.content:
                 return {}
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError
+                # The request was processed (a 2xx), so this is the response's
+                # fault, not the caller's argument; `send` does not retry it.
+                # Same rule as _raise_for_response: the raw body stays out of
+                # the message and goes on `.body`.
+                content_type = response.headers.get("content-type", "unknown")
+                raise EasyvistaMalformedResponseError(
+                    f"EasyVista answered {response.status_code} with a body that "
+                    f"is not JSON (content type {content_type!r}, "
+                    f"{len(response.content)}-byte body)",
+                    status_code=response.status_code,
+                    body=response.content,
+                ) from exc
         return self._raise_for_response(response)
 
     def _raise_for_response(self, response: httpx.Response) -> NoReturn:

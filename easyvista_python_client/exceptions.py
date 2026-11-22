@@ -54,6 +54,19 @@ class EasyvistaServerError(EasyvistaError):
     """5xx — EasyVista server error."""
 
 
+class EasyvistaMalformedResponseError(EasyvistaServerError):
+    """A success (2xx) response whose body could not be decoded as JSON.
+
+    A server-side failure: the request was sent and answered, so the fault is
+    the response, not an argument the caller passed. The client never retries
+    it on its own -- a 2xx means the request was processed, and a resend of a
+    write would repeat it. ``status_code`` is the response's, ``body`` holds the
+    raw bytes (the message gives only the status, the content type and the byte
+    count), and ``__cause__`` is the ``json.JSONDecodeError`` or
+    ``UnicodeDecodeError``.
+    """
+
+
 class EasyvistaConnectionError(EasyvistaError):
     """Transport-level failure (timeout, connection refused, etc.)."""
 

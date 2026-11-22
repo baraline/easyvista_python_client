@@ -1518,7 +1518,10 @@ The hierarchy is: :class:`~easyvista_python_client.EasyvistaAuthError` (401/403)
 :class:`~easyvista_python_client.EasyvistaNotFound` (404),
 :class:`~easyvista_python_client.EasyvistaValidationError` (400 / HTTP 590 rejected create),
 :class:`~easyvista_python_client.EasyvistaRateLimitError` (429),
-:class:`~easyvista_python_client.EasyvistaServerError` (5xx), and
+:class:`~easyvista_python_client.EasyvistaServerError` (5xx; its subclass
+:class:`~easyvista_python_client.EasyvistaMalformedResponseError` is a 2xx answer whose
+body is not JSON, never retried by the client because the request was processed; the
+message gives the status, content type and byte count, and ``.body`` the raw bytes), and
 :class:`~easyvista_python_client.EasyvistaConnectionError` (transport / timeout).
 
 One error sits **outside** that hierarchy on purpose:

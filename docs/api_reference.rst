@@ -180,6 +180,8 @@ Exceptions
 
 .. autoexception:: easyvista_python_client.exceptions.EasyvistaServerError
 
+.. autoexception:: easyvista_python_client.exceptions.EasyvistaMalformedResponseError
+
 .. autoexception:: easyvista_python_client.exceptions.EasyvistaConnectionError
 
 .. autoexception:: easyvista_python_client.exceptions.EasyvistaContentError

@@ -20,6 +20,7 @@ from easyvista_python_client.exceptions import (
     EasyvistaAuthError,
     EasyvistaConnectionError,
     EasyvistaError,
+    EasyvistaMalformedResponseError,
     EasyvistaNotFound,
     EasyvistaRateLimitError,
     EasyvistaServerError,
@@ -329,6 +330,54 @@ def test_send_does_not_retry_590_and_raises_validation_error():
             )
     assert ei.value.status_code == 590
     assert ei.value.ev_code == "2013"
+    assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        (b"<html>maintenance page</html>", "text/html"),
+        (b"\xff\xfe not utf-8 \x80", "application/json"),
+    ],
+    ids=["not-json", "not-decodable"],
+)
+def test_send_non_json_success_body_raises_malformed_response_error(
+    content, content_type
+):
+    # A 2xx whose body is not JSON was processed by the server: the failure is
+    # the response, so it is a server-kind library error, never a bare
+    # JSONDecodeError/UnicodeDecodeError (both ValueError). The raw body stays
+    # out of the message and on `.body`; the decode error is chained.
+    respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(
+            200, content=content, headers={"content-type": content_type}
+        )
+    )
+    with Transport(_cfg()) as transport:
+        with pytest.raises(EasyvistaMalformedResponseError) as ei:
+            transport.send(RequestSpec("GET", "requests"))
+    err = ei.value
+    assert isinstance(err, EasyvistaServerError)
+    assert err.status_code == 200
+    assert err.body == content
+    assert isinstance(err.__cause__, ValueError)
+    assert "200" in str(err)
+    assert content_type in str(err)
+    assert f"{len(content)}-byte" in str(err)
+    assert content.decode("latin-1") not in str(err)
+
+
+@respx.mock
+def test_send_non_json_success_body_is_not_retried():
+    # A 2xx means the request was processed, so the client's own retry must not
+    # resend it even though the error is server-kind.
+    route = respx.get(f"{ROOT}/requests").mock(
+        return_value=httpx.Response(200, content=b"not json")
+    )
+    with Transport(_cfg(max_retries=3)) as transport:
+        with pytest.raises(EasyvistaMalformedResponseError):
+            transport.send(RequestSpec("GET", "requests"))
     assert route.call_count == 1
 
 
