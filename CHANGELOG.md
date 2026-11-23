@@ -15,6 +15,10 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-23
+
+A success response whose body is not JSON raises a typed server error.
+
 ### Added
 
 - **`EasyvistaMalformedResponseError`**, a subclass of `EasyvistaServerError`,
@@ -1768,7 +1772,9 @@ Initial public release.
   status/error code, with non-retryable validation errors (HTTP 590, code 2013).
 - `py.typed` marker — the package ships inline type information.
 
-[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.5.0...HEAD
+[Unreleased]: https://github.com/baraline/easyvista_python_client/compare/0.6.1...HEAD
+[0.6.1]: https://github.com/baraline/easyvista_python_client/compare/0.6.0...0.6.1
+[0.6.0]: https://github.com/baraline/easyvista_python_client/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/baraline/easyvista_python_client/compare/0.4.3...0.5.0
 [0.4.3]: https://github.com/baraline/easyvista_python_client/compare/0.4.2...0.4.3
 [0.4.2]: https://github.com/baraline/easyvista_python_client/compare/0.4.1...0.4.2
