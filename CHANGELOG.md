@@ -15,6 +15,22 @@ is the error. Tags carry no `v` prefix.
 
 ## [Unreleased]
 
+### Added
+
+- **`EasyvistaMalformedResponseError`**, a subclass of `EasyvistaServerError`,
+  exported from the package: the error raised when a success (2xx) response has a
+  body that is not JSON. The message gives the status, the content type and the
+  byte count (never the body), `.body` holds the raw bytes, and the decode error is
+  chained as `__cause__`.
+
+### Fixed
+
+- A success (2xx) response whose body is not JSON raised a bare
+  `json.JSONDecodeError` (or `UnicodeDecodeError`), a `ValueError` that a caller
+  could mistake for a refused argument. It now raises
+  `EasyvistaMalformedResponseError`. The client's own retry does not resend it: a
+  2xx means the request was processed.
+
 ## [0.6.0] - 2026-11-16
 
 One more of the ticket's workflow-moving writes, named by the guard.

@@ -240,6 +240,7 @@ with EasyvistaClient.from_env() as client:
 | **590** | `EasyvistaValidationError` | EasyVista's "Internal Easyvista Error" is in practice a rejected request — a missing mandatory field or an invalid catalog reference. It is deterministic, so it is **not** retried. |
 | 429 | `EasyvistaRateLimitError` | Retried when `max_retries > 0`. |
 | 5xx | `EasyvistaServerError` | Retried when `max_retries > 0`. |
+| 2xx, body not JSON | `EasyvistaMalformedResponseError` (an `EasyvistaServerError`) | The request was processed, so it is **not** retried; `.body` holds the raw bytes. |
 | Transport failure (timeout, refused connection) | `EasyvistaConnectionError` | No response was obtained at all. |
 | *(none: raised before sending)* | `EasyvistaWorkflowEffectRefused` — a `ValueError`, **not** an `EasyvistaError` | A write that may change the workflow, refused before sending; never retry it. |
 
